@@ -34,7 +34,9 @@ fn test_images() -> Vec<TestImage> {
 
     // 1024x1024 photo
     if let Some(img) = load_png(
-        &corpus.join("clic2025-1024/02809272b4ca9b08af45771501b741296187c7e26907efb44abbbfcb6cd804f7.png"),
+        &corpus.join(
+            "clic2025-1024/02809272b4ca9b08af45771501b741296187c7e26907efb44abbbfcb6cd804f7.png",
+        ),
         "clic_1024",
     ) {
         images.push(img);
@@ -105,9 +107,8 @@ fn bench_picscale_srgb(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     use pic_scale::*;
     let mut scaler = Scaler::new(ResamplingFunction::Lanczos3);
     scaler.set_threading_policy(ThreadingPolicy::Single);
-    let store =
-        ImageStore::<u8, 4>::from_slice(&img.rgba, img.width as usize, img.height as usize)
-            .unwrap();
+    let store = ImageStore::<u8, 4>::from_slice(&img.rgba, img.width as usize, img.height as usize)
+        .unwrap();
     let mut dst = ImageStoreMut::<u8, 4>::alloc(out_w as usize, out_h as usize);
     scaler.resize_rgba(&store, &mut dst, true);
     dst.as_bytes().to_vec()
@@ -117,9 +118,8 @@ fn bench_picscale_linear(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     use pic_scale::*;
     let mut scaler = LinearScaler::new(ResamplingFunction::Lanczos3);
     scaler.set_threading_policy(ThreadingPolicy::Single);
-    let store =
-        ImageStore::<u8, 4>::from_slice(&img.rgba, img.width as usize, img.height as usize)
-            .unwrap();
+    let store = ImageStore::<u8, 4>::from_slice(&img.rgba, img.width as usize, img.height as usize)
+        .unwrap();
     let mut dst = ImageStoreMut::<u8, 4>::alloc(out_w as usize, out_h as usize);
     scaler.resize_rgba(&store, &mut dst, true);
     dst.as_bytes().to_vec()
@@ -137,8 +137,7 @@ fn bench_fir_srgb(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     let src = ImageRef::new(img.width, img.height, &img.rgba, PixelType::U8x4).unwrap();
     let mut dst = Image::new(out_w, out_h, PixelType::U8x4);
     let mut resizer = Resizer::new();
-    let opts = ResizeOptions::new()
-        .resize_alg(ResizeAlg::Convolution(FilterType::Lanczos3));
+    let opts = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::Lanczos3));
     resizer.resize(&src, &mut dst, &opts).unwrap();
     dst.into_vec()
 }
@@ -158,8 +157,7 @@ fn bench_fir_linear(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     // resize in linear
     let mut linear_dst = Image::new(out_w, out_h, PixelType::U16x4);
     let mut resizer = Resizer::new();
-    let opts = ResizeOptions::new()
-        .resize_alg(ResizeAlg::Convolution(FilterType::Lanczos3));
+    let opts = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::Lanczos3));
     resizer.resize(&linear_src, &mut linear_dst, &opts).unwrap();
 
     // linear u16 -> sRGB u8
@@ -231,11 +229,9 @@ fn downscale_50(c: &mut Criterion) {
             &megapixels,
             |b, _| b.iter(|| bench_picscale_linear(img, out_w, out_h)),
         );
-        group.bench_with_input(
-            BenchmarkId::new("fir_srgb", &param),
-            &megapixels,
-            |b, _| b.iter(|| bench_fir_srgb(img, out_w, out_h)),
-        );
+        group.bench_with_input(BenchmarkId::new("fir_srgb", &param), &megapixels, |b, _| {
+            b.iter(|| bench_fir_srgb(img, out_w, out_h))
+        });
         group.bench_with_input(
             BenchmarkId::new("fir_linear", &param),
             &megapixels,
@@ -265,36 +261,28 @@ fn downscale_25(c: &mut Criterion) {
             (img.width as u64) * (img.height as u64),
         ));
 
-        group.bench_with_input(
-            BenchmarkId::new("zenresize_srgb", &param),
-            img,
-            |b, img| b.iter(|| bench_zenresize_srgb(img, out_w, out_h)),
-        );
+        group.bench_with_input(BenchmarkId::new("zenresize_srgb", &param), img, |b, img| {
+            b.iter(|| bench_zenresize_srgb(img, out_w, out_h))
+        });
         group.bench_with_input(
             BenchmarkId::new("zenresize_linear", &param),
             img,
             |b, img| b.iter(|| bench_zenresize_linear(img, out_w, out_h)),
         );
-        group.bench_with_input(
-            BenchmarkId::new("pic_scale_srgb", &param),
-            img,
-            |b, img| b.iter(|| bench_picscale_srgb(img, out_w, out_h)),
-        );
+        group.bench_with_input(BenchmarkId::new("pic_scale_srgb", &param), img, |b, img| {
+            b.iter(|| bench_picscale_srgb(img, out_w, out_h))
+        });
         group.bench_with_input(
             BenchmarkId::new("pic_scale_linear", &param),
             img,
             |b, img| b.iter(|| bench_picscale_linear(img, out_w, out_h)),
         );
-        group.bench_with_input(
-            BenchmarkId::new("fir_srgb", &param),
-            img,
-            |b, img| b.iter(|| bench_fir_srgb(img, out_w, out_h)),
-        );
-        group.bench_with_input(
-            BenchmarkId::new("fir_linear", &param),
-            img,
-            |b, img| b.iter(|| bench_fir_linear(img, out_w, out_h)),
-        );
+        group.bench_with_input(BenchmarkId::new("fir_srgb", &param), img, |b, img| {
+            b.iter(|| bench_fir_srgb(img, out_w, out_h))
+        });
+        group.bench_with_input(BenchmarkId::new("fir_linear", &param), img, |b, img| {
+            b.iter(|| bench_fir_linear(img, out_w, out_h))
+        });
         group.bench_with_input(
             BenchmarkId::new("resize_crate_srgb", &param),
             img,
@@ -320,36 +308,28 @@ fn upscale_200(c: &mut Criterion) {
         (out_w as u64) * (out_h as u64),
     ));
 
-    group.bench_with_input(
-        BenchmarkId::new("zenresize_srgb", &param),
-        img,
-        |b, img| b.iter(|| bench_zenresize_srgb(img, out_w, out_h)),
-    );
+    group.bench_with_input(BenchmarkId::new("zenresize_srgb", &param), img, |b, img| {
+        b.iter(|| bench_zenresize_srgb(img, out_w, out_h))
+    });
     group.bench_with_input(
         BenchmarkId::new("zenresize_linear", &param),
         img,
         |b, img| b.iter(|| bench_zenresize_linear(img, out_w, out_h)),
     );
-    group.bench_with_input(
-        BenchmarkId::new("pic_scale_srgb", &param),
-        img,
-        |b, img| b.iter(|| bench_picscale_srgb(img, out_w, out_h)),
-    );
+    group.bench_with_input(BenchmarkId::new("pic_scale_srgb", &param), img, |b, img| {
+        b.iter(|| bench_picscale_srgb(img, out_w, out_h))
+    });
     group.bench_with_input(
         BenchmarkId::new("pic_scale_linear", &param),
         img,
         |b, img| b.iter(|| bench_picscale_linear(img, out_w, out_h)),
     );
-    group.bench_with_input(
-        BenchmarkId::new("fir_srgb", &param),
-        img,
-        |b, img| b.iter(|| bench_fir_srgb(img, out_w, out_h)),
-    );
-    group.bench_with_input(
-        BenchmarkId::new("fir_linear", &param),
-        img,
-        |b, img| b.iter(|| bench_fir_linear(img, out_w, out_h)),
-    );
+    group.bench_with_input(BenchmarkId::new("fir_srgb", &param), img, |b, img| {
+        b.iter(|| bench_fir_srgb(img, out_w, out_h))
+    });
+    group.bench_with_input(BenchmarkId::new("fir_linear", &param), img, |b, img| {
+        b.iter(|| bench_fir_linear(img, out_w, out_h))
+    });
     group.bench_with_input(
         BenchmarkId::new("resize_crate_srgb", &param),
         img,

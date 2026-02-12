@@ -118,7 +118,12 @@ pub struct ResizeConfig {
 
 impl ResizeConfig {
     /// Create a builder for `ResizeConfig`.
-    pub fn builder(in_width: u32, in_height: u32, out_width: u32, out_height: u32) -> ResizeConfigBuilder {
+    pub fn builder(
+        in_width: u32,
+        in_height: u32,
+        out_width: u32,
+        out_height: u32,
+    ) -> ResizeConfigBuilder {
         ResizeConfigBuilder::new(in_width, in_height, out_width, out_height)
     }
 

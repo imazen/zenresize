@@ -6,9 +6,9 @@ use std::path::Path;
 
 fn main() {
     let corpus = Path::new("/home/lilith/work/codec-corpus");
-    let img = image::open(
-        corpus.join("clic2025-1024/02809272b4ca9b08af45771501b741296187c7e26907efb44abbbfcb6cd804f7.png"),
-    )
+    let img = image::open(corpus.join(
+        "clic2025-1024/02809272b4ca9b08af45771501b741296187c7e26907efb44abbbfcb6cd804f7.png",
+    ))
     .unwrap()
     .to_rgba8();
     let (w, h) = img.dimensions();

@@ -160,7 +160,11 @@ impl StreamingResize {
         for y in 0..count {
             let start = y as usize * stride;
             let end = start + self.config.input_row_len();
-            assert!(end <= data.len(), "push_rows_f32: data too short for row {}", y);
+            assert!(
+                end <= data.len(),
+                "push_rows_f32: data too short for row {}",
+                y
+            );
             total += self.push_row_f32(&data[start..end]);
         }
         total

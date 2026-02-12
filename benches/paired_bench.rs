@@ -68,7 +68,9 @@ fn load_png(path: &Path, name: &'static str) -> Option<TestImage> {
 fn test_image() -> TestImage {
     let corpus = Path::new("/home/lilith/work/codec-corpus");
     if let Some(img) = load_png(
-        &corpus.join("clic2025-1024/02809272b4ca9b08af45771501b741296187c7e26907efb44abbbfcb6cd804f7.png"),
+        &corpus.join(
+            "clic2025-1024/02809272b4ca9b08af45771501b741296187c7e26907efb44abbbfcb6cd804f7.png",
+        ),
         "clic_1024",
     ) {
         return img;
@@ -85,7 +87,12 @@ fn test_image() -> TestImage {
             rgba[i + 3] = 255;
         }
     }
-    TestImage { name: "synth_1024", width: w, height: h, rgba }
+    TestImage {
+        name: "synth_1024",
+        width: w,
+        height: h,
+        rgba,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -95,7 +102,10 @@ fn test_image() -> TestImage {
 fn run_zenresize_srgb(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     let config = zenresize::ResizeConfig::builder(img.width, img.height, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::Srgb8 { channels: 4, has_alpha: false })
+        .format(zenresize::PixelFormat::Srgb8 {
+            channels: 4,
+            has_alpha: false,
+        })
         .srgb()
         .build();
     zenresize::resize(&config, &img.rgba)
@@ -104,7 +114,10 @@ fn run_zenresize_srgb(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
 fn run_zenresize_linear(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     let config = zenresize::ResizeConfig::builder(img.width, img.height, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::Srgb8 { channels: 4, has_alpha: true })
+        .format(zenresize::PixelFormat::Srgb8 {
+            channels: 4,
+            has_alpha: true,
+        })
         .linear()
         .build();
     zenresize::resize(&config, &img.rgba)
@@ -114,7 +127,8 @@ fn run_picscale_srgb(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     use pic_scale::*;
     let mut scaler = Scaler::new(ResamplingFunction::Lanczos3);
     scaler.set_threading_policy(ThreadingPolicy::Single);
-    let store = ImageStore::<u8, 4>::from_slice(&img.rgba, img.width as usize, img.height as usize).unwrap();
+    let store = ImageStore::<u8, 4>::from_slice(&img.rgba, img.width as usize, img.height as usize)
+        .unwrap();
     let mut dst = ImageStoreMut::<u8, 4>::alloc(out_w as usize, out_h as usize);
     let _ = scaler.resize_rgba(&store, &mut dst, true);
     dst.as_bytes().to_vec()
@@ -124,7 +138,8 @@ fn run_picscale_linear(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     use pic_scale::*;
     let mut scaler = LinearScaler::new(ResamplingFunction::Lanczos3);
     scaler.set_threading_policy(ThreadingPolicy::Single);
-    let store = ImageStore::<u8, 4>::from_slice(&img.rgba, img.width as usize, img.height as usize).unwrap();
+    let store = ImageStore::<u8, 4>::from_slice(&img.rgba, img.width as usize, img.height as usize)
+        .unwrap();
     let mut dst = ImageStoreMut::<u8, 4>::alloc(out_w as usize, out_h as usize);
     let _ = scaler.resize_rgba(&store, &mut dst, true);
     dst.as_bytes().to_vec()
@@ -163,11 +178,17 @@ fn run_resize_crate(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     use rgb::FromSlice;
     let mut dst = vec![0u8; out_w as usize * out_h as usize * 4];
     let mut resizer = resize::new(
-        img.width as usize, img.height as usize,
-        out_w as usize, out_h as usize,
-        resize::Pixel::RGBA8P, resize::Type::Lanczos3,
-    ).unwrap();
-    resizer.resize(img.rgba.as_rgba(), dst.as_rgba_mut()).unwrap();
+        img.width as usize,
+        img.height as usize,
+        out_w as usize,
+        out_h as usize,
+        resize::Pixel::RGBA8P,
+        resize::Type::Lanczos3,
+    )
+    .unwrap();
+    resizer
+        .resize(img.rgba.as_rgba(), dst.as_rgba_mut())
+        .unwrap();
     dst
 }
 
@@ -259,19 +280,43 @@ fn main() {
 
     println!("Paired Interleaved Resize Benchmark");
     println!("====================================");
-    println!("Image: {} ({}x{}, {:.2} MP)", img.name, img.width, img.height, megapixels);
+    println!(
+        "Image: {} ({}x{}, {:.2} MP)",
+        img.name, img.width, img.height, megapixels
+    );
     println!("Output: {}x{} (50% downscale)", out_w, out_h);
     println!("Rounds: {} (interleaved A/B/B/A pattern)", rounds);
     println!();
 
     let contenders: Vec<Contender> = vec![
-        Contender { name: "zenresize_srgb", func: run_zenresize_srgb },
-        Contender { name: "zenresize_linear", func: run_zenresize_linear },
-        Contender { name: "pic_scale_srgb", func: run_picscale_srgb },
-        Contender { name: "pic_scale_linear", func: run_picscale_linear },
-        Contender { name: "fir_srgb", func: run_fir_srgb },
-        Contender { name: "fir_linear", func: run_fir_linear },
-        Contender { name: "resize_crate_srgb", func: run_resize_crate },
+        Contender {
+            name: "zenresize_srgb",
+            func: run_zenresize_srgb,
+        },
+        Contender {
+            name: "zenresize_linear",
+            func: run_zenresize_linear,
+        },
+        Contender {
+            name: "pic_scale_srgb",
+            func: run_picscale_srgb,
+        },
+        Contender {
+            name: "pic_scale_linear",
+            func: run_picscale_linear,
+        },
+        Contender {
+            name: "fir_srgb",
+            func: run_fir_srgb,
+        },
+        Contender {
+            name: "fir_linear",
+            func: run_fir_linear,
+        },
+        Contender {
+            name: "resize_crate_srgb",
+            func: run_resize_crate,
+        },
     ];
 
     // --- Absolute times ---
@@ -305,7 +350,10 @@ fn main() {
 
     println!();
     println!("Paired comparisons (each row vs zenresize_srgb):");
-    println!("{:<24} {:>12} {:>12} {:>14}", "Library", "Diff (ms)", "95% CI", "vs zenresize");
+    println!(
+        "{:<24} {:>12} {:>12} {:>14}",
+        "Library", "Diff (ms)", "95% CI", "vs zenresize"
+    );
     println!("{:-<24} {:-^12} {:-^12} {:-^14}", "", "", "", "");
 
     let baseline = &contenders[0]; // zenresize_srgb
@@ -326,12 +374,17 @@ fn main() {
 
     println!();
     println!("Paired comparisons (each row vs pic_scale_srgb):");
-    println!("{:<24} {:>12} {:>12} {:>14}", "Library", "Diff (ms)", "95% CI", "vs pic-scale");
+    println!(
+        "{:<24} {:>12} {:>12} {:>14}",
+        "Library", "Diff (ms)", "95% CI", "vs pic-scale"
+    );
     println!("{:-<24} {:-^12} {:-^12} {:-^14}", "", "", "", "");
 
     let baseline_ps = &contenders[2]; // pic_scale_srgb
     for c in &contenders {
-        if std::ptr::eq(c, baseline_ps) { continue; }
+        if std::ptr::eq(c, baseline_ps) {
+            continue;
+        }
         // contender = a, baseline = b → diff = contender - baseline
         let (_mean_a, _mean_b, diff_mean, diff_ci, ratio) =
             paired_bench(c, baseline_ps, &img, out_w, out_h, rounds);
