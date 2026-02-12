@@ -12,19 +12,13 @@
 //! # Quick Start
 //!
 //! ```ignore
-//! use zenresize::{resize, ResizeConfig, Filter, PixelFormat, ColorSpace};
+//! use zenresize::{resize, ResizeConfig, Filter, PixelFormat};
 //!
-//! let config = ResizeConfig {
-//!     filter: Filter::Lanczos,
-//!     in_width: 1024,
-//!     in_height: 768,
-//!     out_width: 512,
-//!     out_height: 384,
-//!     input_format: PixelFormat::Srgb8 { channels: 4, has_alpha: true },
-//!     output_format: PixelFormat::Srgb8 { channels: 4, has_alpha: true },
-//!     sharpen: 0.0,
-//!     color_space: ColorSpace::Linear,
-//! };
+//! let config = ResizeConfig::builder(1024, 768, 512, 384)
+//!     .filter(Filter::Lanczos)
+//!     .format(PixelFormat::Srgb8 { channels: 4, has_alpha: true })
+//!     .linear()
+//!     .build();
 //!
 //! let output = resize(&config, &input_pixels);
 //! ```
@@ -46,7 +40,10 @@ mod simd;
 
 // Re-exports
 pub use filter::{Filter, InterpolationDetails};
-pub use pixel::{ColorSpace, PixelFormat};
+pub use pixel::{ColorSpace, PixelFormat, ResizeConfig, ResizeConfigBuilder};
 pub use resize::{resize, resize_f32, resize_f32_into, resize_into};
 pub use streaming::StreamingResize;
 pub use weights::{F32WeightTable, I16WeightTable};
+
+#[cfg(feature = "imgref")]
+pub use resize::{resize_gray8, resize_rgb8, resize_rgba8};

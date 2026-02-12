@@ -8,24 +8,30 @@ use crate::streaming::StreamingResize;
 
 /// Resize an entire u8 image. Allocates and returns output buffer.
 ///
+/// Input may be tightly packed or strided (set `in_stride` in config).
+/// Output is always tightly packed.
+///
 /// # Panics
-/// Panics if the config is invalid or input length doesn't match
-/// `in_width * in_height * channels`.
+/// Panics if the config is invalid or input is too short.
 pub fn resize(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
-    let channels = config.input_format.channels() as usize;
-    let expected = config.in_width as usize * config.in_height as usize * channels;
-    assert_eq!(input.len(), expected, "input length mismatch");
+    let in_stride = config.effective_in_stride();
+    let row_len = config.input_row_len();
+    let expected = if config.in_height > 0 {
+        (config.in_height as usize - 1) * in_stride + row_len
+    } else {
+        0
+    };
+    assert!(input.len() >= expected, "input too short: {} < {}", input.len(), expected);
 
     let mut resizer = StreamingResize::new(config);
-    let row_len = config.in_width as usize * channels;
 
     for y in 0..config.in_height {
-        let start = y as usize * row_len;
+        let start = y as usize * in_stride;
         resizer.push_row(&input[start..start + row_len]);
     }
     resizer.finish();
 
-    let out_row_len = config.out_width as usize * channels;
+    let out_row_len = config.output_row_len();
     let mut output = vec![0u8; config.out_height as usize * out_row_len];
     let mut row_idx = 0;
     while let Some(row) = resizer.next_output_row() {
@@ -39,25 +45,31 @@ pub fn resize(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
 
 /// Resize a u8 image into a caller-provided buffer.
 ///
+/// Output buffer must be tightly packed: `out_width * out_height * channels`.
+///
 /// # Panics
-/// Panics if input/output lengths don't match the config.
+/// Panics if input is too short or output length doesn't match.
 pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
-    let channels = config.input_format.channels() as usize;
-    let in_expected = config.in_width as usize * config.in_height as usize * channels;
-    let out_expected = config.out_width as usize * config.out_height as usize * channels;
-    assert_eq!(input.len(), in_expected, "input length mismatch");
+    let in_stride = config.effective_in_stride();
+    let row_len = config.input_row_len();
+    let in_expected = if config.in_height > 0 {
+        (config.in_height as usize - 1) * in_stride + row_len
+    } else {
+        0
+    };
+    let out_row_len = config.output_row_len();
+    let out_expected = config.out_height as usize * out_row_len;
+    assert!(input.len() >= in_expected, "input too short");
     assert_eq!(output.len(), out_expected, "output length mismatch");
 
     let mut resizer = StreamingResize::new(config);
-    let row_len = config.in_width as usize * channels;
 
     for y in 0..config.in_height {
-        let start = y as usize * row_len;
+        let start = y as usize * in_stride;
         resizer.push_row(&input[start..start + row_len]);
     }
     resizer.finish();
 
-    let out_row_len = config.out_width as usize * channels;
     let mut row_idx = 0;
     while let Some(row) = resizer.next_output_row() {
         let start = row_idx * out_row_len;
@@ -68,20 +80,24 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
 
 /// Resize an f32 image. Allocates and returns output buffer.
 pub fn resize_f32(config: &ResizeConfig, input: &[f32]) -> Vec<f32> {
-    let channels = config.input_format.channels() as usize;
-    let expected = config.in_width as usize * config.in_height as usize * channels;
-    assert_eq!(input.len(), expected, "input length mismatch");
+    let in_stride = config.effective_in_stride();
+    let row_len = config.input_row_len();
+    let expected = if config.in_height > 0 {
+        (config.in_height as usize - 1) * in_stride + row_len
+    } else {
+        0
+    };
+    assert!(input.len() >= expected, "input too short");
 
     let mut resizer = StreamingResize::new(config);
-    let row_len = config.in_width as usize * channels;
 
     for y in 0..config.in_height {
-        let start = y as usize * row_len;
+        let start = y as usize * in_stride;
         resizer.push_row_f32(&input[start..start + row_len]);
     }
     resizer.finish();
 
-    let out_row_len = config.out_width as usize * channels;
+    let out_row_len = config.output_row_len();
     let mut output = vec![0.0f32; config.out_height as usize * out_row_len];
     let mut row_idx = 0;
     while let Some(row) = resizer.next_output_row_f32() {
@@ -95,22 +111,26 @@ pub fn resize_f32(config: &ResizeConfig, input: &[f32]) -> Vec<f32> {
 
 /// Resize an f32 image into a caller-provided buffer.
 pub fn resize_f32_into(config: &ResizeConfig, input: &[f32], output: &mut [f32]) {
-    let channels = config.input_format.channels() as usize;
-    let in_expected = config.in_width as usize * config.in_height as usize * channels;
-    let out_expected = config.out_width as usize * config.out_height as usize * channels;
-    assert_eq!(input.len(), in_expected, "input length mismatch");
+    let in_stride = config.effective_in_stride();
+    let row_len = config.input_row_len();
+    let in_expected = if config.in_height > 0 {
+        (config.in_height as usize - 1) * in_stride + row_len
+    } else {
+        0
+    };
+    let out_row_len = config.output_row_len();
+    let out_expected = config.out_height as usize * out_row_len;
+    assert!(input.len() >= in_expected, "input too short");
     assert_eq!(output.len(), out_expected, "output length mismatch");
 
     let mut resizer = StreamingResize::new(config);
-    let row_len = config.in_width as usize * channels;
 
     for y in 0..config.in_height {
-        let start = y as usize * row_len;
+        let start = y as usize * in_stride;
         resizer.push_row_f32(&input[start..start + row_len]);
     }
     resizer.finish();
 
-    let out_row_len = config.out_width as usize * channels;
     let mut row_idx = 0;
     while let Some(row) = resizer.next_output_row_f32() {
         let start = row_idx * out_row_len;
@@ -119,30 +139,161 @@ pub fn resize_f32_into(config: &ResizeConfig, input: &[f32], output: &mut [f32])
     }
 }
 
+// =============================================================================
+// imgref integration
+// =============================================================================
+
+#[cfg(feature = "imgref")]
+mod imgref_impl {
+    #[cfg(not(feature = "std"))]
+    use alloc::vec::Vec;
+
+    use crate::pixel::{PixelFormat, ResizeConfig};
+    use crate::streaming::StreamingResize;
+    use imgref::{Img, ImgRef, ImgVec};
+
+    /// Resize an RGBA u8 image from an `ImgRef<[u8; 4]>`.
+    ///
+    /// Dimensions, stride, and pixel format are inferred from the image.
+    /// The config controls filter, color_space, and other settings.
+    pub fn resize_rgba8(
+        img: ImgRef<[u8; 4]>,
+        out_width: u32,
+        out_height: u32,
+        config: &ResizeConfig,
+    ) -> ImgVec<[u8; 4]> {
+        let mut cfg = config.clone();
+        cfg.in_width = img.width() as u32;
+        cfg.in_height = img.height() as u32;
+        cfg.out_width = out_width;
+        cfg.out_height = out_height;
+        cfg.input_format = PixelFormat::Srgb8 { channels: 4, has_alpha: true };
+        cfg.output_format = PixelFormat::Srgb8 { channels: 4, has_alpha: true };
+        cfg.in_stride = 0; // we iterate rows via imgref, stride handled by rows()
+
+        let mut resizer = StreamingResize::new(&cfg);
+
+        // Feed rows via imgref's stride-aware row iterator
+        for row in img.rows() {
+            let flat = flatten_row_4(row);
+            resizer.push_row(&flat);
+        }
+        resizer.finish();
+
+        let out_row_len = cfg.output_row_len();
+        let mut out_pixels = Vec::with_capacity(out_width as usize * out_height as usize);
+        while let Some(row) = resizer.next_output_row() {
+            debug_assert_eq!(row.len(), out_row_len);
+            for chunk in row.chunks_exact(4) {
+                out_pixels.push([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            }
+        }
+
+        Img::new(out_pixels, out_width as usize, out_height as usize)
+    }
+
+    /// Resize an RGB u8 image from an `ImgRef<[u8; 3]>`.
+    pub fn resize_rgb8(
+        img: ImgRef<[u8; 3]>,
+        out_width: u32,
+        out_height: u32,
+        config: &ResizeConfig,
+    ) -> ImgVec<[u8; 3]> {
+        let mut cfg = config.clone();
+        cfg.in_width = img.width() as u32;
+        cfg.in_height = img.height() as u32;
+        cfg.out_width = out_width;
+        cfg.out_height = out_height;
+        cfg.input_format = PixelFormat::Srgb8 { channels: 3, has_alpha: false };
+        cfg.output_format = PixelFormat::Srgb8 { channels: 3, has_alpha: false };
+        cfg.in_stride = 0;
+
+        let mut resizer = StreamingResize::new(&cfg);
+
+        for row in img.rows() {
+            let flat = flatten_row_3(row);
+            resizer.push_row(&flat);
+        }
+        resizer.finish();
+
+        let out_row_len = cfg.output_row_len();
+        let mut out_pixels = Vec::with_capacity(out_width as usize * out_height as usize);
+        while let Some(row) = resizer.next_output_row() {
+            debug_assert_eq!(row.len(), out_row_len);
+            for chunk in row.chunks_exact(3) {
+                out_pixels.push([chunk[0], chunk[1], chunk[2]]);
+            }
+        }
+
+        Img::new(out_pixels, out_width as usize, out_height as usize)
+    }
+
+    /// Resize a grayscale u8 image from an `ImgRef<u8>`.
+    pub fn resize_gray8(
+        img: ImgRef<u8>,
+        out_width: u32,
+        out_height: u32,
+        config: &ResizeConfig,
+    ) -> ImgVec<u8> {
+        let mut cfg = config.clone();
+        cfg.in_width = img.width() as u32;
+        cfg.in_height = img.height() as u32;
+        cfg.out_width = out_width;
+        cfg.out_height = out_height;
+        cfg.input_format = PixelFormat::Srgb8 { channels: 1, has_alpha: false };
+        cfg.output_format = PixelFormat::Srgb8 { channels: 1, has_alpha: false };
+        cfg.in_stride = 0;
+
+        let mut resizer = StreamingResize::new(&cfg);
+
+        for row in img.rows() {
+            resizer.push_row(row);
+        }
+        resizer.finish();
+
+        let mut out_buf = Vec::with_capacity(out_width as usize * out_height as usize);
+        while let Some(row) = resizer.next_output_row() {
+            out_buf.extend_from_slice(&row);
+        }
+
+        Img::new(out_buf, out_width as usize, out_height as usize)
+    }
+
+    fn flatten_row_4(row: &[[u8; 4]]) -> Vec<u8> {
+        let mut flat = Vec::with_capacity(row.len() * 4);
+        for px in row {
+            flat.extend_from_slice(px);
+        }
+        flat
+    }
+
+    fn flatten_row_3(row: &[[u8; 3]]) -> Vec<u8> {
+        let mut flat = Vec::with_capacity(row.len() * 3);
+        for px in row {
+            flat.extend_from_slice(px);
+        }
+        flat
+    }
+}
+
+#[cfg(feature = "imgref")]
+pub use imgref_impl::{resize_gray8, resize_rgb8, resize_rgba8};
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::filter::Filter;
-    use crate::pixel::{ColorSpace, PixelFormat};
+    use crate::pixel::PixelFormat;
 
     fn test_config(in_w: u32, in_h: u32, out_w: u32, out_h: u32) -> ResizeConfig {
-        ResizeConfig {
-            filter: Filter::Lanczos,
-            in_width: in_w,
-            in_height: in_h,
-            out_width: out_w,
-            out_height: out_h,
-            input_format: PixelFormat::Srgb8 {
+        ResizeConfig::builder(in_w, in_h, out_w, out_h)
+            .filter(Filter::Lanczos)
+            .format(PixelFormat::Srgb8 {
                 channels: 4,
                 has_alpha: true,
-            },
-            output_format: PixelFormat::Srgb8 {
-                channels: 4,
-                has_alpha: true,
-            },
-            sharpen: 0.0,
-            color_space: ColorSpace::Srgb,
-        }
+            })
+            .srgb()
+            .build()
     }
 
     #[test]
@@ -203,5 +354,59 @@ mod tests {
         assert_eq!(output.len(), 4);
         // Should approximately preserve the single pixel
         assert!((output[0] as i16 - 128).unsigned_abs() <= 2);
+    }
+
+    #[test]
+    fn test_resize_with_stride() {
+        // Create an image with extra padding bytes per row
+        let config = ResizeConfig::builder(10, 10, 5, 5)
+            .format(PixelFormat::Srgb8 { channels: 4, has_alpha: true })
+            .srgb()
+            .in_stride(10 * 4 + 8) // 8 bytes padding per row
+            .build();
+
+        let stride = 10 * 4 + 8;
+        let mut input = vec![0u8; 10 * stride];
+        // Fill only the pixel data (first 40 bytes of each row)
+        for y in 0..10 {
+            for x in 0..10 * 4 {
+                input[y * stride + x] = 128;
+            }
+        }
+
+        let output = resize(&config, &input);
+        assert_eq!(output.len(), 5 * 5 * 4);
+    }
+
+    #[cfg(feature = "imgref")]
+    #[test]
+    fn test_resize_imgref_rgba() {
+        use crate::resize::resize_rgba8;
+        use imgref::Img;
+
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .filter(Filter::Lanczos)
+            .srgb()
+            .build();
+
+        let pixels = vec![[128u8, 128, 128, 255]; 20 * 20];
+        let img = Img::new(pixels, 20, 20);
+
+        let out = resize_rgba8(img.as_ref(), 10, 10, &config);
+        assert_eq!(out.width(), 10);
+        assert_eq!(out.height(), 10);
+
+        for px in out.pixels() {
+            assert!(
+                (px[0] as i16 - 128).unsigned_abs() <= 2,
+                "R off: {}",
+                px[0]
+            );
+            assert!(
+                (px[3] as i16 - 255).unsigned_abs() <= 1,
+                "A off: {}",
+                px[3]
+            );
+        }
     }
 }

@@ -1,6 +1,7 @@
 //! Pixel format descriptors and color space configuration.
 
 /// Pixel format descriptor.
+#[non_exhaustive]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PixelFormat {
     /// sRGB gamma-encoded u8 pixels.
@@ -36,7 +37,7 @@ impl PixelFormat {
         }
     }
 
-    /// Bytes per pixel for u8 formats, or floats per pixel for f32 formats.
+    /// Components per pixel (same as channels).
     #[inline]
     pub fn components_per_pixel(&self) -> usize {
         self.channels() as usize
@@ -68,6 +69,7 @@ impl PixelFormat {
 }
 
 /// Color space for resize computation.
+#[non_exhaustive]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 pub enum ColorSpace {
     /// Resize in linear light (correct, handles gamma properly).
@@ -77,7 +79,10 @@ pub enum ColorSpace {
     Srgb,
 }
 
-/// Resize configuration.
+/// Resize configuration built with [`ResizeConfigBuilder`].
+///
+/// Use [`ResizeConfig::builder()`] to create one.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct ResizeConfig {
     /// Filter to use for resampling.
@@ -98,9 +103,18 @@ pub struct ResizeConfig {
     pub sharpen: f32,
     /// Color space for resize computation.
     pub color_space: ColorSpace,
+    /// Input row stride in elements (0 = tightly packed, i.e., width * channels).
+    pub in_stride: usize,
+    /// Output row stride in elements (0 = tightly packed).
+    pub out_stride: usize,
 }
 
 impl ResizeConfig {
+    /// Create a builder for `ResizeConfig`.
+    pub fn builder(in_width: u32, in_height: u32, out_width: u32, out_height: u32) -> ResizeConfigBuilder {
+        ResizeConfigBuilder::new(in_width, in_height, out_width, out_height)
+    }
+
     /// Validate the configuration.
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.in_width == 0 || self.in_height == 0 {
@@ -124,18 +138,154 @@ impl ResizeConfig {
         Ok(())
     }
 
-    /// Bytes per input row for u8 formats.
-    pub fn input_row_bytes(&self) -> usize {
+    /// Effective input row stride in elements.
+    pub fn effective_in_stride(&self) -> usize {
+        if self.in_stride == 0 {
+            self.in_width as usize * self.input_format.components_per_pixel()
+        } else {
+            self.in_stride
+        }
+    }
+
+    /// Effective output row stride in elements.
+    pub fn effective_out_stride(&self) -> usize {
+        if self.out_stride == 0 {
+            self.out_width as usize * self.output_format.components_per_pixel()
+        } else {
+            self.out_stride
+        }
+    }
+
+    /// Pixel-packed input row length (no padding).
+    pub fn input_row_len(&self) -> usize {
         self.in_width as usize * self.input_format.components_per_pixel()
     }
 
-    /// Bytes per output row for u8 formats.
-    pub fn output_row_bytes(&self) -> usize {
+    /// Pixel-packed output row length (no padding).
+    pub fn output_row_len(&self) -> usize {
         self.out_width as usize * self.output_format.components_per_pixel()
     }
 
     /// Whether linear-light processing is needed.
     pub fn needs_linearization(&self) -> bool {
         self.color_space == ColorSpace::Linear && self.input_format.is_srgb()
+    }
+}
+
+/// Builder for [`ResizeConfig`].
+///
+/// # Example
+/// ```ignore
+/// let config = ResizeConfig::builder(1024, 768, 512, 384)
+///     .filter(Filter::Lanczos)
+///     .format(PixelFormat::Srgb8 { channels: 4, has_alpha: true })
+///     .linear()
+///     .build();
+/// ```
+pub struct ResizeConfigBuilder {
+    in_width: u32,
+    in_height: u32,
+    out_width: u32,
+    out_height: u32,
+    filter: crate::filter::Filter,
+    input_format: PixelFormat,
+    output_format: Option<PixelFormat>,
+    sharpen: f32,
+    color_space: ColorSpace,
+    in_stride: usize,
+    out_stride: usize,
+}
+
+impl ResizeConfigBuilder {
+    fn new(in_width: u32, in_height: u32, out_width: u32, out_height: u32) -> Self {
+        Self {
+            in_width,
+            in_height,
+            out_width,
+            out_height,
+            filter: crate::filter::Filter::default(),
+            input_format: PixelFormat::Srgb8 {
+                channels: 4,
+                has_alpha: true,
+            },
+            output_format: None,
+            sharpen: 0.0,
+            color_space: ColorSpace::Linear,
+            in_stride: 0,
+            out_stride: 0,
+        }
+    }
+
+    /// Set the resampling filter.
+    pub fn filter(mut self, filter: crate::filter::Filter) -> Self {
+        self.filter = filter;
+        self
+    }
+
+    /// Set both input and output pixel format.
+    pub fn format(mut self, format: PixelFormat) -> Self {
+        self.input_format = format;
+        self.output_format = Some(format);
+        self
+    }
+
+    /// Set input pixel format separately.
+    pub fn input_format(mut self, format: PixelFormat) -> Self {
+        self.input_format = format;
+        self
+    }
+
+    /// Set output pixel format separately.
+    pub fn output_format(mut self, format: PixelFormat) -> Self {
+        self.output_format = Some(format);
+        self
+    }
+
+    /// Set sharpening amount (0.0 = none).
+    pub fn sharpen(mut self, amount: f32) -> Self {
+        self.sharpen = amount;
+        self
+    }
+
+    /// Resize in linear light (correct, default).
+    pub fn linear(mut self) -> Self {
+        self.color_space = ColorSpace::Linear;
+        self
+    }
+
+    /// Resize in sRGB space (fast, slight quality loss).
+    pub fn srgb(mut self) -> Self {
+        self.color_space = ColorSpace::Srgb;
+        self
+    }
+
+    /// Set input row stride in elements (default: tightly packed).
+    pub fn in_stride(mut self, stride: usize) -> Self {
+        self.in_stride = stride;
+        self
+    }
+
+    /// Set output row stride in elements (default: tightly packed).
+    pub fn out_stride(mut self, stride: usize) -> Self {
+        self.out_stride = stride;
+        self
+    }
+
+    /// Build the configuration.
+    pub fn build(self) -> ResizeConfig {
+        let output_format = self.output_format.unwrap_or(self.input_format);
+        ResizeConfig {
+            filter: self.filter,
+            in_width: self.in_width,
+            in_height: self.in_height,
+            out_width: self.out_width,
+            out_height: self.out_height,
+            input_format: self.input_format,
+            output_format,
+            sharpen: self.sharpen,
+            color_space: self.color_space,
+            in_stride: self.in_stride,
+            out_stride: self.out_stride,
+        }
     }
 }
