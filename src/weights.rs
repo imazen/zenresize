@@ -42,15 +42,19 @@ pub struct F32WeightTable {
     pub max_taps: usize,
 }
 
-/// Pre-computed i16 fixed-point weight table.
+/// Pre-computed i16 fixed-point weight table with flat layout for SIMD access.
 ///
 /// Weights are scaled to 14-bit precision (1 << 14 = 1.0).
+/// The flat layout stores all weights in a single contiguous allocation,
+/// zero-padded to `max_taps` per output pixel (similar to [`F32WeightTable`]).
 #[derive(Clone)]
 pub struct I16WeightTable {
     /// For each output pixel, the starting input pixel index.
     pub left: Vec<i32>,
-    /// For each output pixel, the i16 weights (sum ≈ 1 << I16_PRECISION).
-    pub weights: Vec<Vec<i16>>,
+    /// Flat array: `out_size * max_taps` elements, zero-padded.
+    weights_flat: Vec<i16>,
+    /// Number of actual (non-zero) taps per output pixel.
+    tap_counts: Vec<u16>,
     /// Maximum taps across all output pixels.
     pub max_taps: usize,
 }
@@ -149,7 +153,7 @@ impl F32WeightTable {
 // =============================================================================
 
 impl I16WeightTable {
-    /// Create i16 fixed-point weight table.
+    /// Create i16 fixed-point weight table with flat layout.
     pub fn new(in_size: u32, out_size: u32, filter: &InterpolationDetails) -> Self {
         debug_assert!(in_size > 0, "in_size must be positive");
         debug_assert!(out_size > 0, "out_size must be positive");
@@ -160,7 +164,8 @@ impl I16WeightTable {
 
         let mut temp_weights: Vec<f64> = Vec::new();
         let mut left_vec = Vec::with_capacity(out_size as usize);
-        let mut weights_vec = Vec::with_capacity(out_size as usize);
+        let mut all_weights: Vec<Vec<i16>> = Vec::with_capacity(out_size as usize);
+        let mut all_tap_counts: Vec<u16> = Vec::with_capacity(out_size as usize);
         let mut max_taps = 0;
 
         for out_pixel in 0..out_size {
@@ -190,14 +195,49 @@ impl I16WeightTable {
             }
 
             left_vec.push(left);
-            weights_vec.push(fixed);
+            all_tap_counts.push(tap_count as u16);
+            all_weights.push(fixed);
+        }
+
+        // Pad max_taps to even for madd_epi16 (processes pairs)
+        if max_taps % 2 != 0 {
+            max_taps += 1;
+        }
+
+        // Build flat layout: zero-padded to max_taps per pixel
+        let mut weights_flat = vec![0i16; out_size as usize * max_taps];
+        for (i, w) in all_weights.iter().enumerate() {
+            let offset = i * max_taps;
+            weights_flat[offset..offset + w.len()].copy_from_slice(w);
         }
 
         Self {
             left: left_vec,
-            weights: weights_vec,
+            weights_flat,
+            tap_counts: all_tap_counts,
             max_taps,
         }
+    }
+
+    /// Get weights slice for a specific output pixel (non-zero taps only).
+    #[inline]
+    pub fn weights(&self, out_pixel: usize) -> &[i16] {
+        let offset = out_pixel * self.max_taps;
+        let tap_count = self.tap_counts[out_pixel] as usize;
+        &self.weights_flat[offset..offset + tap_count]
+    }
+
+    /// Get the full padded weights slice (max_taps elements, zero-padded).
+    #[inline]
+    pub fn weights_padded(&self, out_pixel: usize) -> &[i16] {
+        let offset = out_pixel * self.max_taps;
+        &self.weights_flat[offset..offset + self.max_taps]
+    }
+
+    /// Get the number of actual taps for an output pixel.
+    #[inline]
+    pub fn tap_count(&self, out_pixel: usize) -> usize {
+        self.tap_counts[out_pixel] as usize
     }
 
     /// Number of output pixels.
@@ -333,7 +373,8 @@ mod tests {
 
         assert_eq!(table.len(), 50);
 
-        for (i, weights) in table.weights.iter().enumerate() {
+        for i in 0..table.len() {
+            let weights = table.weights(i);
             let sum: i32 = weights.iter().map(|&w| w as i32).sum();
             assert!(
                 (sum - (1 << I16_PRECISION)).abs() <= 1,

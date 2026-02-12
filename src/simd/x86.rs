@@ -4,7 +4,7 @@
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 
-use crate::weights::F32WeightTable;
+use crate::weights::{F32WeightTable, I16WeightTable, I16_PRECISION};
 use archmage::X64V3Token;
 
 // =============================================================================
@@ -154,7 +154,9 @@ pub(crate) fn filter_h_row_f32_v3(
 
 /// Horizontal filter for 4-channel (RGBA) data.
 ///
-/// Uses padded weights (fixed iteration count) with 4-tap unrolling for ILP.
+/// Uses 4 independent accumulators to break the serial FMA dependency chain.
+/// FMA latency is 4 cycles, throughput is 2/cycle — with 4 independent chains
+/// the CPU's out-of-order engine can keep both FMA ports busy.
 #[archmage::rite]
 fn filter_h_4ch(_token: X64V3Token, input: &[f32], output: &mut [f32], weights: &F32WeightTable) {
     let out_width = weights.len();
@@ -167,9 +169,11 @@ fn filter_h_4ch(_token: X64V3Token, input: &[f32], output: &mut [f32], weights: 
         let w_ptr = weights.weights_padded(out_x).as_ptr();
         let base_in = left * 4;
 
-        let mut acc = _mm_setzero_ps();
+        let mut acc0 = _mm_setzero_ps();
+        let mut acc1 = _mm_setzero_ps();
+        let mut acc2 = _mm_setzero_ps();
+        let mut acc3 = _mm_setzero_ps();
 
-        // Process 4 taps at a time for better ILP
         let chunks4 = max_taps / 4;
         let remainder = max_taps % 4;
 
@@ -186,10 +190,10 @@ fn filter_h_4ch(_token: X64V3Token, input: &[f32], output: &mut [f32], weights: 
                 let p2 = _mm_loadu_ps(in_ptr.add(base_in + (t + 2) * 4));
                 let p3 = _mm_loadu_ps(in_ptr.add(base_in + (t + 3) * 4));
 
-                acc = _mm_fmadd_ps(p0, w0, acc);
-                acc = _mm_fmadd_ps(p1, w1, acc);
-                acc = _mm_fmadd_ps(p2, w2, acc);
-                acc = _mm_fmadd_ps(p3, w3, acc);
+                acc0 = _mm_fmadd_ps(p0, w0, acc0);
+                acc1 = _mm_fmadd_ps(p1, w1, acc1);
+                acc2 = _mm_fmadd_ps(p2, w2, acc2);
+                acc3 = _mm_fmadd_ps(p3, w3, acc3);
             }
         }
 
@@ -199,9 +203,13 @@ fn filter_h_4ch(_token: X64V3Token, input: &[f32], output: &mut [f32], weights: 
             unsafe {
                 let w_val = _mm_set1_ps(*w_ptr.add(tt));
                 let pixel = _mm_loadu_ps(in_ptr.add(base_in + tt * 4));
-                acc = _mm_fmadd_ps(pixel, w_val, acc);
+                acc0 = _mm_fmadd_ps(pixel, w_val, acc0);
             }
         }
+
+        let sum01 = _mm_add_ps(acc0, acc1);
+        let sum23 = _mm_add_ps(acc2, acc3);
+        let acc = _mm_add_ps(sum01, sum23);
 
         unsafe { _mm_storeu_ps(out_ptr.add(out_x * 4), acc) };
     }
@@ -336,5 +344,254 @@ pub(crate) fn filter_v_row_f32_v3(
         for x in base8..width {
             output[x] += row[x] * w_scalar;
         }
+    }
+}
+
+// =============================================================================
+// Integer convolution kernels (sRGB fast path)
+// =============================================================================
+
+/// Integer horizontal convolution: u8 input → u8 output via i32 accumulator.
+///
+/// Uses `_mm_madd_epi16` to process 2 taps per instruction: loads a pair of
+/// RGBA u8 pixels, shuffles channels into pairs, and multiplies by paired i16
+/// weights with implicit i32 accumulation.
+///
+/// For sRGB-space resize only (no linearization needed).
+#[archmage::arcane]
+pub(crate) fn filter_h_u8_i16_v3(
+    _token: X64V3Token,
+    input: &[u8],
+    output: &mut [u8],
+    weights: &I16WeightTable,
+    channels: usize,
+) {
+    match channels {
+        4 => filter_h_u8_4ch(_token, input, output, weights),
+        _ => filter_h_u8_generic(_token, input, output, weights, channels),
+    }
+}
+
+/// Integer horizontal filter for 4-channel (RGBA) u8 data.
+///
+/// Processes 2 taps per madd_epi16 instruction. Shuffle mask rearranges
+/// zero-extended pixel pairs into channel-interleaved format for paired
+/// multiply-accumulate.
+#[archmage::rite]
+fn filter_h_u8_4ch(
+    _token: X64V3Token,
+    input: &[u8],
+    output: &mut [u8],
+    weights: &I16WeightTable,
+) {
+    let out_width = weights.len();
+    let max_taps = weights.max_taps;
+
+    // Shuffle mask to rearrange [R0,G0,B0,A0,R1,G1,B1,A1] (i16)
+    // into [R0,R1,G0,G1,B0,B1,A0,A1] (i16) for madd_epi16
+    let shuffle_mask = _mm_set_epi8(
+        15, 14, 7, 6,   // A1, A0
+        13, 12, 5, 4,   // B1, B0
+        11, 10, 3, 2,   // G1, G0
+        9, 8, 1, 0,     // R1, R0
+    );
+
+    let half = _mm_set1_epi32(1 << (I16_PRECISION as i32 - 1)); // rounding bias
+    let zero = _mm_setzero_si128();
+
+    for out_x in 0..out_width {
+        let left = weights.left[out_x] as usize;
+        let w_ptr = weights.weights_padded(out_x);
+        let in_base = left * 4;
+
+        let mut acc = _mm_setzero_si128(); // i32x4: [R, G, B, A]
+
+        // Process 2 taps at a time via madd_epi16
+        let pairs = max_taps / 2;
+        for p in 0..pairs {
+            let t = p * 2;
+            let pixel_offset = in_base + t * 4;
+
+            // Load 2 RGBA pixels (8 bytes) → zero-extend to 8×i16
+            let bytes = unsafe {
+                _mm_loadl_epi64(input.as_ptr().add(pixel_offset) as *const __m128i)
+            };
+            let pixels_i16 = _mm_cvtepu8_epi16(bytes);
+
+            // Shuffle to channel-pair format: [R0,R1,G0,G1,B0,B1,A0,A1]
+            let shuffled = _mm_shuffle_epi8(pixels_i16, shuffle_mask);
+
+            // Prepare paired weights: [w0, w1, w0, w1, w0, w1, w0, w1]
+            let w0 = w_ptr[t] as i32;
+            let w1 = w_ptr[t + 1] as i32;
+            let paired_w = _mm_set_epi16(
+                w1 as i16, w0 as i16,
+                w1 as i16, w0 as i16,
+                w1 as i16, w0 as i16,
+                w1 as i16, w0 as i16,
+            );
+
+            // madd_epi16: [R0*w0+R1*w1, G0*w0+G1*w1, B0*w0+B1*w1, A0*w0+A1*w1]
+            let product = _mm_madd_epi16(shuffled, paired_w);
+            acc = _mm_add_epi32(acc, product);
+        }
+
+        // Shift right by I16_PRECISION with rounding, clamp to u8
+        let rounded = _mm_add_epi32(acc, half);
+        let shifted = _mm_srai_epi32::<{ I16_PRECISION as i32 }>(rounded);
+        // Pack i32 → i16 → u8 with saturation
+        let packed16 = _mm_packs_epi32(shifted, zero); // i32→i16 (saturating)
+        let packed8 = _mm_packus_epi16(packed16, zero); // i16→u8 (saturating)
+
+        // Store 4 bytes (one RGBA pixel)
+        let pixel_val = _mm_cvtsi128_si32(packed8) as u32;
+        let out_offset = out_x * 4;
+        unsafe {
+            core::ptr::write_unaligned(
+                output.as_mut_ptr().add(out_offset) as *mut u32,
+                pixel_val,
+            );
+        }
+    }
+}
+
+/// Scalar fallback for integer horizontal filter (arbitrary channel count).
+#[archmage::rite]
+fn filter_h_u8_generic(
+    _token: X64V3Token,
+    input: &[u8],
+    output: &mut [u8],
+    weights: &I16WeightTable,
+    channels: usize,
+) {
+    let out_width = weights.len();
+
+    for out_x in 0..out_width {
+        let left = weights.left[out_x] as usize;
+        let w = weights.weights(out_x);
+        let out_base = out_x * channels;
+
+        for c in 0..channels {
+            let mut acc: i32 = 0;
+            for (t, &weight) in w.iter().enumerate() {
+                acc += input[(left + t) * channels + c] as i32 * weight as i32;
+            }
+            // Round and shift
+            let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+            output[out_base + c] = rounded.clamp(0, 255) as u8;
+        }
+    }
+}
+
+/// Integer vertical convolution: u8 rows → u8 output via i32 accumulator.
+///
+/// Uses AVX2 `_mm256_madd_epi16` to process pairs of rows efficiently.
+/// Loads u8 from input rows, zero-extends to i16, multiplies by i16 weights,
+/// accumulates in i32, then packs back to u8.
+#[archmage::arcane]
+pub(crate) fn filter_v_u8_i16_v3(
+    _token: X64V3Token,
+    rows: &[&[u8]],
+    output: &mut [u8],
+    weights: &[i16],
+) {
+    let width = output.len();
+    debug_assert_eq!(rows.len(), weights.len());
+
+    let half = _mm256_set1_epi32(1 << (I16_PRECISION as i32 - 1));
+
+    // Process 16 bytes (16 u8 values = 4 RGBA pixels) at a time
+    let chunks16 = width / 16;
+
+    for chunk in 0..chunks16 {
+        let base = chunk * 16;
+        let mut acc_lo = _mm256_setzero_si256(); // i32x8 for first 8 channels
+        let mut acc_hi = _mm256_setzero_si256(); // i32x8 for next 8 channels
+
+        // Process rows in pairs for madd_epi16
+        let pairs = rows.len() / 2;
+        for p in 0..pairs {
+            let r0 = p * 2;
+            let r1 = r0 + 1;
+            let w0 = weights[r0] as i32;
+            let w1 = weights[r1] as i32;
+            let paired_w = _mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
+
+            // Load 16 bytes from each row
+            let src0 = unsafe {
+                _mm_loadu_si128(rows[r0].as_ptr().add(base) as *const __m128i)
+            };
+            let src1 = unsafe {
+                _mm_loadu_si128(rows[r1].as_ptr().add(base) as *const __m128i)
+            };
+
+            // Interleave bytes from row0 and row1:
+            // unpacklo: [r0[0],r1[0],r0[1],r1[1],...,r0[7],r1[7]] → first 8 channels
+            let interleaved_lo = _mm_unpacklo_epi8(src0, src1);
+            let interleaved_hi = _mm_unpackhi_epi8(src0, src1);
+
+            // Zero-extend i8 pairs to i16 pairs, then madd
+            // Low 8 channels: extend to 256-bit
+            let ext_lo = _mm256_cvtepu8_epi16(interleaved_lo);
+            let ext_hi = _mm256_cvtepu8_epi16(interleaved_hi);
+
+            // madd: multiply each i16 by paired weight, accumulate pairs → i32
+            acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, paired_w));
+            acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, paired_w));
+        }
+
+        // Handle odd last row (if any)
+        if rows.len() % 2 != 0 {
+            let r = rows.len() - 1;
+            let w = _mm256_set1_epi16(weights[r]);
+
+            let src = unsafe {
+                _mm_loadu_si128(rows[r].as_ptr().add(base) as *const __m128i)
+            };
+
+            // Zero-extend to i16
+            let ext = _mm256_cvtepu8_epi16(src);
+            // Split into low and high halves for separate accumulation
+            let lo = _mm256_unpacklo_epi16(ext, _mm256_setzero_si256());
+            let hi = _mm256_unpackhi_epi16(ext, _mm256_setzero_si256());
+
+            // Multiply and accumulate
+            let w32 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(w));
+            acc_lo = _mm256_add_epi32(acc_lo, _mm256_mullo_epi32(lo, w32));
+            acc_hi = _mm256_add_epi32(acc_hi, _mm256_mullo_epi32(hi, w32));
+        }
+
+        // Round, shift, pack to u8
+        let rounded_lo = _mm256_add_epi32(acc_lo, half);
+        let rounded_hi = _mm256_add_epi32(acc_hi, half);
+        let shifted_lo = _mm256_srai_epi32::<{ I16_PRECISION as i32 }>(rounded_lo);
+        let shifted_hi = _mm256_srai_epi32::<{ I16_PRECISION as i32 }>(rounded_hi);
+
+        // Pack i32 → i16 (signed saturating)
+        let packed16 = _mm256_packs_epi32(shifted_lo, shifted_hi);
+        // Pack i16 → u8 (unsigned saturating)
+        let packed8 = _mm256_packus_epi16(packed16, packed16);
+
+        // AVX2 packing crosses lanes. Permute to get bytes in order.
+        let result = _mm256_permute4x64_epi64::<0b11011000>(packed8);
+
+        // Store 16 bytes
+        unsafe {
+            _mm_storeu_si128(
+                output.as_mut_ptr().add(base) as *mut __m128i,
+                _mm256_castsi256_si128(result),
+            );
+        }
+    }
+
+    // Scalar tail for remaining bytes
+    let tail_start = chunks16 * 16;
+    for x in tail_start..width {
+        let mut acc: i32 = 0;
+        for (row, &w) in rows.iter().zip(weights.iter()) {
+            acc += row[x] as i32 * w as i32;
+        }
+        let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+        output[x] = rounded.clamp(0, 255) as u8;
     }
 }

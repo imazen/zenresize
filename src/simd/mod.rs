@@ -23,7 +23,7 @@ mod neon;
 #[allow(unused_imports)]
 use neon::*;
 
-use crate::weights::F32WeightTable;
+use crate::weights::{F32WeightTable, I16WeightTable};
 
 /// Horizontally filter one row of f32 pixels.
 pub(crate) fn filter_h_row_f32(
@@ -58,4 +58,19 @@ pub(crate) fn premultiply_alpha_row(row: &mut [f32]) {
 /// Unpremultiply alpha in-place on RGBA f32 row.
 pub(crate) fn unpremultiply_alpha_row(row: &mut [f32]) {
     archmage::incant!(unpremultiply_alpha_row(row))
+}
+
+/// Integer horizontal filter: u8 input → u8 output via i16 weights.
+pub(crate) fn filter_h_u8_i16(
+    input: &[u8],
+    output: &mut [u8],
+    weights: &I16WeightTable,
+    channels: usize,
+) {
+    archmage::incant!(filter_h_u8_i16(input, output, weights, channels))
+}
+
+/// Integer vertical filter: u8 rows → u8 output via i16 weights.
+pub(crate) fn filter_v_u8_i16(rows: &[&[u8]], output: &mut [u8], weights: &[i16]) {
+    archmage::incant!(filter_v_u8_i16(rows, output, weights))
 }

@@ -15,7 +15,7 @@ use crate::color;
 use crate::filter::InterpolationDetails;
 use crate::pixel::ResizeConfig;
 use crate::simd;
-use crate::weights::F32WeightTable;
+use crate::weights::{F32WeightTable, I16WeightTable};
 
 /// Resize an entire u8 image. Allocates and returns output buffer.
 ///
@@ -60,17 +60,23 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
     let out_h = config.out_height as usize;
     let linearize = config.needs_linearization();
 
+    // Use integer fast path for sRGB-space resize (no linearization, no alpha premul).
+    // This avoids u8→f32→u8 conversion and uses i16 weights with i32 accumulators,
+    // doubling SIMD throughput and quartering intermediate buffer size.
+    if !linearize && !has_alpha {
+        resize_into_i16(config, input, output, in_stride, in_row_len, out_row_len,
+                        channels, in_w, in_h, out_w, out_h);
+        return;
+    }
+
     let filter = InterpolationDetails::create(config.filter);
     let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
     let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
 
     let h_row_len = out_w * channels;
 
-    // Single intermediate buffer: horizontally-filtered rows for all input rows.
-    // Layout: [row0: out_w*channels f32] [row1: ...] ... [row_{in_h-1}: ...]
+    // Intermediate buffer for horizontally-filtered rows (f32).
     let mut intermediate = vec![0.0f32; h_row_len * in_h];
-
-    // Temporary buffer for u8→f32 conversion of one input row.
     let mut temp_row = vec![0.0f32; in_w * channels];
 
     // === Horizontal pass ===
@@ -101,7 +107,6 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
     }
 
     // === Vertical pass ===
-    // Pre-allocate row pointer buffer to avoid per-row allocation.
     let max_taps = v_weights.max_taps;
     let mut row_ptrs: Vec<&[f32]> = Vec::with_capacity(max_taps);
     let mut temp_output = vec![0.0f32; h_row_len];
@@ -111,7 +116,6 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
         let tap_count = v_weights.tap_count(out_y);
         let weights = v_weights.weights(out_y);
 
-        // Gather row pointers (reuse vec, no allocation).
         row_ptrs.clear();
         for t in 0..tap_count {
             let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
@@ -139,6 +143,71 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
         } else {
             simd::f32_to_u8_row(&temp_output[..h_row_len], out_slice);
         }
+    }
+}
+
+/// Integer (i16 weights) fast path for sRGB-space resize without alpha.
+///
+/// Works entirely in u8 → i32 → u8 space, avoiding all f32 conversion.
+/// The intermediate buffer is u8 (4x smaller than f32), fitting in L2 cache.
+#[allow(clippy::too_many_arguments)]
+fn resize_into_i16(
+    config: &ResizeConfig,
+    input: &[u8],
+    output: &mut [u8],
+    in_stride: usize,
+    in_row_len: usize,
+    out_row_len: usize,
+    channels: usize,
+    _in_w: usize,
+    in_h: usize,
+    out_w: usize,
+    out_h: usize,
+) {
+    let filter = InterpolationDetails::create(config.filter);
+    let h_weights = I16WeightTable::new(config.in_width, config.out_width, &filter);
+    let v_weights = I16WeightTable::new(config.in_height, config.out_height, &filter);
+
+    let h_row_len = out_w * channels;
+
+    // u8 intermediate: 4x smaller than f32 → fits in L2 cache.
+    let mut intermediate = vec![0u8; h_row_len * in_h];
+
+    // === Horizontal pass: u8 → i32 → u8 ===
+    for y in 0..in_h {
+        let in_start = y * in_stride;
+        let in_row = &input[in_start..in_start + in_row_len];
+        let out_start = y * h_row_len;
+        simd::filter_h_u8_i16(
+            in_row,
+            &mut intermediate[out_start..out_start + h_row_len],
+            &h_weights,
+            channels,
+        );
+    }
+
+    // === Vertical pass: u8 → i32 → u8 ===
+    let max_taps = v_weights.max_taps;
+    let mut row_ptrs: Vec<&[u8]> = Vec::with_capacity(max_taps);
+
+    for out_y in 0..out_h {
+        let left = v_weights.left[out_y];
+        let tap_count = v_weights.tap_count(out_y);
+        let weights = v_weights.weights(out_y);
+
+        row_ptrs.clear();
+        for t in 0..tap_count {
+            let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+            let start = in_y * h_row_len;
+            row_ptrs.push(&intermediate[start..start + h_row_len]);
+        }
+
+        let out_start = out_y * out_row_len;
+        simd::filter_v_u8_i16(
+            &row_ptrs,
+            &mut output[out_start..out_start + out_row_len],
+            weights,
+        );
     }
 }
 

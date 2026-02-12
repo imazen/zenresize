@@ -1,6 +1,6 @@
 //! Scalar fallback convolution kernels.
 
-use crate::weights::F32WeightTable;
+use crate::weights::{F32WeightTable, I16WeightTable, I16_PRECISION};
 use archmage::ScalarToken;
 
 /// Horizontal convolution: filter one row of f32 pixels, scalar fallback.
@@ -93,6 +93,52 @@ pub(crate) fn unpremultiply_alpha_row_scalar(_token: ScalarToken, row: &mut [f32
             pixel[1] *= inv_a;
             pixel[2] *= inv_a;
         }
+    }
+}
+
+/// Integer horizontal convolution: u8 input → u8 output, scalar fallback.
+pub(crate) fn filter_h_u8_i16_scalar(
+    _token: ScalarToken,
+    input: &[u8],
+    output: &mut [u8],
+    weights: &I16WeightTable,
+    channels: usize,
+) {
+    let out_width = weights.len();
+
+    for out_x in 0..out_width {
+        let left = weights.left[out_x] as usize;
+        let w = weights.weights(out_x);
+        let out_base = out_x * channels;
+
+        for c in 0..channels {
+            let mut acc: i32 = 0;
+            for (t, &weight) in w.iter().enumerate() {
+                acc += input[(left + t) * channels + c] as i32 * weight as i32;
+            }
+            let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+            output[out_base + c] = rounded.clamp(0, 255) as u8;
+        }
+    }
+}
+
+/// Integer vertical convolution: u8 rows → u8 output, scalar fallback.
+pub(crate) fn filter_v_u8_i16_scalar(
+    _token: ScalarToken,
+    rows: &[&[u8]],
+    output: &mut [u8],
+    weights: &[i16],
+) {
+    let width = output.len();
+    debug_assert_eq!(rows.len(), weights.len());
+
+    for x in 0..width {
+        let mut acc: i32 = 0;
+        for (row, &w) in rows.iter().zip(weights.iter()) {
+            acc += row[x] as i32 * w as i32;
+        }
+        let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+        output[x] = rounded.clamp(0, 255) as u8;
     }
 }
 
