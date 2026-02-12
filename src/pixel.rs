@@ -1,5 +1,19 @@
 //! Pixel format descriptors and color space configuration.
 
+/// Channel ordering within a pixel.
+#[non_exhaustive]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
+pub enum ChannelOrder {
+    /// Standard order: R, G, B, [A]. Default.
+    #[default]
+    Rgba,
+    /// Reversed color channels: B, G, R, A. Used by Windows GDI, Cairo, etc.
+    Bgra,
+    /// Reversed color channels with padding: B, G, R, X (X is ignored/zero).
+    /// 4 bytes per pixel, no alpha.
+    Bgrx,
+}
+
 /// Pixel format descriptor.
 #[non_exhaustive]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -103,6 +117,10 @@ pub struct ResizeConfig {
     pub sharpen: f32,
     /// Color space for resize computation.
     pub color_space: ColorSpace,
+    /// Input channel order (default: RGBA).
+    pub in_channel_order: ChannelOrder,
+    /// Output channel order (default: RGBA).
+    pub out_channel_order: ChannelOrder,
     /// Input row stride in elements (0 = tightly packed, i.e., width * channels).
     pub in_stride: usize,
     /// Output row stride in elements (0 = tightly packed).
@@ -123,19 +141,65 @@ impl ResizeConfig {
         if self.out_width == 0 || self.out_height == 0 {
             return Err("output dimensions must be positive");
         }
-        if self.input_format.channels() < 1 || self.input_format.channels() > 4 {
+        let in_ch = self.effective_in_channels();
+        let out_ch = self.effective_out_channels();
+        if !(1..=4).contains(&in_ch) {
             return Err("input channels must be 1-4");
         }
-        if self.output_format.channels() < 1 || self.output_format.channels() > 4 {
+        if !(1..=4).contains(&out_ch) {
             return Err("output channels must be 1-4");
         }
-        if self.input_format.channels() != self.output_format.channels() {
-            return Err("input and output must have same channel count");
+        // Internal processing channels must match
+        let in_proc = self.processing_channels();
+        let out_proc = match self.out_channel_order {
+            ChannelOrder::Bgra => 4,
+            ChannelOrder::Bgrx => 4,
+            ChannelOrder::Rgba => self.output_format.channels(),
+        };
+        if in_proc != out_proc {
+            return Err("input and output must have same effective channel count");
         }
-        if self.input_format.has_alpha() != self.output_format.has_alpha() {
-            return Err("input and output must agree on alpha");
+        // BGRA/BGRX require 4-channel formats
+        if matches!(self.in_channel_order, ChannelOrder::Bgra | ChannelOrder::Bgrx)
+            && self.input_format.channels() != 4
+        {
+            return Err("BGRA/BGRX requires 4-channel format");
+        }
+        if matches!(self.out_channel_order, ChannelOrder::Bgra | ChannelOrder::Bgrx)
+            && self.output_format.channels() != 4
+        {
+            return Err("BGRA/BGRX requires 4-channel format");
         }
         Ok(())
+    }
+
+    /// Number of channels in the input data (accounts for channel order).
+    pub fn effective_in_channels(&self) -> u8 {
+        self.input_format.channels()
+    }
+
+    /// Number of channels in the output data (accounts for channel order).
+    pub fn effective_out_channels(&self) -> u8 {
+        self.output_format.channels()
+    }
+
+    /// Number of channels during internal processing.
+    /// BGRX is processed as 4-channel RGBA (X becomes 0/ignored).
+    pub fn processing_channels(&self) -> u8 {
+        match self.in_channel_order {
+            ChannelOrder::Bgra | ChannelOrder::Bgrx => 4,
+            ChannelOrder::Rgba => self.input_format.channels(),
+        }
+    }
+
+    /// Whether input has alpha for processing purposes.
+    /// BGRA has alpha, BGRX does not (X is padding).
+    pub fn processing_has_alpha(&self) -> bool {
+        match self.in_channel_order {
+            ChannelOrder::Bgra => true,
+            ChannelOrder::Bgrx => false,
+            ChannelOrder::Rgba => self.input_format.has_alpha(),
+        }
     }
 
     /// Effective input row stride in elements.
@@ -192,6 +256,8 @@ pub struct ResizeConfigBuilder {
     output_format: Option<PixelFormat>,
     sharpen: f32,
     color_space: ColorSpace,
+    in_channel_order: ChannelOrder,
+    out_channel_order: Option<ChannelOrder>,
     in_stride: usize,
     out_stride: usize,
 }
@@ -211,6 +277,8 @@ impl ResizeConfigBuilder {
             output_format: None,
             sharpen: 0.0,
             color_space: ColorSpace::Linear,
+            in_channel_order: ChannelOrder::Rgba,
+            out_channel_order: None,
             in_stride: 0,
             out_stride: 0,
         }
@@ -259,6 +327,25 @@ impl ResizeConfigBuilder {
         self
     }
 
+    /// Set both input and output channel order.
+    pub fn channel_order(mut self, order: ChannelOrder) -> Self {
+        self.in_channel_order = order;
+        self.out_channel_order = Some(order);
+        self
+    }
+
+    /// Set input channel order separately.
+    pub fn in_channel_order(mut self, order: ChannelOrder) -> Self {
+        self.in_channel_order = order;
+        self
+    }
+
+    /// Set output channel order separately.
+    pub fn out_channel_order(mut self, order: ChannelOrder) -> Self {
+        self.out_channel_order = Some(order);
+        self
+    }
+
     /// Set input row stride in elements (default: tightly packed).
     pub fn in_stride(mut self, stride: usize) -> Self {
         self.in_stride = stride;
@@ -274,6 +361,7 @@ impl ResizeConfigBuilder {
     /// Build the configuration.
     pub fn build(self) -> ResizeConfig {
         let output_format = self.output_format.unwrap_or(self.input_format);
+        let out_channel_order = self.out_channel_order.unwrap_or(self.in_channel_order);
         ResizeConfig {
             filter: self.filter,
             in_width: self.in_width,
@@ -284,6 +372,8 @@ impl ResizeConfigBuilder {
             output_format,
             sharpen: self.sharpen,
             color_space: self.color_space,
+            in_channel_order: self.in_channel_order,
+            out_channel_order,
             in_stride: self.in_stride,
             out_stride: self.out_stride,
         }

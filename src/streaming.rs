@@ -11,7 +11,7 @@ use alloc::{vec, vec::Vec};
 
 use crate::color;
 use crate::filter::InterpolationDetails;
-use crate::pixel::ResizeConfig;
+use crate::pixel::{ChannelOrder, ResizeConfig};
 use crate::simd;
 use crate::weights::F32WeightTable;
 
@@ -56,8 +56,8 @@ impl StreamingResize {
         let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
         let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
 
-        let channels = config.input_format.channels() as usize;
-        let has_alpha = config.input_format.has_alpha();
+        let channels = config.processing_channels() as usize;
+        let has_alpha = config.processing_has_alpha();
 
         let cache_size = v_weights.max_taps + 2;
         let row_len = config.out_width as usize * channels;
@@ -113,6 +113,18 @@ impl StreamingResize {
             color::srgb_u8_to_f32(pixel_data, &mut self.temp_input_f32);
         }
 
+        // Apply input channel swizzle (BGRA/BGRX → RGBA)
+        match self.config.in_channel_order {
+            ChannelOrder::Bgra => {
+                color::bgra_to_rgba_f32(&mut self.temp_input_f32[..pixel_len]);
+            }
+            ChannelOrder::Bgrx => {
+                color::bgra_to_rgba_f32(&mut self.temp_input_f32[..pixel_len]);
+                color::clear_x_channel_f32(&mut self.temp_input_f32[..pixel_len]);
+            }
+            ChannelOrder::Rgba => {}
+        }
+
         if self.has_alpha && self.channels == 4 {
             color::premultiply_alpha_f32(&mut self.temp_input_f32, self.channels);
         }
@@ -141,6 +153,18 @@ impl StreamingResize {
         assert!(row.len() >= pixel_len, "f32 input row too short");
 
         self.temp_input_f32[..pixel_len].copy_from_slice(&row[..pixel_len]);
+
+        // Apply input channel swizzle (BGRA/BGRX → RGBA)
+        match self.config.in_channel_order {
+            ChannelOrder::Bgra => {
+                color::bgra_to_rgba_f32(&mut self.temp_input_f32[..pixel_len]);
+            }
+            ChannelOrder::Bgrx => {
+                color::bgra_to_rgba_f32(&mut self.temp_input_f32[..pixel_len]);
+                color::clear_x_channel_f32(&mut self.temp_input_f32[..pixel_len]);
+            }
+            ChannelOrder::Rgba => {}
+        }
 
         if self.has_alpha && self.channels == 4 {
             color::premultiply_alpha_f32(&mut self.temp_input_f32, self.channels);
@@ -275,9 +299,27 @@ impl StreamingResize {
             } else {
                 color::f32_to_srgb_u8(&self.temp_output_f32[..row_len], &mut out_row);
             }
+            // Apply output channel swizzle (RGBA → BGRA/BGRX)
+            match self.config.out_channel_order {
+                ChannelOrder::Bgra => color::rgba_to_bgra_u8(&mut out_row),
+                ChannelOrder::Bgrx => {
+                    color::rgba_to_bgra_u8(&mut out_row);
+                    color::fill_x_channel_u8(&mut out_row);
+                }
+                ChannelOrder::Rgba => {}
+            }
             self.output_queue.insert(0, out_row);
         } else {
-            let out_row = self.temp_output_f32[..row_len].to_vec();
+            let mut out_row = self.temp_output_f32[..row_len].to_vec();
+            // Apply output channel swizzle for f32
+            match self.config.out_channel_order {
+                ChannelOrder::Bgra => color::rgba_to_bgra_f32(&mut out_row),
+                ChannelOrder::Bgrx => {
+                    color::rgba_to_bgra_f32(&mut out_row);
+                    color::clear_x_channel_f32(&mut out_row);
+                }
+                ChannelOrder::Rgba => {}
+            }
             self.output_queue_f32.insert(0, out_row);
         }
 
