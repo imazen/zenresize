@@ -374,9 +374,9 @@ pub(crate) fn filter_h_u8_i16_v3(
 
 /// Integer horizontal filter for 4-channel (RGBA) u8 data.
 ///
-/// Processes 2 taps per madd_epi16 instruction. Shuffle mask rearranges
-/// zero-extended pixel pairs into channel-interleaved format for paired
-/// multiply-accumulate.
+/// Processes 2 taps per madd_epi16 instruction with channel-pair shuffling.
+/// Uses raw pointers to eliminate Rust bounds checks in the hot loop, and
+/// 2 independent accumulators to break the serial dependency chain.
 #[archmage::rite]
 fn filter_h_u8_4ch(
     _token: X64V3Token,
@@ -386,9 +386,11 @@ fn filter_h_u8_4ch(
 ) {
     let out_width = weights.len();
     let max_taps = weights.max_taps;
+    let in_ptr = input.as_ptr();
+    let out_ptr = output.as_mut_ptr();
 
-    // Shuffle mask to rearrange [R0,G0,B0,A0,R1,G1,B1,A1] (i16)
-    // into [R0,R1,G0,G1,B0,B1,A0,A1] (i16) for madd_epi16
+    // Shuffle mask: [R0,G0,B0,A0,R1,G1,B1,A1] (i16)
+    //            → [R0,R1,G0,G1,B0,B1,A0,A1] (i16) for madd_epi16
     let shuffle_mask = _mm_set_epi8(
         15, 14, 7, 6,   // A1, A0
         13, 12, 5, 4,   // B1, B0
@@ -396,61 +398,63 @@ fn filter_h_u8_4ch(
         9, 8, 1, 0,     // R1, R0
     );
 
-    let half = _mm_set1_epi32(1 << (I16_PRECISION as i32 - 1)); // rounding bias
+    let half = _mm_set1_epi32(1 << (I16_PRECISION as i32 - 1));
     let zero = _mm_setzero_si128();
+
+    let pairs = max_taps / 2;
+    let pairs2 = pairs / 2;
+    let pairs_rem = pairs % 2;
 
     for out_x in 0..out_width {
         let left = weights.left[out_x] as usize;
-        let w_ptr = weights.weights_padded(out_x);
-        let in_base = left * 4;
+        let w_ptr = weights.weights_padded(out_x).as_ptr();
+        let in_base = unsafe { in_ptr.add(left * 4) };
 
-        let mut acc = _mm_setzero_si128(); // i32x4: [R, G, B, A]
+        // Two independent accumulators for ILP
+        let mut acc0 = _mm_setzero_si128();
+        let mut acc1 = _mm_setzero_si128();
 
-        // Process 2 taps at a time via madd_epi16
-        let pairs = max_taps / 2;
-        for p in 0..pairs {
-            let t = p * 2;
-            let pixel_offset = in_base + t * 4;
+        // Process 4 taps per iteration (2 pairs × 2 taps each)
+        for p in 0..pairs2 {
+            let t = p * 4;
+            unsafe {
+                // First pair: taps t, t+1
+                let bytes0 = _mm_loadl_epi64(in_base.add(t * 4) as *const __m128i);
+                let shuffled0 = _mm_shuffle_epi8(_mm_cvtepu8_epi16(bytes0), shuffle_mask);
+                let w0 = _mm_broadcastd_epi32(_mm_loadu_si32(w_ptr.add(t) as *const _));
+                acc0 = _mm_add_epi32(acc0, _mm_madd_epi16(shuffled0, w0));
 
-            // Load 2 RGBA pixels (8 bytes) → zero-extend to 8×i16
-            let bytes = unsafe {
-                _mm_loadl_epi64(input.as_ptr().add(pixel_offset) as *const __m128i)
-            };
-            let pixels_i16 = _mm_cvtepu8_epi16(bytes);
-
-            // Shuffle to channel-pair format: [R0,R1,G0,G1,B0,B1,A0,A1]
-            let shuffled = _mm_shuffle_epi8(pixels_i16, shuffle_mask);
-
-            // Prepare paired weights: [w0, w1, w0, w1, w0, w1, w0, w1]
-            let w0 = w_ptr[t] as i32;
-            let w1 = w_ptr[t + 1] as i32;
-            let paired_w = _mm_set_epi16(
-                w1 as i16, w0 as i16,
-                w1 as i16, w0 as i16,
-                w1 as i16, w0 as i16,
-                w1 as i16, w0 as i16,
-            );
-
-            // madd_epi16: [R0*w0+R1*w1, G0*w0+G1*w1, B0*w0+B1*w1, A0*w0+A1*w1]
-            let product = _mm_madd_epi16(shuffled, paired_w);
-            acc = _mm_add_epi32(acc, product);
+                // Second pair: taps t+2, t+3
+                let bytes1 = _mm_loadl_epi64(in_base.add((t + 2) * 4) as *const __m128i);
+                let shuffled1 = _mm_shuffle_epi8(_mm_cvtepu8_epi16(bytes1), shuffle_mask);
+                let w1 = _mm_broadcastd_epi32(_mm_loadu_si32(w_ptr.add(t + 2) as *const _));
+                acc1 = _mm_add_epi32(acc1, _mm_madd_epi16(shuffled1, w1));
+            }
         }
 
-        // Shift right by I16_PRECISION with rounding, clamp to u8
+        // Handle remaining pair (if pairs is odd)
+        if pairs_rem > 0 {
+            let t = pairs2 * 4;
+            unsafe {
+                let bytes = _mm_loadl_epi64(in_base.add(t * 4) as *const __m128i);
+                let shuffled = _mm_shuffle_epi8(_mm_cvtepu8_epi16(bytes), shuffle_mask);
+                let w = _mm_broadcastd_epi32(_mm_loadu_si32(w_ptr.add(t) as *const _));
+                acc0 = _mm_add_epi32(acc0, _mm_madd_epi16(shuffled, w));
+            }
+        }
+
+        // Combine accumulators
+        let acc = _mm_add_epi32(acc0, acc1);
+
+        // Round, shift, pack to u8
         let rounded = _mm_add_epi32(acc, half);
         let shifted = _mm_srai_epi32::<{ I16_PRECISION as i32 }>(rounded);
-        // Pack i32 → i16 → u8 with saturation
-        let packed16 = _mm_packs_epi32(shifted, zero); // i32→i16 (saturating)
-        let packed8 = _mm_packus_epi16(packed16, zero); // i16→u8 (saturating)
+        let packed16 = _mm_packs_epi32(shifted, zero);
+        let packed8 = _mm_packus_epi16(packed16, zero);
 
-        // Store 4 bytes (one RGBA pixel)
         let pixel_val = _mm_cvtsi128_si32(packed8) as u32;
-        let out_offset = out_x * 4;
         unsafe {
-            core::ptr::write_unaligned(
-                output.as_mut_ptr().add(out_offset) as *mut u32,
-                pixel_val,
-            );
+            core::ptr::write_unaligned(out_ptr.add(out_x * 4) as *mut u32, pixel_val);
         }
     }
 }
