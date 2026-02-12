@@ -4,7 +4,7 @@
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 
-use crate::weights::{F32WeightTable, I16WeightTable, I16_PRECISION};
+use crate::weights::{F32WeightTable, I16_PRECISION, I16WeightTable};
 use archmage::X64V3Token;
 
 // =============================================================================
@@ -95,10 +95,7 @@ pub(crate) fn premultiply_alpha_row_v3(_token: X64V3Token, row: &mut [f32]) {
         // Shuffle to broadcast alpha within each pixel
         // For pixel 0: [r,g,b,a] → need [a,a,a,a]
         // For pixel 1: [r,g,b,a] → need [a,a,a,a]
-        let alpha = _mm256_permutevar8x32_ps(
-            px,
-            _mm256_set_epi32(7, 7, 7, 7, 3, 3, 3, 3),
-        );
+        let alpha = _mm256_permutevar8x32_ps(px, _mm256_set_epi32(7, 7, 7, 7, 3, 3, 3, 3));
         let result = _mm256_mul_ps(px, alpha);
         // Restore original alpha values (don't multiply alpha by itself)
         let mask = _mm256_blend_ps::<0b10001000>(result, px); // bits 3,7 from px
@@ -295,8 +292,8 @@ pub(crate) fn filter_v_row_f32_v3(
     for i in 0..chunks8 {
         unsafe { _mm256_storeu_ps(out_ptr.add(i * 8), zero) };
     }
-    for x in base8..width {
-        output[x] = 0.0;
+    for v in &mut output[base8..width] {
+        *v = 0.0;
     }
 
     // Row-major accumulation: broadcast weight once, sweep entire row
@@ -348,6 +345,133 @@ pub(crate) fn filter_v_row_f32_v3(
 }
 
 // =============================================================================
+// u8 alpha premultiply / unpremultiply
+// =============================================================================
+
+/// Premultiply alpha on RGBA u8 row using SSE4.1.
+///
+/// For each pixel: `C' = (C * A + 127) / 255`, alpha preserved.
+/// Processes 2 pixels (8 bytes) at a time using i16 multiplication.
+#[archmage::arcane]
+pub(crate) fn premultiply_u8_row_v3(_token: X64V3Token, input: &[u8], output: &mut [u8]) {
+    debug_assert_eq!(input.len(), output.len());
+    let len = input.len();
+
+    // Shuffle mask to broadcast alpha within each pixel pair:
+    // Input i16: [R0, G0, B0, A0, R1, G1, B1, A1]
+    // Want:      [A0, A0, A0, A0, A1, A1, A1, A1]
+    let alpha_bcast = _mm_set_epi8(
+        15, 14, 15, 14, 15, 14, 15, 14, // A1 broadcast
+        7, 6, 7, 6, 7, 6, 7, 6, // A0 broadcast
+    );
+    // Mask for blending: keep original alpha, use premultiplied RGB
+    // Positions 3,7 (alpha channels in pixel 0 and 1) from original
+    let alpha_blend = _mm_set_epi16(
+        -1, 0, 0, 0, // pixel 1: A from orig, RGB from premul
+        -1, 0, 0, 0, // pixel 0: A from orig, RGB from premul
+    );
+    let bias = _mm_set1_epi16(127);
+
+    let chunks2 = len / 8; // 2 pixels at a time
+    for i in 0..chunks2 {
+        let base = i * 8;
+        let bytes = unsafe { _mm_loadl_epi64(input.as_ptr().add(base) as *const __m128i) };
+        let ext = _mm_cvtepu8_epi16(bytes); // [R0,G0,B0,A0,R1,G1,B1,A1] as i16
+
+        // Broadcast alpha
+        let alpha = _mm_shuffle_epi8(ext, alpha_bcast);
+
+        // C * A
+        let product = _mm_mullo_epi16(ext, alpha);
+
+        // (C * A + 127) / 255 ≈ (product + 127 + ((product + 127) >> 8)) >> 8
+        let biased = _mm_add_epi16(product, bias);
+        let approx = _mm_srli_epi16::<8>(_mm_add_epi16(biased, _mm_srli_epi16::<8>(biased)));
+
+        // Restore original alpha (blend: alpha positions from ext, rest from approx)
+        let result = _mm_blendv_epi8(approx, ext, alpha_blend);
+
+        // Pack i16 → u8
+        let packed = _mm_packus_epi16(result, result);
+
+        // Store 8 bytes
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                &packed as *const __m128i as *const u8,
+                output.as_mut_ptr().add(base),
+                8,
+            );
+        }
+    }
+
+    // Scalar tail
+    let tail = chunks2 * 8;
+    for pixel in input[tail..]
+        .chunks_exact(4)
+        .zip(output[tail..].chunks_exact_mut(4))
+    {
+        let (inp, out) = pixel;
+        let a = inp[3] as u16;
+        out[0] = ((inp[0] as u16 * a + 127) / 255) as u8;
+        out[1] = ((inp[1] as u16 * a + 127) / 255) as u8;
+        out[2] = ((inp[2] as u16 * a + 127) / 255) as u8;
+        out[3] = inp[3];
+    }
+}
+
+/// Unpremultiply alpha in-place on RGBA u8 row using SSE4.1.
+///
+/// For each pixel: `C = min(C' * 255 / A, 255)` where A > 0.
+/// Uses float reciprocal (_mm_rcp_ps) for throughput.
+#[archmage::arcane]
+pub(crate) fn unpremultiply_u8_row_v3(_token: X64V3Token, row: &mut [u8]) {
+    let scale = _mm_set1_ps(255.0);
+    let zero_f = _mm_setzero_ps();
+    let max_val = _mm_set1_ps(255.0);
+    let half = _mm_set1_ps(0.5);
+
+    // Process 1 pixel (4 bytes) at a time
+    for pixel in row.chunks_exact_mut(4) {
+        let a = pixel[3];
+        if a == 0 {
+            pixel[0] = 0;
+            pixel[1] = 0;
+            pixel[2] = 0;
+            continue;
+        }
+        if a == 255 {
+            continue;
+        }
+
+        // Load pixel as 4 × i32 → f32
+        let bytes =
+            unsafe { _mm_cvtsi32_si128(core::ptr::read_unaligned(pixel.as_ptr() as *const i32)) };
+        let ext = _mm_cvtepu8_epi32(bytes);
+        let fpixel = _mm_cvtepi32_ps(ext);
+
+        // Compute C * 255 / A using reciprocal
+        let fa = _mm_set1_ps(a as f32);
+        let inv_a = _mm_rcp_ps(fa); // approximate 1/A
+        // Newton-Raphson refinement: inv_a = inv_a * (2 - a * inv_a)
+        let refined = _mm_mul_ps(inv_a, _mm_sub_ps(_mm_set1_ps(2.0), _mm_mul_ps(fa, inv_a)));
+        let result = _mm_add_ps(_mm_mul_ps(_mm_mul_ps(fpixel, scale), refined), half);
+        let clamped = _mm_min_ps(_mm_max_ps(result, zero_f), max_val);
+
+        // Convert back to u8
+        let ints = _mm_cvttps_epi32(clamped);
+        let packed16 = _mm_packs_epi32(ints, ints);
+        let packed8 = _mm_packus_epi16(packed16, packed16);
+        let val = _mm_cvtsi128_si32(packed8) as u32;
+
+        // Restore original alpha
+        let val_with_alpha = (val & 0x00FF_FFFF) | ((a as u32) << 24);
+        unsafe {
+            core::ptr::write_unaligned(pixel.as_mut_ptr() as *mut u32, val_with_alpha);
+        }
+    }
+}
+
+// =============================================================================
 // Integer convolution kernels (sRGB fast path)
 // =============================================================================
 
@@ -378,12 +502,7 @@ pub(crate) fn filter_h_u8_i16_v3(
 /// Uses raw pointers to eliminate Rust bounds checks in the hot loop, and
 /// 2 independent accumulators to break the serial dependency chain.
 #[archmage::rite]
-fn filter_h_u8_4ch(
-    _token: X64V3Token,
-    input: &[u8],
-    output: &mut [u8],
-    weights: &I16WeightTable,
-) {
+fn filter_h_u8_4ch(_token: X64V3Token, input: &[u8], output: &mut [u8], weights: &I16WeightTable) {
     let out_width = weights.len();
     let max_taps = weights.max_taps;
     let in_ptr = input.as_ptr();
@@ -392,13 +511,13 @@ fn filter_h_u8_4ch(
     // Shuffle mask: [R0,G0,B0,A0,R1,G1,B1,A1] (i16)
     //            → [R0,R1,G0,G1,B0,B1,A0,A1] (i16) for madd_epi16
     let shuffle_mask = _mm_set_epi8(
-        15, 14, 7, 6,   // A1, A0
-        13, 12, 5, 4,   // B1, B0
-        11, 10, 3, 2,   // G1, G0
-        9, 8, 1, 0,     // R1, R0
+        15, 14, 7, 6, // A1, A0
+        13, 12, 5, 4, // B1, B0
+        11, 10, 3, 2, // G1, G0
+        9, 8, 1, 0, // R1, R0
     );
 
-    let half = _mm_set1_epi32(1 << (I16_PRECISION as i32 - 1));
+    let half = _mm_set1_epi32(1 << (I16_PRECISION - 1));
     let zero = _mm_setzero_si128();
 
     let pairs = max_taps / 2;
@@ -448,7 +567,7 @@ fn filter_h_u8_4ch(
 
         // Round, shift, pack to u8
         let rounded = _mm_add_epi32(acc, half);
-        let shifted = _mm_srai_epi32::<{ I16_PRECISION as i32 }>(rounded);
+        let shifted = _mm_srai_epi32::<{ I16_PRECISION }>(rounded);
         let packed16 = _mm_packs_epi32(shifted, zero);
         let packed8 = _mm_packus_epi16(packed16, zero);
 
@@ -502,7 +621,7 @@ pub(crate) fn filter_v_u8_i16_v3(
     let width = output.len();
     debug_assert_eq!(rows.len(), weights.len());
 
-    let half = _mm256_set1_epi32(1 << (I16_PRECISION as i32 - 1));
+    let half = _mm256_set1_epi32(1 << (I16_PRECISION - 1));
 
     // Process 16 bytes (16 u8 values = 4 RGBA pixels) at a time
     let chunks16 = width / 16;
@@ -522,12 +641,8 @@ pub(crate) fn filter_v_u8_i16_v3(
             let paired_w = _mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
 
             // Load 16 bytes from each row
-            let src0 = unsafe {
-                _mm_loadu_si128(rows[r0].as_ptr().add(base) as *const __m128i)
-            };
-            let src1 = unsafe {
-                _mm_loadu_si128(rows[r1].as_ptr().add(base) as *const __m128i)
-            };
+            let src0 = unsafe { _mm_loadu_si128(rows[r0].as_ptr().add(base) as *const __m128i) };
+            let src1 = unsafe { _mm_loadu_si128(rows[r1].as_ptr().add(base) as *const __m128i) };
 
             // Interleave bytes from row0 and row1:
             // unpacklo: [r0[0],r1[0],r0[1],r1[1],...,r0[7],r1[7]] → first 8 channels
@@ -544,47 +659,50 @@ pub(crate) fn filter_v_u8_i16_v3(
             acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, paired_w));
         }
 
-        // Handle odd last row (if any)
+        // Handle odd last row (if any).
+        // Use the same interleave+madd approach as paired rows, but interleave
+        // with a zero row so that madd computes pixel*w + 0*0 = pixel*w.
+        // This keeps the accumulator lane layout identical to the paired path.
         if rows.len() % 2 != 0 {
             let r = rows.len() - 1;
-            let w = _mm256_set1_epi16(weights[r]);
+            let w0 = weights[r] as i32;
+            let paired_w = _mm256_set1_epi32(w0 & 0xFFFF); // [w0, 0] as i16 pair
 
-            let src = unsafe {
-                _mm_loadu_si128(rows[r].as_ptr().add(base) as *const __m128i)
-            };
+            let src = unsafe { _mm_loadu_si128(rows[r].as_ptr().add(base) as *const __m128i) };
+            let zero_src = _mm_setzero_si128();
 
-            // Zero-extend to i16
-            let ext = _mm256_cvtepu8_epi16(src);
-            // Split into low and high halves for separate accumulation
-            let lo = _mm256_unpacklo_epi16(ext, _mm256_setzero_si256());
-            let hi = _mm256_unpackhi_epi16(ext, _mm256_setzero_si256());
+            let interleaved_lo = _mm_unpacklo_epi8(src, zero_src);
+            let interleaved_hi = _mm_unpackhi_epi8(src, zero_src);
 
-            // Multiply and accumulate
-            let w32 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(w));
-            acc_lo = _mm256_add_epi32(acc_lo, _mm256_mullo_epi32(lo, w32));
-            acc_hi = _mm256_add_epi32(acc_hi, _mm256_mullo_epi32(hi, w32));
+            let ext_lo = _mm256_cvtepu8_epi16(interleaved_lo);
+            let ext_hi = _mm256_cvtepu8_epi16(interleaved_hi);
+
+            acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, paired_w));
+            acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, paired_w));
         }
 
-        // Round, shift, pack to u8
+        // Round and shift
         let rounded_lo = _mm256_add_epi32(acc_lo, half);
         let rounded_hi = _mm256_add_epi32(acc_hi, half);
-        let shifted_lo = _mm256_srai_epi32::<{ I16_PRECISION as i32 }>(rounded_lo);
-        let shifted_hi = _mm256_srai_epi32::<{ I16_PRECISION as i32 }>(rounded_hi);
+        let shifted_lo = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded_lo);
+        let shifted_hi = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded_hi);
 
-        // Pack i32 → i16 (signed saturating)
-        let packed16 = _mm256_packs_epi32(shifted_lo, shifted_hi);
-        // Pack i16 → u8 (unsigned saturating)
-        let packed8 = _mm256_packus_epi16(packed16, packed16);
+        // Pack i32 → i16 → u8 using 128-bit ops to avoid AVX2 lane-crossing.
+        // acc_lo = [pixel0(4×i32) | pixel1(4×i32)], acc_hi = [pixel2 | pixel3]
+        // 256-bit packs_epi32 operates within lanes, producing [P0,P2|P1,P3] —
+        // wrong order. Using 128-bit extracts + SSE packs gives correct order.
+        let lo_lo = _mm256_castsi256_si128(shifted_lo); // pixel 0
+        let lo_hi = _mm256_extracti128_si256::<1>(shifted_lo); // pixel 1
+        let hi_lo = _mm256_castsi256_si128(shifted_hi); // pixel 2
+        let hi_hi = _mm256_extracti128_si256::<1>(shifted_hi); // pixel 3
 
-        // AVX2 packing crosses lanes. Permute to get bytes in order.
-        let result = _mm256_permute4x64_epi64::<0b11011000>(packed8);
+        let pack01 = _mm_packs_epi32(lo_lo, lo_hi); // [P0, P1] as 8×i16
+        let pack23 = _mm_packs_epi32(hi_lo, hi_hi); // [P2, P3] as 8×i16
+        let result = _mm_packus_epi16(pack01, pack23); // [P0, P1, P2, P3] as 16×u8
 
         // Store 16 bytes
         unsafe {
-            _mm_storeu_si128(
-                output.as_mut_ptr().add(base) as *mut __m128i,
-                _mm256_castsi256_si128(result),
-            );
+            _mm_storeu_si128(output.as_mut_ptr().add(base) as *mut __m128i, result);
         }
     }
 

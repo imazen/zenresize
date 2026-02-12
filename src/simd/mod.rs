@@ -74,3 +74,13 @@ pub(crate) fn filter_h_u8_i16(
 pub(crate) fn filter_v_u8_i16(rows: &[&[u8]], output: &mut [u8], weights: &[i16]) {
     archmage::incant!(filter_v_u8_i16(rows, output, weights))
 }
+
+/// Premultiply alpha on RGBA u8 row: input → output.
+pub(crate) fn premultiply_u8_row(input: &[u8], output: &mut [u8]) {
+    archmage::incant!(premultiply_u8_row(input, output))
+}
+
+/// Unpremultiply alpha in-place on RGBA u8 row.
+pub(crate) fn unpremultiply_u8_row(row: &mut [u8]) {
+    archmage::incant!(unpremultiply_u8_row(row))
+}

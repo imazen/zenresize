@@ -1,6 +1,6 @@
 //! Scalar fallback convolution kernels.
 
-use crate::weights::{F32WeightTable, I16WeightTable, I16_PRECISION};
+use crate::weights::{F32WeightTable, I16_PRECISION, I16WeightTable};
 use archmage::ScalarToken;
 
 /// Horizontal convolution: filter one row of f32 pixels, scalar fallback.
@@ -139,6 +139,37 @@ pub(crate) fn filter_v_u8_i16_scalar(
         }
         let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
         output[x] = rounded.clamp(0, 255) as u8;
+    }
+}
+
+/// Premultiply alpha on RGBA u8 row: input → output, scalar fallback.
+pub(crate) fn premultiply_u8_row_scalar(_token: ScalarToken, input: &[u8], output: &mut [u8]) {
+    debug_assert_eq!(input.len(), output.len());
+    for (inp, out) in input.chunks_exact(4).zip(output.chunks_exact_mut(4)) {
+        let a = inp[3] as u16;
+        // (c * a + 127) / 255 — exact for all u8 inputs
+        out[0] = ((inp[0] as u16 * a + 127) / 255) as u8;
+        out[1] = ((inp[1] as u16 * a + 127) / 255) as u8;
+        out[2] = ((inp[2] as u16 * a + 127) / 255) as u8;
+        out[3] = inp[3];
+    }
+}
+
+/// Unpremultiply alpha in-place on RGBA u8 row, scalar fallback.
+pub(crate) fn unpremultiply_u8_row_scalar(_token: ScalarToken, row: &mut [u8]) {
+    for pixel in row.chunks_exact_mut(4) {
+        let a = pixel[3];
+        if a == 0 {
+            pixel[0] = 0;
+            pixel[1] = 0;
+            pixel[2] = 0;
+        } else if a < 255 {
+            let a16 = a as u16;
+            pixel[0] = ((pixel[0] as u16 * 255 + a16 / 2) / a16).min(255) as u8;
+            pixel[1] = ((pixel[1] as u16 * 255 + a16 / 2) / a16).min(255) as u8;
+            pixel[2] = ((pixel[2] as u16 * 255 + a16 / 2) / a16).min(255) as u8;
+        }
+        // a == 255: no change needed
     }
 }
 

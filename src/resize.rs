@@ -60,12 +60,25 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
     let out_h = config.out_height as usize;
     let linearize = config.needs_linearization();
 
-    // Use integer fast path for sRGB-space resize (no linearization, no alpha premul).
+    // Use integer fast path for sRGB-space resize (no linearization needed).
     // This avoids u8→f32→u8 conversion and uses i16 weights with i32 accumulators,
     // doubling SIMD throughput and quartering intermediate buffer size.
-    if !linearize && !has_alpha {
-        resize_into_i16(config, input, output, in_stride, in_row_len, out_row_len,
-                        channels, in_w, in_h, out_w, out_h);
+    // Supports alpha premultiply/unpremultiply in u8 space.
+    if !linearize && channels == 4 {
+        resize_into_i16(
+            config,
+            input,
+            output,
+            in_stride,
+            in_row_len,
+            out_row_len,
+            channels,
+            in_w,
+            in_h,
+            out_w,
+            out_h,
+            has_alpha,
+        );
         return;
     }
 
@@ -134,22 +147,21 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
         let out_start = out_y * out_row_len;
         let out_slice = &mut output[out_start..out_start + out_row_len];
         if linearize {
-            color::linear_f32_to_srgb_u8(
-                &temp_output[..h_row_len],
-                out_slice,
-                channels,
-                has_alpha,
-            );
+            color::linear_f32_to_srgb_u8(&temp_output[..h_row_len], out_slice, channels, has_alpha);
         } else {
             simd::f32_to_u8_row(&temp_output[..h_row_len], out_slice);
         }
     }
 }
 
-/// Integer (i16 weights) fast path for sRGB-space resize without alpha.
+/// Integer (i16 weights) fast path for sRGB-space resize.
 ///
 /// Works entirely in u8 → i32 → u8 space, avoiding all f32 conversion.
 /// The intermediate buffer is u8 (4x smaller than f32), fitting in L2 cache.
+///
+/// When `has_alpha` is true, premultiplies each input row before horizontal
+/// convolution and unpremultiplies each output row after vertical convolution.
+/// This keeps premul/unpremul in the row-level cache-hot path.
 #[allow(clippy::too_many_arguments)]
 fn resize_into_i16(
     config: &ResizeConfig,
@@ -163,6 +175,7 @@ fn resize_into_i16(
     in_h: usize,
     out_w: usize,
     out_h: usize,
+    has_alpha: bool,
 ) {
     let filter = InterpolationDetails::create(config.filter);
     let h_weights = I16WeightTable::new(config.in_width, config.out_width, &filter);
@@ -173,13 +186,28 @@ fn resize_into_i16(
     // u8 intermediate: 4x smaller than f32 → fits in L2 cache.
     let mut intermediate = vec![0u8; h_row_len * in_h];
 
+    // Temp buffer for premultiplied input row (reused per row, L1-hot).
+    let mut premul_buf = if has_alpha {
+        vec![0u8; in_row_len]
+    } else {
+        Vec::new()
+    };
+
     // === Horizontal pass: u8 → i32 → u8 ===
     for y in 0..in_h {
         let in_start = y * in_stride;
         let in_row = &input[in_start..in_start + in_row_len];
         let out_start = y * h_row_len;
+
+        let src = if has_alpha {
+            simd::premultiply_u8_row(in_row, &mut premul_buf);
+            &premul_buf[..]
+        } else {
+            in_row
+        };
+
         simd::filter_h_u8_i16(
-            in_row,
+            src,
             &mut intermediate[out_start..out_start + h_row_len],
             &h_weights,
             channels,
@@ -203,11 +231,13 @@ fn resize_into_i16(
         }
 
         let out_start = out_y * out_row_len;
-        simd::filter_v_u8_i16(
-            &row_ptrs,
-            &mut output[out_start..out_start + out_row_len],
-            weights,
-        );
+        let out_slice = &mut output[out_start..out_start + out_row_len];
+
+        simd::filter_v_u8_i16(&row_ptrs, out_slice, weights);
+
+        if has_alpha {
+            simd::unpremultiply_u8_row(out_slice);
+        }
     }
 }
 
@@ -338,8 +368,14 @@ mod imgref_impl {
         cfg.in_height = img.height() as u32;
         cfg.out_width = out_width;
         cfg.out_height = out_height;
-        cfg.input_format = PixelFormat::Srgb8 { channels: 4, has_alpha };
-        cfg.output_format = PixelFormat::Srgb8 { channels: 4, has_alpha };
+        cfg.input_format = PixelFormat::Srgb8 {
+            channels: 4,
+            has_alpha,
+        };
+        cfg.output_format = PixelFormat::Srgb8 {
+            channels: 4,
+            has_alpha,
+        };
         cfg.in_stride = 0;
 
         let mut resizer = StreamingResize::new(&cfg);
@@ -388,8 +424,14 @@ mod imgref_impl {
         cfg.in_height = img.height() as u32;
         cfg.out_width = out_width;
         cfg.out_height = out_height;
-        cfg.input_format = PixelFormat::Srgb8 { channels: 3, has_alpha: false };
-        cfg.output_format = PixelFormat::Srgb8 { channels: 3, has_alpha: false };
+        cfg.input_format = PixelFormat::Srgb8 {
+            channels: 3,
+            has_alpha: false,
+        };
+        cfg.output_format = PixelFormat::Srgb8 {
+            channels: 3,
+            has_alpha: false,
+        };
         cfg.in_stride = 0;
 
         let mut resizer = StreamingResize::new(&cfg);
@@ -430,8 +472,14 @@ mod imgref_impl {
         cfg.in_height = img.height() as u32;
         cfg.out_width = out_width;
         cfg.out_height = out_height;
-        cfg.input_format = PixelFormat::Srgb8 { channels: 1, has_alpha: false };
-        cfg.output_format = PixelFormat::Srgb8 { channels: 1, has_alpha: false };
+        cfg.input_format = PixelFormat::Srgb8 {
+            channels: 1,
+            has_alpha: false,
+        };
+        cfg.output_format = PixelFormat::Srgb8 {
+            channels: 1,
+            has_alpha: false,
+        };
         cfg.in_stride = 0;
 
         let mut resizer = StreamingResize::new(&cfg);
@@ -534,7 +582,10 @@ mod tests {
     fn test_resize_with_stride() {
         // Create an image with extra padding bytes per row
         let config = ResizeConfig::builder(10, 10, 5, 5)
-            .format(PixelFormat::Srgb8 { channels: 4, has_alpha: true })
+            .format(PixelFormat::Srgb8 {
+                channels: 4,
+                has_alpha: true,
+            })
             .srgb()
             .in_stride(10 * 4 + 8) // 8 bytes padding per row
             .build();
@@ -572,16 +623,8 @@ mod tests {
         assert_eq!(out.height(), 10);
 
         for px in out.pixels() {
-            assert!(
-                (px.r as i16 - 128).unsigned_abs() <= 2,
-                "R off: {}",
-                px.r
-            );
-            assert!(
-                (px.a as i16 - 255).unsigned_abs() <= 1,
-                "A off: {}",
-                px.a
-            );
+            assert!((px.r as i16 - 128).unsigned_abs() <= 2, "R off: {}", px.r);
+            assert!((px.a as i16 - 255).unsigned_abs() <= 1, "A off: {}", px.a);
         }
     }
 }

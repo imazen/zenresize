@@ -70,7 +70,19 @@ fn streaming_matches_fullframe_downscale() {
         idx += 1;
     }
 
-    assert_eq!(full_output, stream_output, "streaming and full-frame outputs must be identical");
+    // Streaming uses f32 weights, fullframe uses i16 for sRGB+4ch.
+    // Different numeric precision gives ±1-2 per channel.
+    let max_diff: u8 = full_output
+        .iter()
+        .zip(stream_output.iter())
+        .map(|(&a, &b)| (a as i16 - b as i16).unsigned_abs() as u8)
+        .max()
+        .unwrap_or(0);
+    assert!(
+        max_diff <= 2,
+        "streaming vs full-frame max diff {} exceeds tolerance 2",
+        max_diff
+    );
 }
 
 #[test]
@@ -95,7 +107,18 @@ fn streaming_matches_fullframe_upscale() {
         idx += 1;
     }
 
-    assert_eq!(full_output, stream_output);
+    // Streaming uses f32 weights, fullframe uses i16 for sRGB+4ch.
+    let max_diff: u8 = full_output
+        .iter()
+        .zip(stream_output.iter())
+        .map(|(&a, &b)| (a as i16 - b as i16).unsigned_abs() as u8)
+        .max()
+        .unwrap_or(0);
+    assert!(
+        max_diff <= 2,
+        "streaming vs full-frame max diff {} exceeds tolerance 2",
+        max_diff
+    );
 }
 
 #[test]
@@ -352,11 +375,7 @@ fn resize_f32_constant() {
     assert_eq!(output.len(), 10 * 10 * 4);
 
     for &v in &output {
-        assert!(
-            (v - 0.5).abs() < 0.02,
-            "f32 constant value drifted: {}",
-            v
-        );
+        assert!((v - 0.5).abs() < 0.02, "f32 constant value drifted: {}", v);
     }
 }
 
@@ -385,11 +404,7 @@ fn resize_f32_gradient() {
 
     // All values should be in [0, 1] range (approximately)
     for &v in &output {
-        assert!(
-            v >= -0.1 && v <= 1.1,
-            "f32 output out of range: {}",
-            v
-        );
+        assert!(v >= -0.1 && v <= 1.1, "f32 output out of range: {}", v);
     }
 }
 
@@ -408,7 +423,10 @@ fn linear_and_srgb_produce_different_results() {
     let out_srgb = resize(&config_s, &input);
 
     // They should produce different results (linear is gamma-correct)
-    assert_ne!(out_lin, out_srgb, "linear and sRGB resize should differ on gradients");
+    assert_ne!(
+        out_lin, out_srgb,
+        "linear and sRGB resize should differ on gradients"
+    );
 }
 
 // =============================================================================
@@ -447,7 +465,10 @@ fn strided_input_matches_tight() {
         .build();
 
     let out_strided = resize(&config_strided, &strided_input);
-    assert_eq!(out_tight, out_strided, "strided input should match tight input");
+    assert_eq!(
+        out_tight, out_strided,
+        "strided input should match tight input"
+    );
 }
 
 // =============================================================================
@@ -482,7 +503,10 @@ fn push_rows_matches_individual() {
         out2.extend_from_slice(&row);
     }
 
-    assert_eq!(out1, out2, "push_rows batch should match individual push_row");
+    assert_eq!(
+        out1, out2,
+        "push_rows batch should match individual push_row"
+    );
 }
 
 // =============================================================================
@@ -501,13 +525,16 @@ fn bgra_preserves_channel_order() {
     for px in bgra_input.chunks_exact_mut(4) {
         px[0] = 200; // B
         px[1] = 100; // G
-        px[2] = 50;  // R
+        px[2] = 50; // R
         px[3] = 255; // A
     }
 
     // Same config as RGBA — pipeline doesn't care about channel names
     let config = ResizeConfig::builder(w, h, 10, 10)
-        .format(PixelFormat::Srgb8 { channels: 4, has_alpha: true })
+        .format(PixelFormat::Srgb8 {
+            channels: 4,
+            has_alpha: true,
+        })
         .srgb()
         .build();
 
@@ -533,12 +560,15 @@ fn bgrx_as_4ch_no_alpha() {
     for px in bgrx_input.chunks_exact_mut(4) {
         px[0] = 200; // B
         px[1] = 100; // G
-        px[2] = 50;  // R
-        px[3] = 0;   // X (padding)
+        px[2] = 50; // R
+        px[3] = 0; // X (padding)
     }
 
     let config = ResizeConfig::builder(w, h, 10, 10)
-        .format(PixelFormat::Srgb8 { channels: 4, has_alpha: false })
+        .format(PixelFormat::Srgb8 {
+            channels: 4,
+            has_alpha: false,
+        })
         .srgb()
         .build();
 
@@ -565,12 +595,15 @@ fn bgra_linear_preserves_order() {
     for px in bgra_input.chunks_exact_mut(4) {
         px[0] = 200; // B
         px[1] = 100; // G
-        px[2] = 50;  // R
+        px[2] = 50; // R
         px[3] = 255; // A
     }
 
     let config = ResizeConfig::builder(w, h, 10, 10)
-        .format(PixelFormat::Srgb8 { channels: 4, has_alpha: true })
+        .format(PixelFormat::Srgb8 {
+            channels: 4,
+            has_alpha: true,
+        })
         .linear() // linear-light processing
         .build();
 
