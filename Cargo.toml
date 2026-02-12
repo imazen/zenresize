@@ -13,7 +13,7 @@ categories = ["graphics", "multimedia::images", "no-std"]
 default = ["std"]
 std = ["archmage/std", "linear-srgb/std"]
 avx512 = ["archmage/avx512"]
-imgref = ["dep:imgref"]
+imgref = ["dep:imgref", "dep:rgb"]
 
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512"))'] }
@@ -22,5 +22,6 @@ unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512")
 archmage = { version = "0.6", path = "../archmage", default-features = false, features = ["macros"] }
 linear-srgb = { version = "0.4", path = "../linear-srgb", default-features = false }
 imgref = { version = "1.12", optional = true }
+rgb = { version = "0.8", optional = true, default-features = false }
 
 [dev-dependencies]

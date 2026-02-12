@@ -40,10 +40,10 @@ mod simd;
 
 // Re-exports
 pub use filter::{Filter, InterpolationDetails};
-pub use pixel::{ChannelOrder, ColorSpace, PixelFormat, ResizeConfig, ResizeConfigBuilder};
+pub use pixel::{ColorSpace, PixelFormat, ResizeConfig, ResizeConfigBuilder};
 pub use resize::{resize, resize_f32, resize_f32_into, resize_into};
 pub use streaming::StreamingResize;
 pub use weights::{F32WeightTable, I16WeightTable};
 
 #[cfg(feature = "imgref")]
-pub use resize::{resize_gray8, resize_rgb8, resize_rgba8};
+pub use resize::{resize_3ch, resize_4ch, resize_gray8};

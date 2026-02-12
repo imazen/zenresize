@@ -90,52 +90,6 @@ pub fn unpremultiply_alpha_f32(row: &mut [f32], channels: usize) {
     }
 }
 
-/// Swizzle BGRA → RGBA in-place on a u8 buffer (swap channels 0 and 2).
-pub fn bgra_to_rgba_u8(row: &mut [u8]) {
-    for pixel in row.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-    }
-}
-
-/// Swizzle RGBA → BGRA in-place on a u8 buffer (swap channels 0 and 2).
-pub fn rgba_to_bgra_u8(row: &mut [u8]) {
-    // Same operation — just swapping R and B
-    bgra_to_rgba_u8(row);
-}
-
-/// Swizzle BGRA → RGBA in-place on an f32 buffer.
-pub fn bgra_to_rgba_f32(row: &mut [f32]) {
-    for pixel in row.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-    }
-}
-
-/// Swizzle RGBA → BGRA in-place on an f32 buffer.
-pub fn rgba_to_bgra_f32(row: &mut [f32]) {
-    bgra_to_rgba_f32(row);
-}
-
-/// Set the X channel (index 3) to 0 for BGRX format (no alpha).
-pub fn clear_x_channel_u8(row: &mut [u8]) {
-    for pixel in row.chunks_exact_mut(4) {
-        pixel[3] = 0;
-    }
-}
-
-/// Set the X channel (index 3) to 0.0 for BGRX format (no alpha).
-pub fn clear_x_channel_f32(row: &mut [f32]) {
-    for pixel in row.chunks_exact_mut(4) {
-        pixel[3] = 0.0;
-    }
-}
-
-/// Set the X channel (index 3) to 255 for BGRX output.
-pub fn fill_x_channel_u8(row: &mut [u8]) {
-    for pixel in row.chunks_exact_mut(4) {
-        pixel[3] = 255;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -143,6 +143,14 @@ pub fn resize_f32_into(config: &ResizeConfig, input: &[f32], output: &mut [f32])
 // imgref integration
 // =============================================================================
 
+// =============================================================================
+// imgref + rgb crate integration
+// =============================================================================
+//
+// All 4-channel pixel types (RGBA, BGRA, ARGB, ABGR) work identically because
+// the pipeline is channel-order-agnostic. The `rgb` crate's ComponentSlice trait
+// gives us zero-copy &[u8] access to any pixel type.
+
 #[cfg(feature = "imgref")]
 mod imgref_impl {
     #[cfg(not(feature = "std"))]
@@ -151,32 +159,46 @@ mod imgref_impl {
     use crate::pixel::{PixelFormat, ResizeConfig};
     use crate::streaming::StreamingResize;
     use imgref::{Img, ImgRef, ImgVec};
+    use rgb::ComponentSlice;
 
-    /// Resize an RGBA u8 image from an `ImgRef<[u8; 4]>`.
+    /// Resize a 4-channel u8 image. Works with any pixel type that implements
+    /// `ComponentSlice` (RGBA, BGRA, ARGB, ABGR from the `rgb` crate).
     ///
-    /// Dimensions, stride, and pixel format are inferred from the image.
-    /// The config controls filter, color_space, and other settings.
-    pub fn resize_rgba8(
-        img: ImgRef<[u8; 4]>,
+    /// Channel order is preserved — the pipeline doesn't care whether
+    /// the bytes represent RGBA or BGRA.
+    pub fn resize_4ch<P>(
+        img: ImgRef<P>,
         out_width: u32,
         out_height: u32,
+        has_alpha: bool,
         config: &ResizeConfig,
-    ) -> ImgVec<[u8; 4]> {
+    ) -> ImgVec<P>
+    where
+        P: Copy + ComponentSlice<u8> + Default,
+    {
+        assert_eq!(core::mem::size_of::<P>(), 4, "pixel type must be 4 bytes");
+
         let mut cfg = config.clone();
         cfg.in_width = img.width() as u32;
         cfg.in_height = img.height() as u32;
         cfg.out_width = out_width;
         cfg.out_height = out_height;
-        cfg.input_format = PixelFormat::Srgb8 { channels: 4, has_alpha: true };
-        cfg.output_format = PixelFormat::Srgb8 { channels: 4, has_alpha: true };
-        cfg.in_stride = 0; // we iterate rows via imgref, stride handled by rows()
+        cfg.input_format = PixelFormat::Srgb8 { channels: 4, has_alpha };
+        cfg.output_format = PixelFormat::Srgb8 { channels: 4, has_alpha };
+        cfg.in_stride = 0;
 
         let mut resizer = StreamingResize::new(&cfg);
 
-        // Feed rows via imgref's stride-aware row iterator
+        // Reusable buffer: flatten pixel row to &[u8] without per-row allocation.
+        // For repr(C) pixel types (rgb::RGBA etc.) the compiler optimizes
+        // the per-pixel copy into a single memcpy.
+        let w = img.width();
+        let mut row_buf = vec![0u8; w * 4];
         for row in img.rows() {
-            let flat = flatten_row_4(row);
-            resizer.push_row(&flat);
+            for (px, chunk) in row.iter().zip(row_buf.chunks_exact_mut(4)) {
+                chunk.copy_from_slice(px.as_slice());
+            }
+            resizer.push_row(&row_buf);
         }
         resizer.finish();
 
@@ -185,20 +207,27 @@ mod imgref_impl {
         while let Some(row) = resizer.next_output_row() {
             debug_assert_eq!(row.len(), out_row_len);
             for chunk in row.chunks_exact(4) {
-                out_pixels.push([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                let mut px = P::default();
+                px.as_mut_slice().copy_from_slice(chunk);
+                out_pixels.push(px);
             }
         }
 
         Img::new(out_pixels, out_width as usize, out_height as usize)
     }
 
-    /// Resize an RGB u8 image from an `ImgRef<[u8; 3]>`.
-    pub fn resize_rgb8(
-        img: ImgRef<[u8; 3]>,
+    /// Resize a 3-channel u8 image. Works with `rgb::RGB<u8>`, `rgb::BGR<u8>`, etc.
+    pub fn resize_3ch<P>(
+        img: ImgRef<P>,
         out_width: u32,
         out_height: u32,
         config: &ResizeConfig,
-    ) -> ImgVec<[u8; 3]> {
+    ) -> ImgVec<P>
+    where
+        P: Copy + ComponentSlice<u8> + Default,
+    {
+        assert_eq!(core::mem::size_of::<P>(), 3, "pixel type must be 3 bytes");
+
         let mut cfg = config.clone();
         cfg.in_width = img.width() as u32;
         cfg.in_height = img.height() as u32;
@@ -210,9 +239,13 @@ mod imgref_impl {
 
         let mut resizer = StreamingResize::new(&cfg);
 
+        let w = img.width();
+        let mut row_buf = vec![0u8; w * 3];
         for row in img.rows() {
-            let flat = flatten_row_3(row);
-            resizer.push_row(&flat);
+            for (px, chunk) in row.iter().zip(row_buf.chunks_exact_mut(3)) {
+                chunk.copy_from_slice(px.as_slice());
+            }
+            resizer.push_row(&row_buf);
         }
         resizer.finish();
 
@@ -221,14 +254,16 @@ mod imgref_impl {
         while let Some(row) = resizer.next_output_row() {
             debug_assert_eq!(row.len(), out_row_len);
             for chunk in row.chunks_exact(3) {
-                out_pixels.push([chunk[0], chunk[1], chunk[2]]);
+                let mut px = P::default();
+                px.as_mut_slice().copy_from_slice(chunk);
+                out_pixels.push(px);
             }
         }
 
         Img::new(out_pixels, out_width as usize, out_height as usize)
     }
 
-    /// Resize a grayscale u8 image from an `ImgRef<u8>`.
+    /// Resize a grayscale u8 image.
     pub fn resize_gray8(
         img: ImgRef<u8>,
         out_width: u32,
@@ -258,26 +293,10 @@ mod imgref_impl {
 
         Img::new(out_buf, out_width as usize, out_height as usize)
     }
-
-    fn flatten_row_4(row: &[[u8; 4]]) -> Vec<u8> {
-        let mut flat = Vec::with_capacity(row.len() * 4);
-        for px in row {
-            flat.extend_from_slice(px);
-        }
-        flat
-    }
-
-    fn flatten_row_3(row: &[[u8; 3]]) -> Vec<u8> {
-        let mut flat = Vec::with_capacity(row.len() * 3);
-        for px in row {
-            flat.extend_from_slice(px);
-        }
-        flat
-    }
 }
 
 #[cfg(feature = "imgref")]
-pub use imgref_impl::{resize_gray8, resize_rgb8, resize_rgba8};
+pub use imgref_impl::{resize_3ch, resize_4ch, resize_gray8};
 
 #[cfg(test)]
 mod tests {
@@ -381,31 +400,32 @@ mod tests {
     #[cfg(feature = "imgref")]
     #[test]
     fn test_resize_imgref_rgba() {
-        use crate::resize::resize_rgba8;
+        use crate::resize::resize_4ch;
         use imgref::Img;
+        use rgb::RGBA;
 
         let config = ResizeConfig::builder(20, 20, 10, 10)
             .filter(Filter::Lanczos)
             .srgb()
             .build();
 
-        let pixels = vec![[128u8, 128, 128, 255]; 20 * 20];
+        let pixels = vec![RGBA::new(128u8, 128, 128, 255); 20 * 20];
         let img = Img::new(pixels, 20, 20);
 
-        let out = resize_rgba8(img.as_ref(), 10, 10, &config);
+        let out = resize_4ch(img.as_ref(), 10, 10, true, &config);
         assert_eq!(out.width(), 10);
         assert_eq!(out.height(), 10);
 
         for px in out.pixels() {
             assert!(
-                (px[0] as i16 - 128).unsigned_abs() <= 2,
+                (px.r as i16 - 128).unsigned_abs() <= 2,
                 "R off: {}",
-                px[0]
+                px.r
             );
             assert!(
-                (px[3] as i16 - 255).unsigned_abs() <= 1,
+                (px.a as i16 - 255).unsigned_abs() <= 1,
                 "A off: {}",
-                px[3]
+                px.a
             );
         }
     }

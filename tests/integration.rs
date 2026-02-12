@@ -4,7 +4,7 @@
 //! edge cases, stride handling, and format combinations.
 
 use zenresize::filter::Filter;
-use zenresize::pixel::{ChannelOrder, PixelFormat, ResizeConfig};
+use zenresize::pixel::{PixelFormat, ResizeConfig};
 use zenresize::resize::{resize, resize_f32};
 use zenresize::streaming::StreamingResize;
 
@@ -486,12 +486,15 @@ fn push_rows_matches_individual() {
 }
 
 // =============================================================================
-// BGRA / BGRX channel order
+// BGRA / BGRX: native zero-swizzle support
 // =============================================================================
+// The pipeline is channel-order-agnostic. sRGB transfer is identical for R/G/B,
+// and convolution kernels just multiply N floats. BGRA data passes through
+// unchanged — use {channels: 4, has_alpha: true}, same as RGBA.
 
 #[test]
-fn bgra_input_produces_correct_output() {
-    // Create BGRA input (B=200, G=100, R=50, A=255)
+fn bgra_preserves_channel_order() {
+    // BGRA input should come out as BGRA — no swizzle, no reordering.
     let w = 20u32;
     let h = 20u32;
     let mut bgra_input = vec![0u8; (w * h * 4) as usize];
@@ -502,48 +505,16 @@ fn bgra_input_produces_correct_output() {
         px[3] = 255; // A
     }
 
-    // Resize with BGRA input → RGBA output
+    // Same config as RGBA — pipeline doesn't care about channel names
     let config = ResizeConfig::builder(w, h, 10, 10)
         .format(PixelFormat::Srgb8 { channels: 4, has_alpha: true })
-        .in_channel_order(ChannelOrder::Bgra)
-        .out_channel_order(ChannelOrder::Rgba)
         .srgb()
         .build();
 
     let output = resize(&config, &bgra_input);
     assert_eq!(output.len(), 10 * 10 * 4);
 
-    // Output should be RGBA: R≈50, G≈100, B≈200, A≈255
-    for px in output.chunks_exact(4) {
-        assert!((px[0] as i16 - 50).unsigned_abs() <= 3, "R: {}", px[0]);
-        assert!((px[1] as i16 - 100).unsigned_abs() <= 3, "G: {}", px[1]);
-        assert!((px[2] as i16 - 200).unsigned_abs() <= 3, "B: {}", px[2]);
-        assert!((px[3] as i16 - 255).unsigned_abs() <= 1, "A: {}", px[3]);
-    }
-}
-
-#[test]
-fn bgra_roundtrip() {
-    // BGRA input → BGRA output should preserve channel positions
-    let w = 20u32;
-    let h = 20u32;
-    let mut bgra_input = vec![0u8; (w * h * 4) as usize];
-    for px in bgra_input.chunks_exact_mut(4) {
-        px[0] = 200; // B
-        px[1] = 100; // G
-        px[2] = 50;  // R
-        px[3] = 255; // A
-    }
-
-    let config = ResizeConfig::builder(w, h, 10, 10)
-        .format(PixelFormat::Srgb8 { channels: 4, has_alpha: true })
-        .channel_order(ChannelOrder::Bgra) // both input and output BGRA
-        .srgb()
-        .build();
-
-    let output = resize(&config, &bgra_input);
-
-    // Output should still be BGRA: B≈200, G≈100, R≈50, A≈255
+    // Output preserves BGRA order
     for px in output.chunks_exact(4) {
         assert!((px[0] as i16 - 200).unsigned_abs() <= 3, "B: {}", px[0]);
         assert!((px[1] as i16 - 100).unsigned_abs() <= 3, "G: {}", px[1]);
@@ -553,8 +524,9 @@ fn bgra_roundtrip() {
 }
 
 #[test]
-fn bgrx_input_no_alpha() {
-    // BGRX: 4 bytes but no alpha (X is padding)
+fn bgrx_as_4ch_no_alpha() {
+    // BGRX: 4 bytes, no alpha. Use {channels: 4, has_alpha: false}.
+    // The X channel is just another data channel — passes through like any other.
     let w = 20u32;
     let h = 20u32;
     let mut bgrx_input = vec![0u8; (w * h * 4) as usize];
@@ -562,55 +534,52 @@ fn bgrx_input_no_alpha() {
         px[0] = 200; // B
         px[1] = 100; // G
         px[2] = 50;  // R
-        px[3] = 0;   // X (garbage/padding)
+        px[3] = 0;   // X (padding)
     }
 
     let config = ResizeConfig::builder(w, h, 10, 10)
         .format(PixelFormat::Srgb8 { channels: 4, has_alpha: false })
-        .channel_order(ChannelOrder::Bgrx)
         .srgb()
         .build();
 
     let output = resize(&config, &bgrx_input);
     assert_eq!(output.len(), 10 * 10 * 4);
 
-    // Output should be BGRX with X=255
+    // Channel order preserved, X stays ~0 (it was 0 in constant input)
     for px in output.chunks_exact(4) {
         assert!((px[0] as i16 - 200).unsigned_abs() <= 3, "B: {}", px[0]);
         assert!((px[1] as i16 - 100).unsigned_abs() <= 3, "G: {}", px[1]);
         assert!((px[2] as i16 - 50).unsigned_abs() <= 3, "R: {}", px[2]);
-        assert_eq!(px[3], 255, "X should be 255");
+        assert!(px[3] <= 3, "X should stay ~0, got {}", px[3]);
     }
 }
 
 #[test]
-fn bgra_to_rgba_conversion() {
-    // Test cross-format: BGRA input → RGBA output
-    let w = 10u32;
-    let h = 10u32;
-    let mut bgra = vec![0u8; (w * h * 4) as usize];
-    for px in bgra.chunks_exact_mut(4) {
-        px[0] = 255; // B
-        px[1] = 0;   // G
-        px[2] = 0;   // R
+fn bgra_linear_preserves_order() {
+    // Even with linear-light processing, channel order is preserved.
+    // sRGB→linear curve is the same for channels 0, 1, and 2 regardless of
+    // whether they represent R,G,B or B,G,R.
+    let w = 20u32;
+    let h = 20u32;
+    let mut bgra_input = vec![0u8; (w * h * 4) as usize];
+    for px in bgra_input.chunks_exact_mut(4) {
+        px[0] = 200; // B
+        px[1] = 100; // G
+        px[2] = 50;  // R
         px[3] = 255; // A
     }
 
-    let config = ResizeConfig::builder(w, h, w, h) // same size = identity-ish
+    let config = ResizeConfig::builder(w, h, 10, 10)
         .format(PixelFormat::Srgb8 { channels: 4, has_alpha: true })
-        .in_channel_order(ChannelOrder::Bgra)
-        .out_channel_order(ChannelOrder::Rgba)
-        .srgb()
+        .linear() // linear-light processing
         .build();
 
-    let output = resize(&config, &bgra);
+    let output = resize(&config, &bgra_input);
 
-    // Input was pure blue in BGRA (B=255,G=0,R=0,A=255)
-    // Output as RGBA should be (R=0,G=0,B=255,A=255)
     for px in output.chunks_exact(4) {
-        assert!(px[0] <= 3, "R should be ~0, got {}", px[0]);
-        assert!(px[1] <= 3, "G should be ~0, got {}", px[1]);
-        assert!(px[2] >= 252, "B should be ~255, got {}", px[2]);
-        assert!(px[3] >= 254, "A should be ~255, got {}", px[3]);
+        assert!((px[0] as i16 - 200).unsigned_abs() <= 3, "B: {}", px[0]);
+        assert!((px[1] as i16 - 100).unsigned_abs() <= 3, "G: {}", px[1]);
+        assert!((px[2] as i16 - 50).unsigned_abs() <= 3, "R: {}", px[2]);
+        assert!((px[3] as i16 - 255).unsigned_abs() <= 1, "A: {}", px[3]);
     }
 }
