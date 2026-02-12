@@ -153,28 +153,57 @@ pub(crate) fn filter_h_row_f32_v3(
 }
 
 /// Horizontal filter for 4-channel (RGBA) data.
-/// Each output pixel is accumulated using __m128 FMA.
+///
+/// Uses padded weights (fixed iteration count) with 4-tap unrolling for ILP.
 #[archmage::rite]
 fn filter_h_4ch(_token: X64V3Token, input: &[f32], output: &mut [f32], weights: &F32WeightTable) {
     let out_width = weights.len();
+    let max_taps = weights.max_taps;
+    let in_ptr = input.as_ptr();
+    let out_ptr = output.as_mut_ptr();
 
     for out_x in 0..out_width {
         let left = weights.left[out_x] as usize;
-        let w = weights.weights(out_x);
-        let out_offset = out_x * 4;
+        let w_ptr = weights.weights_padded(out_x).as_ptr();
+        let base_in = left * 4;
 
         let mut acc = _mm_setzero_ps();
 
-        for (t, &weight) in w.iter().enumerate() {
-            let in_offset = (left + t) * 4;
-            // SAFETY: in_offset + 4 <= input.len() guaranteed by weight table construction
-            let pixel = unsafe { _mm_loadu_ps(input.as_ptr().add(in_offset)) };
-            let w_vec = _mm_set1_ps(weight);
-            acc = _mm_fmadd_ps(pixel, w_vec, acc);
+        // Process 4 taps at a time for better ILP
+        let chunks4 = max_taps / 4;
+        let remainder = max_taps % 4;
+
+        for c in 0..chunks4 {
+            let t = c * 4;
+            unsafe {
+                let w0 = _mm_set1_ps(*w_ptr.add(t));
+                let w1 = _mm_set1_ps(*w_ptr.add(t + 1));
+                let w2 = _mm_set1_ps(*w_ptr.add(t + 2));
+                let w3 = _mm_set1_ps(*w_ptr.add(t + 3));
+
+                let p0 = _mm_loadu_ps(in_ptr.add(base_in + t * 4));
+                let p1 = _mm_loadu_ps(in_ptr.add(base_in + (t + 1) * 4));
+                let p2 = _mm_loadu_ps(in_ptr.add(base_in + (t + 2) * 4));
+                let p3 = _mm_loadu_ps(in_ptr.add(base_in + (t + 3) * 4));
+
+                acc = _mm_fmadd_ps(p0, w0, acc);
+                acc = _mm_fmadd_ps(p1, w1, acc);
+                acc = _mm_fmadd_ps(p2, w2, acc);
+                acc = _mm_fmadd_ps(p3, w3, acc);
+            }
         }
 
-        // SAFETY: out_offset + 4 <= output.len() guaranteed by caller
-        unsafe { _mm_storeu_ps(output.as_mut_ptr().add(out_offset), acc) };
+        let t_start = chunks4 * 4;
+        for t in 0..remainder {
+            let tt = t_start + t;
+            unsafe {
+                let w_val = _mm_set1_ps(*w_ptr.add(tt));
+                let pixel = _mm_loadu_ps(in_ptr.add(base_in + tt * 4));
+                acc = _mm_fmadd_ps(pixel, w_val, acc);
+            }
+        }
+
+        unsafe { _mm_storeu_ps(out_ptr.add(out_x * 4), acc) };
     }
 }
 
@@ -237,8 +266,8 @@ fn filter_h_generic(
 
 /// Vertical convolution using AVX2+FMA.
 ///
-/// This is the hot path: processes 8 floats at a time across the row width
-/// using FMA for each row × weight accumulation.
+/// Row-major loop order: outer loop over rows (amortize weight broadcast),
+/// inner loop over width in blocks of 4×8 floats for instruction-level parallelism.
 #[archmage::arcane]
 pub(crate) fn filter_v_row_f32_v3(
     _token: X64V3Token,
@@ -249,52 +278,63 @@ pub(crate) fn filter_v_row_f32_v3(
     let width = output.len();
     debug_assert_eq!(rows.len(), weights.len());
 
+    let out_ptr = output.as_mut_ptr();
     let chunks8 = width / 8;
     let base8 = chunks8 * 8;
 
-    // Process 8 floats at a time using AVX2 FMA
-    for chunk_idx in 0..chunks8 {
-        let base = chunk_idx * 8;
-        let mut acc = _mm256_setzero_ps();
-
-        for (row, &weight) in rows.iter().zip(weights.iter()) {
-            // SAFETY: base + 8 <= row.len() since row.len() >= width
-            let src = unsafe { _mm256_loadu_ps(row.as_ptr().add(base)) };
-            let w = _mm256_set1_ps(weight);
-            acc = _mm256_fmadd_ps(src, w, acc);
-        }
-
-        // SAFETY: base + 8 <= output.len()
-        unsafe { _mm256_storeu_ps(output.as_mut_ptr().add(base), acc) };
+    // Zero the output buffer using AVX2
+    let zero = _mm256_setzero_ps();
+    for i in 0..chunks8 {
+        unsafe { _mm256_storeu_ps(out_ptr.add(i * 8), zero) };
+    }
+    for x in base8..width {
+        output[x] = 0.0;
     }
 
-    // Remainder: 4-wide SSE pass if possible
-    let remaining = width - base8;
-    if remaining >= 4 {
-        let mut acc = _mm_setzero_ps();
-        for (row, &weight) in rows.iter().zip(weights.iter()) {
-            let src = unsafe { _mm_loadu_ps(row.as_ptr().add(base8)) };
-            let w = _mm_set1_ps(weight);
-            acc = _mm_fmadd_ps(src, w, acc);
-        }
-        unsafe { _mm_storeu_ps(output.as_mut_ptr().add(base8), acc) };
+    // Row-major accumulation: broadcast weight once, sweep entire row
+    for (row, &weight) in rows.iter().zip(weights.iter()) {
+        let w = _mm256_set1_ps(weight);
+        let row_ptr = row.as_ptr();
 
-        // Scalar tail for last 1-3 elements
-        for x in (base8 + 4)..width {
-            let mut sum = 0.0f32;
-            for (row, &weight) in rows.iter().zip(weights.iter()) {
-                sum += row[x] * weight;
+        // Process 32 floats (4×8) at a time for ILP
+        let blocks4 = chunks8 / 4;
+        let block_rem = chunks8 % 4;
+
+        for b in 0..blocks4 {
+            let base = b * 32;
+            unsafe {
+                let s0 = _mm256_loadu_ps(row_ptr.add(base));
+                let s1 = _mm256_loadu_ps(row_ptr.add(base + 8));
+                let s2 = _mm256_loadu_ps(row_ptr.add(base + 16));
+                let s3 = _mm256_loadu_ps(row_ptr.add(base + 24));
+
+                let a0 = _mm256_loadu_ps(out_ptr.add(base));
+                let a1 = _mm256_loadu_ps(out_ptr.add(base + 8));
+                let a2 = _mm256_loadu_ps(out_ptr.add(base + 16));
+                let a3 = _mm256_loadu_ps(out_ptr.add(base + 24));
+
+                _mm256_storeu_ps(out_ptr.add(base), _mm256_fmadd_ps(s0, w, a0));
+                _mm256_storeu_ps(out_ptr.add(base + 8), _mm256_fmadd_ps(s1, w, a1));
+                _mm256_storeu_ps(out_ptr.add(base + 16), _mm256_fmadd_ps(s2, w, a2));
+                _mm256_storeu_ps(out_ptr.add(base + 24), _mm256_fmadd_ps(s3, w, a3));
             }
-            output[x] = sum;
         }
-    } else {
-        // Scalar for < 4 remaining
-        for x in base8..width {
-            let mut sum = 0.0f32;
-            for (row, &weight) in rows.iter().zip(weights.iter()) {
-                sum += row[x] * weight;
+
+        // Remaining 8-float chunks
+        let rem_start = blocks4 * 32;
+        for i in 0..block_rem {
+            let base = rem_start + i * 8;
+            unsafe {
+                let src = _mm256_loadu_ps(row_ptr.add(base));
+                let acc = _mm256_loadu_ps(out_ptr.add(base));
+                _mm256_storeu_ps(out_ptr.add(base), _mm256_fmadd_ps(src, w, acc));
             }
-            output[x] = sum;
+        }
+
+        // Scalar tail
+        let w_scalar = weight;
+        for x in base8..width {
+            output[x] += row[x] * w_scalar;
         }
     }
 }

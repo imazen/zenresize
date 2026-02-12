@@ -15,7 +15,6 @@ use crate::color;
 use crate::filter::InterpolationDetails;
 use crate::pixel::ResizeConfig;
 use crate::simd;
-use crate::streaming::StreamingResize;
 use crate::weights::F32WeightTable;
 
 /// Resize an entire u8 image. Allocates and returns output buffer.
