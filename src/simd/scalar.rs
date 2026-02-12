@@ -57,6 +57,45 @@ pub(crate) fn filter_v_row_f32_scalar(
     }
 }
 
+/// Convert u8 → f32 (divide by 255), scalar fallback.
+pub(crate) fn u8_to_f32_row_scalar(_token: ScalarToken, input: &[u8], output: &mut [f32]) {
+    debug_assert_eq!(input.len(), output.len());
+    for (inp, out) in input.iter().zip(output.iter_mut()) {
+        *out = *inp as f32 * (1.0 / 255.0);
+    }
+}
+
+/// Convert f32 → u8 (multiply by 255, round, clamp), scalar fallback.
+pub(crate) fn f32_to_u8_row_scalar(_token: ScalarToken, input: &[f32], output: &mut [u8]) {
+    debug_assert_eq!(input.len(), output.len());
+    for (inp, out) in input.iter().zip(output.iter_mut()) {
+        *out = (*inp * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+    }
+}
+
+/// Premultiply alpha in-place, scalar fallback.
+pub(crate) fn premultiply_alpha_row_scalar(_token: ScalarToken, row: &mut [f32]) {
+    for pixel in row.chunks_exact_mut(4) {
+        let a = pixel[3];
+        pixel[0] *= a;
+        pixel[1] *= a;
+        pixel[2] *= a;
+    }
+}
+
+/// Unpremultiply alpha in-place, scalar fallback.
+pub(crate) fn unpremultiply_alpha_row_scalar(_token: ScalarToken, row: &mut [f32]) {
+    for pixel in row.chunks_exact_mut(4) {
+        let a = pixel[3];
+        if a > 1.0 / 1024.0 {
+            let inv_a = 1.0 / a;
+            pixel[0] *= inv_a;
+            pixel[1] *= inv_a;
+            pixel[2] *= inv_a;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

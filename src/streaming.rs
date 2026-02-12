@@ -115,11 +115,11 @@ impl StreamingResize {
                 self.has_alpha,
             );
         } else {
-            color::srgb_u8_to_f32(pixel_data, &mut self.temp_input_f32);
+            simd::u8_to_f32_row(pixel_data, &mut self.temp_input_f32);
         }
 
         if self.has_alpha && self.channels == 4 {
-            color::premultiply_alpha_f32(&mut self.temp_input_f32, self.channels);
+            simd::premultiply_alpha_row(&mut self.temp_input_f32);
         }
 
         self.push_row_internal()
@@ -148,7 +148,7 @@ impl StreamingResize {
         self.temp_input_f32[..pixel_len].copy_from_slice(&row[..pixel_len]);
 
         if self.has_alpha && self.channels == 4 {
-            color::premultiply_alpha_f32(&mut self.temp_input_f32, self.channels);
+            simd::premultiply_alpha_row(&mut self.temp_input_f32);
         }
 
         self.push_row_internal()
@@ -265,7 +265,7 @@ impl StreamingResize {
         simd::filter_v_row_f32(&rows, &mut self.temp_output_f32[..row_len], weights);
 
         if self.has_alpha && self.channels == 4 {
-            color::unpremultiply_alpha_f32(&mut self.temp_output_f32[..row_len], self.channels);
+            simd::unpremultiply_alpha_row(&mut self.temp_output_f32[..row_len]);
         }
 
         if self.config.output_format.is_u8() {
@@ -278,7 +278,7 @@ impl StreamingResize {
                     self.has_alpha,
                 );
             } else {
-                color::f32_to_srgb_u8(&self.temp_output_f32[..row_len], &mut out_row);
+                simd::f32_to_u8_row(&self.temp_output_f32[..row_len], &mut out_row);
             }
             self.output_queue.insert(0, out_row);
         } else {

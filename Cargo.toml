@@ -41,3 +41,7 @@ harness = false
 [[bench]]
 name = "paired_bench"
 harness = false
+
+[[bench]]
+name = "profile_srgb"
+harness = false

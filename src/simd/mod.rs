@@ -39,3 +39,23 @@ pub(crate) fn filter_h_row_f32(
 pub(crate) fn filter_v_row_f32(rows: &[&[f32]], output: &mut [f32], weights: &[f32]) {
     archmage::incant!(filter_v_row_f32(rows, output, weights))
 }
+
+/// Convert a row of u8 pixels to f32 (divide by 255).
+pub(crate) fn u8_to_f32_row(input: &[u8], output: &mut [f32]) {
+    archmage::incant!(u8_to_f32_row(input, output))
+}
+
+/// Convert a row of f32 pixels to u8 (multiply by 255, round, clamp).
+pub(crate) fn f32_to_u8_row(input: &[f32], output: &mut [u8]) {
+    archmage::incant!(f32_to_u8_row(input, output))
+}
+
+/// Premultiply alpha in-place on RGBA f32 row.
+pub(crate) fn premultiply_alpha_row(row: &mut [f32]) {
+    archmage::incant!(premultiply_alpha_row(row))
+}
+
+/// Unpremultiply alpha in-place on RGBA f32 row.
+pub(crate) fn unpremultiply_alpha_row(row: &mut [f32]) {
+    archmage::incant!(unpremultiply_alpha_row(row))
+}

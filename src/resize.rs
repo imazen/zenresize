@@ -1,10 +1,22 @@
-//! Full-frame resize API (convenience wrappers around [`StreamingResize`]).
+//! Full-frame resize API.
+//!
+//! Uses an optimized two-pass approach for full-frame resizes:
+//! 1. Horizontal pass: convert u8→f32, premultiply alpha, horizontal filter → intermediate
+//! 2. Vertical pass: vertical filter → unpremultiply alpha, convert f32→u8 → output
+//!
+//! This eliminates the per-row allocation overhead of the streaming path.
+//! The streaming API ([`crate::streaming::StreamingResize`]) is still available
+//! for pipeline integration where the full image isn't in memory.
 
 #[cfg(not(feature = "std"))]
 use alloc::{vec, vec::Vec};
 
+use crate::color;
+use crate::filter::InterpolationDetails;
 use crate::pixel::ResizeConfig;
+use crate::simd;
 use crate::streaming::StreamingResize;
+use crate::weights::F32WeightTable;
 
 /// Resize an entire u8 image. Allocates and returns output buffer.
 ///
@@ -14,32 +26,9 @@ use crate::streaming::StreamingResize;
 /// # Panics
 /// Panics if the config is invalid or input is too short.
 pub fn resize(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
-    let in_stride = config.effective_in_stride();
-    let row_len = config.input_row_len();
-    let expected = if config.in_height > 0 {
-        (config.in_height as usize - 1) * in_stride + row_len
-    } else {
-        0
-    };
-    assert!(input.len() >= expected, "input too short: {} < {}", input.len(), expected);
-
-    let mut resizer = StreamingResize::new(config);
-
-    for y in 0..config.in_height {
-        let start = y as usize * in_stride;
-        resizer.push_row(&input[start..start + row_len]);
-    }
-    resizer.finish();
-
     let out_row_len = config.output_row_len();
     let mut output = vec![0u8; config.out_height as usize * out_row_len];
-    let mut row_idx = 0;
-    while let Some(row) = resizer.next_output_row() {
-        let start = row_idx * out_row_len;
-        output[start..start + out_row_len].copy_from_slice(&row);
-        row_idx += 1;
-    }
-
+    resize_into(config, input, &mut output);
     output
 }
 
@@ -50,10 +39,12 @@ pub fn resize(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
 /// # Panics
 /// Panics if input is too short or output length doesn't match.
 pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
+    config.validate().expect("invalid resize config");
+
     let in_stride = config.effective_in_stride();
-    let row_len = config.input_row_len();
+    let in_row_len = config.input_row_len();
     let in_expected = if config.in_height > 0 {
-        (config.in_height as usize - 1) * in_stride + row_len
+        (config.in_height as usize - 1) * in_stride + in_row_len
     } else {
         0
     };
@@ -62,59 +53,112 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
     assert!(input.len() >= in_expected, "input too short");
     assert_eq!(output.len(), out_expected, "output length mismatch");
 
-    let mut resizer = StreamingResize::new(config);
+    let channels = config.input_format.channels() as usize;
+    let has_alpha = config.input_format.has_alpha();
+    let in_w = config.in_width as usize;
+    let in_h = config.in_height as usize;
+    let out_w = config.out_width as usize;
+    let out_h = config.out_height as usize;
+    let linearize = config.needs_linearization();
 
-    for y in 0..config.in_height {
-        let start = y as usize * in_stride;
-        resizer.push_row(&input[start..start + row_len]);
+    let filter = InterpolationDetails::create(config.filter);
+    let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
+    let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
+
+    let h_row_len = out_w * channels;
+
+    // Single intermediate buffer: horizontally-filtered rows for all input rows.
+    // Layout: [row0: out_w*channels f32] [row1: ...] ... [row_{in_h-1}: ...]
+    let mut intermediate = vec![0.0f32; h_row_len * in_h];
+
+    // Temporary buffer for u8→f32 conversion of one input row.
+    let mut temp_row = vec![0.0f32; in_w * channels];
+
+    // === Horizontal pass ===
+    for y in 0..in_h {
+        let in_start = y * in_stride;
+        let in_row = &input[in_start..in_start + in_row_len];
+
+        // u8 → f32
+        if linearize {
+            color::srgb_u8_to_linear_f32(in_row, &mut temp_row, channels, has_alpha);
+        } else {
+            simd::u8_to_f32_row(in_row, &mut temp_row);
+        }
+
+        // Premultiply alpha
+        if has_alpha && channels == 4 {
+            simd::premultiply_alpha_row(&mut temp_row);
+        }
+
+        // Horizontal filter → intermediate buffer
+        let out_start = y * h_row_len;
+        simd::filter_h_row_f32(
+            &temp_row,
+            &mut intermediate[out_start..out_start + h_row_len],
+            &h_weights,
+            channels,
+        );
     }
-    resizer.finish();
 
-    let mut row_idx = 0;
-    while let Some(row) = resizer.next_output_row() {
-        let start = row_idx * out_row_len;
-        output[start..start + out_row_len].copy_from_slice(&row);
-        row_idx += 1;
+    // === Vertical pass ===
+    // Pre-allocate row pointer buffer to avoid per-row allocation.
+    let max_taps = v_weights.max_taps;
+    let mut row_ptrs: Vec<&[f32]> = Vec::with_capacity(max_taps);
+    let mut temp_output = vec![0.0f32; h_row_len];
+
+    for out_y in 0..out_h {
+        let left = v_weights.left[out_y];
+        let tap_count = v_weights.tap_count(out_y);
+        let weights = v_weights.weights(out_y);
+
+        // Gather row pointers (reuse vec, no allocation).
+        row_ptrs.clear();
+        for t in 0..tap_count {
+            let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+            let start = in_y * h_row_len;
+            row_ptrs.push(&intermediate[start..start + h_row_len]);
+        }
+
+        simd::filter_v_row_f32(&row_ptrs, &mut temp_output[..h_row_len], weights);
+
+        // Unpremultiply alpha
+        if has_alpha && channels == 4 {
+            simd::unpremultiply_alpha_row(&mut temp_output[..h_row_len]);
+        }
+
+        // f32 → u8 directly into output buffer
+        let out_start = out_y * out_row_len;
+        let out_slice = &mut output[out_start..out_start + out_row_len];
+        if linearize {
+            color::linear_f32_to_srgb_u8(
+                &temp_output[..h_row_len],
+                out_slice,
+                channels,
+                has_alpha,
+            );
+        } else {
+            simd::f32_to_u8_row(&temp_output[..h_row_len], out_slice);
+        }
     }
 }
 
 /// Resize an f32 image. Allocates and returns output buffer.
 pub fn resize_f32(config: &ResizeConfig, input: &[f32]) -> Vec<f32> {
-    let in_stride = config.effective_in_stride();
-    let row_len = config.input_row_len();
-    let expected = if config.in_height > 0 {
-        (config.in_height as usize - 1) * in_stride + row_len
-    } else {
-        0
-    };
-    assert!(input.len() >= expected, "input too short");
-
-    let mut resizer = StreamingResize::new(config);
-
-    for y in 0..config.in_height {
-        let start = y as usize * in_stride;
-        resizer.push_row_f32(&input[start..start + row_len]);
-    }
-    resizer.finish();
-
     let out_row_len = config.output_row_len();
     let mut output = vec![0.0f32; config.out_height as usize * out_row_len];
-    let mut row_idx = 0;
-    while let Some(row) = resizer.next_output_row_f32() {
-        let start = row_idx * out_row_len;
-        output[start..start + out_row_len].copy_from_slice(&row);
-        row_idx += 1;
-    }
-
+    resize_f32_into(config, input, &mut output);
     output
 }
 
 /// Resize an f32 image into a caller-provided buffer.
 pub fn resize_f32_into(config: &ResizeConfig, input: &[f32], output: &mut [f32]) {
+    config.validate().expect("invalid resize config");
+
     let in_stride = config.effective_in_stride();
-    let row_len = config.input_row_len();
+    let in_row_len = config.input_row_len();
     let in_expected = if config.in_height > 0 {
-        (config.in_height as usize - 1) * in_stride + row_len
+        (config.in_height as usize - 1) * in_stride + in_row_len
     } else {
         0
     };
@@ -123,19 +167,62 @@ pub fn resize_f32_into(config: &ResizeConfig, input: &[f32], output: &mut [f32])
     assert!(input.len() >= in_expected, "input too short");
     assert_eq!(output.len(), out_expected, "output length mismatch");
 
-    let mut resizer = StreamingResize::new(config);
+    let channels = config.input_format.channels() as usize;
+    let has_alpha = config.input_format.has_alpha();
+    let in_w = config.in_width as usize;
+    let in_h = config.in_height as usize;
+    let out_w = config.out_width as usize;
+    let out_h = config.out_height as usize;
 
-    for y in 0..config.in_height {
-        let start = y as usize * in_stride;
-        resizer.push_row_f32(&input[start..start + row_len]);
+    let filter = InterpolationDetails::create(config.filter);
+    let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
+    let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
+
+    let h_row_len = out_w * channels;
+    let mut intermediate = vec![0.0f32; h_row_len * in_h];
+    let mut temp_row = vec![0.0f32; in_w * channels];
+
+    // === Horizontal pass ===
+    for y in 0..in_h {
+        let in_start = y * in_stride;
+        temp_row[..in_row_len].copy_from_slice(&input[in_start..in_start + in_row_len]);
+
+        if has_alpha && channels == 4 {
+            simd::premultiply_alpha_row(&mut temp_row[..in_row_len]);
+        }
+
+        let out_start = y * h_row_len;
+        simd::filter_h_row_f32(
+            &temp_row[..in_row_len],
+            &mut intermediate[out_start..out_start + h_row_len],
+            &h_weights,
+            channels,
+        );
     }
-    resizer.finish();
 
-    let mut row_idx = 0;
-    while let Some(row) = resizer.next_output_row_f32() {
-        let start = row_idx * out_row_len;
-        output[start..start + out_row_len].copy_from_slice(&row);
-        row_idx += 1;
+    // === Vertical pass ===
+    let max_taps = v_weights.max_taps;
+    let mut row_ptrs: Vec<&[f32]> = Vec::with_capacity(max_taps);
+
+    for out_y in 0..out_h {
+        let left = v_weights.left[out_y];
+        let tap_count = v_weights.tap_count(out_y);
+        let weights = v_weights.weights(out_y);
+
+        row_ptrs.clear();
+        for t in 0..tap_count {
+            let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+            let start = in_y * h_row_len;
+            row_ptrs.push(&intermediate[start..start + h_row_len]);
+        }
+
+        let out_start = out_y * out_row_len;
+        let out_slice = &mut output[out_start..out_start + out_row_len];
+        simd::filter_v_row_f32(&row_ptrs, out_slice, weights);
+
+        if has_alpha && channels == 4 {
+            simd::unpremultiply_alpha_row(out_slice);
+        }
     }
 }
 
