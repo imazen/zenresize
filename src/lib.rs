@@ -1,0 +1,52 @@
+//! High-quality image resampling with 31 filters, streaming API, and SIMD acceleration.
+//!
+//! `zenresize` provides a standalone resize library extracted from the zenimage/imageflow
+//! image processing pipeline. It supports:
+//!
+//! - All 31 resampling filters from imageflow (Lanczos, Robidoux, Mitchell, etc.)
+//! - Row-at-a-time streaming API for pipeline integration
+//! - Built-in sRGB/linear conversion and alpha premultiply/unpremultiply
+//! - u8, i16, and f32 pixel format support
+//! - archmage-based SIMD (AVX2+FMA on x86, NEON on ARM)
+//!
+//! # Quick Start
+//!
+//! ```ignore
+//! use zenresize::{resize, ResizeConfig, Filter, PixelFormat, ColorSpace};
+//!
+//! let config = ResizeConfig {
+//!     filter: Filter::Lanczos,
+//!     in_width: 1024,
+//!     in_height: 768,
+//!     out_width: 512,
+//!     out_height: 384,
+//!     input_format: PixelFormat::Srgb8 { channels: 4, has_alpha: true },
+//!     output_format: PixelFormat::Srgb8 { channels: 4, has_alpha: true },
+//!     sharpen: 0.0,
+//!     color_space: ColorSpace::Linear,
+//! };
+//!
+//! let output = resize(&config, &input_pixels);
+//! ```
+
+#![cfg_attr(not(feature = "std"), no_std)]
+#![deny(unsafe_code)]
+
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+pub mod color;
+pub mod filter;
+pub mod pixel;
+pub mod resize;
+pub mod streaming;
+pub mod weights;
+
+mod simd;
+
+// Re-exports
+pub use filter::{Filter, InterpolationDetails};
+pub use pixel::{ColorSpace, PixelFormat};
+pub use resize::{resize, resize_f32, resize_f32_into, resize_into};
+pub use streaming::StreamingResize;
+pub use weights::{F32WeightTable, I16WeightTable};

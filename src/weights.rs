@@ -1,0 +1,471 @@
+//! Resampling weight calculation.
+//!
+//! Computes interpolation weights for image resampling. Weights are computed
+//! per-output-pixel based on the selected filter and the mapping between
+//! input and output coordinates.
+//!
+//! The weight calculation matches imageflow's approach:
+//! - Pixel indices are clamped to valid range BEFORE calculating weights
+//! - Only weights for valid pixels are included
+//! - Tiny weights (< 2e-8) are rounded to zero for consistency
+//! - Zero weights are trimmed from edges
+
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
+use crate::filter::InterpolationDetails;
+
+/// Threshold below which weights are considered zero.
+/// Matches imageflow for cross-platform consistency.
+pub const WEIGHT_THRESHOLD: f64 = 2e-8;
+
+/// Fixed-point precision for i16 weights (14 bits).
+pub const I16_PRECISION: i32 = 14;
+
+// =============================================================================
+// Weight table types
+// =============================================================================
+
+/// Pre-computed f32 weight table with flat layout for SIMD access.
+///
+/// Each output pixel's weights are zero-padded to `max_taps` width in a
+/// single contiguous allocation.
+#[derive(Clone)]
+pub struct F32WeightTable {
+    /// For each output pixel, the starting input pixel index.
+    pub left: Vec<i32>,
+    /// Flat array: `out_size * max_taps` elements, zero-padded.
+    weights_flat: Vec<f32>,
+    /// Number of actual (non-zero) taps per output pixel.
+    tap_counts: Vec<u16>,
+    /// Maximum taps across all output pixels.
+    pub max_taps: usize,
+}
+
+/// Pre-computed i16 fixed-point weight table.
+///
+/// Weights are scaled to 14-bit precision (1 << 14 = 1.0).
+#[derive(Clone)]
+pub struct I16WeightTable {
+    /// For each output pixel, the starting input pixel index.
+    pub left: Vec<i32>,
+    /// For each output pixel, the i16 weights (sum ≈ 1 << I16_PRECISION).
+    pub weights: Vec<Vec<i16>>,
+    /// Maximum taps across all output pixels.
+    pub max_taps: usize,
+}
+
+// =============================================================================
+// F32WeightTable
+// =============================================================================
+
+impl F32WeightTable {
+    /// Create weight table for resampling from `in_size` to `out_size`.
+    pub fn new(in_size: u32, out_size: u32, filter: &InterpolationDetails) -> Self {
+        debug_assert!(in_size > 0, "in_size must be positive");
+        debug_assert!(out_size > 0, "out_size must be positive");
+
+        let scale = out_size as f64 / in_size as f64;
+        let downscale_factor = scale.min(1.0);
+        let effective_window = filter.window / downscale_factor;
+
+        // First pass: compute weights and find max_taps
+        let mut temp_weights: Vec<f64> = Vec::new();
+        let mut all_left: Vec<i32> = Vec::with_capacity(out_size as usize);
+        let mut all_tap_counts: Vec<u16> = Vec::with_capacity(out_size as usize);
+        let mut all_weights: Vec<Vec<f64>> = Vec::with_capacity(out_size as usize);
+        let mut max_taps = 0;
+
+        for out_pixel in 0..out_size {
+            temp_weights.clear();
+            let (left, tap_count) = compute_pixel_weights(
+                out_pixel,
+                in_size,
+                scale,
+                downscale_factor,
+                effective_window,
+                filter,
+                &mut temp_weights,
+            );
+            max_taps = max_taps.max(tap_count);
+            all_left.push(left);
+            all_tap_counts.push(tap_count as u16);
+            all_weights.push(temp_weights.clone());
+        }
+
+        // Second pass: fill flat array
+        let mut weights_flat = vec![0.0f32; out_size as usize * max_taps];
+        for (i, w) in all_weights.iter().enumerate() {
+            let offset = i * max_taps;
+            for (j, &val) in w.iter().enumerate() {
+                weights_flat[offset + j] = val as f32;
+            }
+        }
+
+        Self {
+            left: all_left,
+            weights_flat,
+            tap_counts: all_tap_counts,
+            max_taps,
+        }
+    }
+
+    /// Get weights slice for a specific output pixel (non-zero taps only).
+    #[inline]
+    pub fn weights(&self, out_pixel: usize) -> &[f32] {
+        let offset = out_pixel * self.max_taps;
+        let tap_count = self.tap_counts[out_pixel] as usize;
+        &self.weights_flat[offset..offset + tap_count]
+    }
+
+    /// Get the full padded weights slice (max_taps elements, zero-padded).
+    #[inline]
+    pub fn weights_padded(&self, out_pixel: usize) -> &[f32] {
+        let offset = out_pixel * self.max_taps;
+        &self.weights_flat[offset..offset + self.max_taps]
+    }
+
+    /// Get the number of actual taps for an output pixel.
+    #[inline]
+    pub fn tap_count(&self, out_pixel: usize) -> usize {
+        self.tap_counts[out_pixel] as usize
+    }
+
+    /// Number of output pixels.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.left.len()
+    }
+
+    /// Check if empty.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.left.is_empty()
+    }
+}
+
+// =============================================================================
+// I16WeightTable
+// =============================================================================
+
+impl I16WeightTable {
+    /// Create i16 fixed-point weight table.
+    pub fn new(in_size: u32, out_size: u32, filter: &InterpolationDetails) -> Self {
+        debug_assert!(in_size > 0, "in_size must be positive");
+        debug_assert!(out_size > 0, "out_size must be positive");
+
+        let scale = out_size as f64 / in_size as f64;
+        let downscale_factor = scale.min(1.0);
+        let effective_window = filter.window / downscale_factor;
+
+        let mut temp_weights: Vec<f64> = Vec::new();
+        let mut left_vec = Vec::with_capacity(out_size as usize);
+        let mut weights_vec = Vec::with_capacity(out_size as usize);
+        let mut max_taps = 0;
+
+        for out_pixel in 0..out_size {
+            temp_weights.clear();
+            let (left, tap_count) = compute_pixel_weights(
+                out_pixel,
+                in_size,
+                scale,
+                downscale_factor,
+                effective_window,
+                filter,
+                &mut temp_weights,
+            );
+            max_taps = max_taps.max(tap_count);
+
+            // Convert to fixed-point i16
+            let mut fixed: Vec<i16> = temp_weights
+                .iter()
+                .map(|&w| (w * (1 << I16_PRECISION) as f64).round() as i16)
+                .collect();
+
+            // Adjust center weight so sum = 1 << I16_PRECISION
+            let sum: i32 = fixed.iter().map(|&w| w as i32).sum();
+            if !fixed.is_empty() && sum != (1 << I16_PRECISION) {
+                let mid = fixed.len() / 2;
+                fixed[mid] = (fixed[mid] as i32 + ((1 << I16_PRECISION) - sum)) as i16;
+            }
+
+            left_vec.push(left);
+            weights_vec.push(fixed);
+        }
+
+        Self {
+            left: left_vec,
+            weights: weights_vec,
+            max_taps,
+        }
+    }
+
+    /// Number of output pixels.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.left.len()
+    }
+
+    /// Check if empty.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.left.is_empty()
+    }
+}
+
+// =============================================================================
+// Shared weight computation
+// =============================================================================
+
+/// Compute normalized f64 weights into a pre-allocated buffer.
+///
+/// Returns (left_pixel_index, tap_count).
+fn compute_pixel_weights(
+    out_pixel: u32,
+    in_size: u32,
+    scale: f64,
+    downscale_factor: f64,
+    effective_window: f64,
+    filter: &InterpolationDetails,
+    weights_out: &mut Vec<f64>,
+) -> (i32, usize) {
+    // Map output pixel center to input space
+    let center = (out_pixel as f64 + 0.5) / scale - 0.5;
+
+    // Find input pixel range in filter window
+    let left_edge = f64_ceil(center - effective_window - 0.0001) as i32;
+    let right_edge = f64_floor(center + effective_window + 0.0001) as i32;
+
+    // Clamp to valid range BEFORE calculating weights
+    let left_pixel = left_edge.max(0) as u32;
+    let right_pixel = right_edge.min(in_size as i32 - 1) as u32;
+
+    let mut total_weight = 0.0f64;
+
+    for in_pixel in left_pixel..=right_pixel {
+        let x = downscale_factor * (in_pixel as f64 - center);
+        let mut w = filter.filter(x);
+
+        if w.abs() <= WEIGHT_THRESHOLD {
+            w = 0.0;
+        }
+
+        weights_out.push(w);
+        total_weight += w;
+    }
+
+    // Normalize
+    if total_weight > 0.0 {
+        let inv_total = 1.0 / total_weight;
+        for w in weights_out.iter_mut() {
+            *w *= inv_total;
+        }
+    }
+
+    // Trim zero weights from right
+    while weights_out.last() == Some(&0.0f64) {
+        weights_out.pop();
+    }
+
+    // Trim from left, adjusting left_pixel
+    let mut trimmed_left = left_pixel;
+    while weights_out.first() == Some(&0.0f64) {
+        weights_out.remove(0);
+        trimmed_left += 1;
+    }
+
+    (trimmed_left as i32, weights_out.len())
+}
+
+// no_std math helpers
+#[cfg(feature = "std")]
+#[inline]
+fn f64_ceil(x: f64) -> f64 {
+    x.ceil()
+}
+
+#[cfg(not(feature = "std"))]
+#[inline]
+fn f64_ceil(x: f64) -> f64 {
+    libm::ceil(x)
+}
+
+#[cfg(feature = "std")]
+#[inline]
+fn f64_floor(x: f64) -> f64 {
+    x.floor()
+}
+
+#[cfg(not(feature = "std"))]
+#[inline]
+fn f64_floor(x: f64) -> f64 {
+    libm::floor(x)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::filter::{Filter, InterpolationDetails};
+
+    #[test]
+    fn test_f32_weight_table_basic() {
+        let filter = InterpolationDetails::create(Filter::Lanczos);
+        let table = F32WeightTable::new(100, 50, &filter);
+
+        assert_eq!(table.len(), 50);
+
+        for i in 0..table.len() {
+            let weights = table.weights(i);
+            let sum: f32 = weights.iter().sum();
+            assert!(
+                (sum - 1.0).abs() < 0.001,
+                "F32 weights for pixel {} sum to {}, expected 1.0",
+                i,
+                sum
+            );
+        }
+    }
+
+    #[test]
+    fn test_i16_weight_table_basic() {
+        let filter = InterpolationDetails::create(Filter::Lanczos);
+        let table = I16WeightTable::new(100, 50, &filter);
+
+        assert_eq!(table.len(), 50);
+
+        for (i, weights) in table.weights.iter().enumerate() {
+            let sum: i32 = weights.iter().map(|&w| w as i32).sum();
+            assert!(
+                (sum - (1 << I16_PRECISION)).abs() <= 1,
+                "I16 weights for pixel {} sum to {}, expected {}",
+                i,
+                sum,
+                1 << I16_PRECISION
+            );
+        }
+    }
+
+    #[test]
+    fn test_upscale_weights() {
+        let filter = InterpolationDetails::create(Filter::Lanczos);
+        let table = F32WeightTable::new(50, 100, &filter);
+
+        assert_eq!(table.len(), 100);
+
+        // Upscaling with Lanczos-3 should have ~5-8 taps
+        assert!(
+            (3..=10).contains(&table.max_taps),
+            "Expected 3-10 max taps for Lanczos-3 upscale, got {}",
+            table.max_taps
+        );
+    }
+
+    #[test]
+    fn test_downscale_weights() {
+        let filter = InterpolationDetails::create(Filter::Lanczos);
+        let table = F32WeightTable::new(100, 25, &filter);
+
+        assert_eq!(table.len(), 25);
+        assert!(
+            table.max_taps >= 7,
+            "Expected >= 7 taps for 4x downscale, got {}",
+            table.max_taps
+        );
+    }
+
+    #[test]
+    fn test_edge_handling() {
+        let filter = InterpolationDetails::create(Filter::Lanczos);
+        let in_size = 100u32;
+        let out_size = 50u32;
+        let table = F32WeightTable::new(in_size, out_size, &filter);
+
+        // All left indices must be valid
+        for i in 0..table.len() {
+            let left = table.left[i];
+            let taps = table.tap_count(i);
+            assert!(left >= 0, "left must be non-negative at pixel {}", i);
+            assert!(
+                (left as u32 + taps as u32) <= in_size,
+                "right edge exceeds input at pixel {}: left={} taps={}",
+                i,
+                left,
+                taps
+            );
+        }
+
+        // Edge weights must still be normalized
+        let first_sum: f32 = table.weights(0).iter().sum();
+        assert!(
+            (first_sum - 1.0).abs() < 0.001,
+            "First pixel weights sum to {}",
+            first_sum
+        );
+        let last_sum: f32 = table.weights(out_size as usize - 1).iter().sum();
+        assert!(
+            (last_sum - 1.0).abs() < 0.001,
+            "Last pixel weights sum to {}",
+            last_sum
+        );
+    }
+
+    #[test]
+    fn test_no_zero_weights_in_output() {
+        let filter = InterpolationDetails::create(Filter::Lanczos);
+        let table = F32WeightTable::new(100, 50, &filter);
+
+        for i in 0..table.len() {
+            let w = table.weights(i);
+            if !w.is_empty() {
+                assert!(
+                    w[0] != 0.0,
+                    "First weight for pixel {} should not be zero",
+                    i
+                );
+                assert!(
+                    *w.last().unwrap() != 0.0,
+                    "Last weight for pixel {} should not be zero",
+                    i
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_imageflow_parity_downscale() {
+        let filter = InterpolationDetails::create(Filter::Lanczos);
+        let table = F32WeightTable::new(100, 50, &filter);
+
+        // Reference from imageflow for pixel 25 (middle)
+        let ref_25_left = 45i32;
+        let ref_25_weights = [
+            0.0036891357f32,
+            0.0150561435,
+            -0.03399863,
+            -0.06663732,
+            0.13550529,
+            0.44638538,
+            0.44638538,
+            0.13550529,
+            -0.06663732,
+            -0.03399863,
+            0.0150561435,
+            0.0036891357,
+        ];
+
+        assert_eq!(table.left[25], ref_25_left);
+        let w = table.weights(25);
+        assert_eq!(w.len(), ref_25_weights.len());
+        for (i, (&got, &expected)) in w.iter().zip(ref_25_weights.iter()).enumerate() {
+            let diff = (got - expected).abs();
+            assert!(
+                diff < 1e-6,
+                "Pixel 25 weight {}: got {} expected {}, diff {}",
+                i,
+                got,
+                expected,
+                diff
+            );
+        }
+    }
+}
