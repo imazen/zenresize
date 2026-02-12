@@ -15,6 +15,7 @@ use crate::color;
 use crate::filter::InterpolationDetails;
 use crate::pixel::ResizeConfig;
 use crate::simd;
+use crate::streaming::StreamingResize;
 use crate::weights::F32WeightTable;
 
 /// Resize an entire u8 image. Allocates and returns output buffer.
@@ -66,9 +67,8 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
 
     let h_row_len = out_w * channels;
 
-    // Flat intermediate buffer for horizontally-filtered rows.
-    // For the vertical pass, only ~12 rows are accessed at a time, and
-    // sequential output rows share most of their input rows.
+    // Single intermediate buffer: horizontally-filtered rows for all input rows.
+    // Layout: [row0: out_w*channels f32] [row1: ...] ... [row_{in_h-1}: ...]
     let mut intermediate = vec![0.0f32; h_row_len * in_h];
 
     // Temporary buffer for u8→f32 conversion of one input row.
@@ -78,51 +78,34 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
     for y in 0..in_h {
         let in_start = y * in_stride;
         let in_row = &input[in_start..in_start + in_row_len];
-        let out_start = y * h_row_len;
 
+        // u8 → f32
         if linearize {
-            // Linear path: separate u8→linear f32 conversion + f32 filter
             color::srgb_u8_to_linear_f32(in_row, &mut temp_row, channels, has_alpha);
-            if has_alpha && channels == 4 {
-                simd::premultiply_alpha_row(&mut temp_row);
-            }
-            simd::filter_h_row_f32(
-                &temp_row,
-                &mut intermediate[out_start..out_start + h_row_len],
-                &h_weights,
-                channels,
-            );
-        } else if has_alpha && channels == 4 {
-            // sRGB with alpha: need premultiply, so convert then filter
-            simd::u8_to_f32_row(in_row, &mut temp_row);
-            simd::premultiply_alpha_row(&mut temp_row);
-            simd::filter_h_row_f32(
-                &temp_row,
-                &mut intermediate[out_start..out_start + h_row_len],
-                &h_weights,
-                channels,
-            );
         } else {
-            // sRGB without alpha: fused u8→f32+filter (fastest path)
-            simd::filter_h_row_u8_srgb(
-                in_row,
-                &mut intermediate[out_start..out_start + h_row_len],
-                &h_weights,
-                channels,
-            );
+            simd::u8_to_f32_row(in_row, &mut temp_row);
         }
+
+        // Premultiply alpha
+        if has_alpha && channels == 4 {
+            simd::premultiply_alpha_row(&mut temp_row);
+        }
+
+        // Horizontal filter → intermediate buffer
+        let out_start = y * h_row_len;
+        simd::filter_h_row_f32(
+            &temp_row,
+            &mut intermediate[out_start..out_start + h_row_len],
+            &h_weights,
+            channels,
+        );
     }
 
     // === Vertical pass ===
+    // Pre-allocate row pointer buffer to avoid per-row allocation.
     let max_taps = v_weights.max_taps;
     let mut row_ptrs: Vec<&[f32]> = Vec::with_capacity(max_taps);
-    // Only needed for linear or alpha paths.
-    let needs_temp = linearize || (has_alpha && channels == 4);
-    let mut temp_output = if needs_temp {
-        vec![0.0f32; h_row_len]
-    } else {
-        Vec::new()
-    };
+    let mut temp_output = vec![0.0f32; h_row_len];
 
     for out_y in 0..out_h {
         let left = v_weights.left[out_y];
@@ -137,29 +120,25 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
             row_ptrs.push(&intermediate[start..start + h_row_len]);
         }
 
+        simd::filter_v_row_f32(&row_ptrs, &mut temp_output[..h_row_len], weights);
+
+        // Unpremultiply alpha
+        if has_alpha && channels == 4 {
+            simd::unpremultiply_alpha_row(&mut temp_output[..h_row_len]);
+        }
+
+        // f32 → u8 directly into output buffer
         let out_start = out_y * out_row_len;
         let out_slice = &mut output[out_start..out_start + out_row_len];
-
         if linearize {
-            // Linear: vertical → f32 temp → unpremul → linear→sRGB → u8
-            simd::filter_v_row_f32(&row_ptrs, &mut temp_output[..h_row_len], weights);
-            if has_alpha && channels == 4 {
-                simd::unpremultiply_alpha_row(&mut temp_output[..h_row_len]);
-            }
             color::linear_f32_to_srgb_u8(
                 &temp_output[..h_row_len],
                 out_slice,
                 channels,
                 has_alpha,
             );
-        } else if has_alpha && channels == 4 {
-            // sRGB with alpha: vertical → f32 temp → unpremul → u8
-            simd::filter_v_row_f32(&row_ptrs, &mut temp_output[..h_row_len], weights);
-            simd::unpremultiply_alpha_row(&mut temp_output[..h_row_len]);
-            simd::f32_to_u8_row(&temp_output[..h_row_len], out_slice);
         } else {
-            // sRGB without alpha: fused vertical → u8 (fastest path)
-            simd::filter_v_row_f32_to_u8(&row_ptrs, out_slice, weights);
+            simd::f32_to_u8_row(&temp_output[..h_row_len], out_slice);
         }
     }
 }

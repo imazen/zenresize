@@ -25,20 +25,6 @@ use neon::*;
 
 use crate::weights::F32WeightTable;
 
-/// Horizontally filter one row of u8 pixels (sRGB space, no gamma conversion).
-///
-/// Fuses u8→f32 conversion directly into the horizontal convolution: each input
-/// pixel is converted on-the-fly as it's loaded, eliminating the separate u8→f32
-/// pass and saving one full read+write over the input row.
-pub(crate) fn filter_h_row_u8_srgb(
-    input: &[u8],
-    output: &mut [f32],
-    weights: &F32WeightTable,
-    channels: usize,
-) {
-    archmage::incant!(filter_h_row_u8_srgb(input, output, weights, channels))
-}
-
 /// Horizontally filter one row of f32 pixels.
 pub(crate) fn filter_h_row_f32(
     input: &[f32],
@@ -52,14 +38,6 @@ pub(crate) fn filter_h_row_f32(
 /// Vertically filter accumulated rows into one output row.
 pub(crate) fn filter_v_row_f32(rows: &[&[f32]], output: &mut [f32], weights: &[f32]) {
     archmage::incant!(filter_v_row_f32(rows, output, weights))
-}
-
-/// Fused vertical filter + f32→u8 conversion.
-///
-/// Performs vertical convolution and converts the result directly to u8,
-/// eliminating the temporary f32 output buffer for the non-alpha sRGB path.
-pub(crate) fn filter_v_row_f32_to_u8(rows: &[&[f32]], output: &mut [u8], weights: &[f32]) {
-    archmage::incant!(filter_v_row_f32_to_u8(rows, output, weights))
 }
 
 /// Convert a row of u8 pixels to f32 (divide by 255).
