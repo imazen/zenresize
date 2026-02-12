@@ -25,3 +25,19 @@ imgref = { version = "1.12", optional = true }
 rgb = { version = "0.8", optional = true, default-features = false }
 
 [dev-dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# Competitors
+pic-scale = "0.6"
+fast_image_resize = "6"
+resize = "0.8"
+rgb = "0.8"
+
+[[bench]]
+name = "resize_bench"
+harness = false
+
+[[bench]]
+name = "paired_bench"
+harness = false
