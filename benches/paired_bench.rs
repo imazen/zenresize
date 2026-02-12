@@ -95,7 +95,7 @@ fn test_image() -> TestImage {
 fn run_zenresize_srgb(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     let config = zenresize::ResizeConfig::builder(img.width, img.height, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::Srgb8 { channels: 4, has_alpha: true })
+        .format(zenresize::PixelFormat::Srgb8 { channels: 4, has_alpha: false })
         .srgb()
         .build();
     zenresize::resize(&config, &img.rgba)

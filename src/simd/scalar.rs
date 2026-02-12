@@ -3,6 +3,37 @@
 use crate::weights::F32WeightTable;
 use archmage::ScalarToken;
 
+/// Fused u8→f32 + horizontal convolution, scalar fallback.
+///
+/// Converts each input u8 pixel to f32 (÷ 255) inline during the convolution.
+pub(crate) fn filter_h_row_u8_srgb_scalar(
+    _token: ScalarToken,
+    input: &[u8],
+    output: &mut [f32],
+    weights: &F32WeightTable,
+    channels: usize,
+) {
+    let out_width = weights.len();
+    let scale = 1.0f32 / 255.0;
+
+    for out_x in 0..out_width {
+        let left = weights.left[out_x] as usize;
+        let w = weights.weights(out_x);
+        let out_offset = out_x * channels;
+
+        for c in 0..channels {
+            output[out_offset + c] = 0.0;
+        }
+
+        for (t, &weight) in w.iter().enumerate() {
+            let in_offset = (left + t) * channels;
+            for c in 0..channels {
+                output[out_offset + c] += input[in_offset + c] as f32 * scale * weight;
+            }
+        }
+    }
+}
+
 /// Horizontal convolution: filter one row of f32 pixels, scalar fallback.
 pub(crate) fn filter_h_row_f32_scalar(
     _token: ScalarToken,
@@ -54,6 +85,25 @@ pub(crate) fn filter_v_row_f32_scalar(
         for x in 0..width {
             output[x] += row[x] * weight;
         }
+    }
+}
+
+/// Fused vertical convolution + f32→u8 conversion, scalar fallback.
+pub(crate) fn filter_v_row_f32_to_u8_scalar(
+    _token: ScalarToken,
+    rows: &[&[f32]],
+    output: &mut [u8],
+    weights: &[f32],
+) {
+    let width = output.len();
+    debug_assert_eq!(rows.len(), weights.len());
+
+    for x in 0..width {
+        let mut sum = 0.0f32;
+        for (row, &weight) in rows.iter().zip(weights.iter()) {
+            sum += row[x] * weight;
+        }
+        output[x] = (sum * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
     }
 }
 
