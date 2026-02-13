@@ -26,7 +26,14 @@ use crate::weights::{F32WeightTable, I16WeightTable};
 /// Panics if the config is invalid or input is too short.
 pub fn resize(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
     let out_row_len = config.output_row_len();
-    let mut output = vec![0u8; config.out_height as usize * out_row_len];
+    let len = config.out_height as usize * out_row_len;
+    let mut output = {
+        let mut v = Vec::with_capacity(len);
+        #[allow(unsafe_code)]
+        // SAFETY: resize_into writes every byte in output via the V pass.
+        unsafe { v.set_len(len) };
+        v
+    };
     resize_into(config, input, &mut output);
     output
 }
@@ -361,7 +368,14 @@ impl Resizer {
     /// Resize a u8 image, allocating and returning the output.
     pub fn resize(&mut self, input: &[u8]) -> Vec<u8> {
         let out_row_len = self.config.output_row_len();
-        let mut output = vec![0u8; self.config.out_height as usize * out_row_len];
+        let len = self.config.out_height as usize * out_row_len;
+        let mut output = {
+            let mut v = Vec::with_capacity(len);
+            #[allow(unsafe_code)]
+            // SAFETY: resize_into writes every byte via the V pass.
+            unsafe { v.set_len(len) };
+            v
+        };
         self.resize_into(input, &mut output);
         output
     }
