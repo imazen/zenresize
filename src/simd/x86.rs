@@ -817,9 +817,18 @@ pub(crate) fn filter_v_u8_i16_v3(
     }
     let row_ptrs = &row_ptrs[..num_rows];
 
-    // Pre-compute paired weights
+    // Pre-compute all paired weight vectors before chunk loop.
+    // For N taps, we have N/2 pairs + possibly 1 odd row.
     let pairs = num_rows / 2;
     let odd = num_rows % 2 != 0;
+
+    // Max 64 pairs (128 rows). Stack array avoids allocation.
+    let mut paired_weights = [_mm256_setzero_si256(); 64];
+    for p in 0..pairs {
+        let w0 = weights[p * 2] as i32;
+        let w1 = weights[p * 2 + 1] as i32;
+        paired_weights[p] = _mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
+    }
     let odd_weight = if odd {
         _mm256_set1_epi32(weights[num_rows - 1] as i32 & 0xFFFF)
     } else {
@@ -834,14 +843,10 @@ pub(crate) fn filter_v_u8_i16_v3(
         let mut acc_hi = _mm256_setzero_si256();
 
         for p in 0..pairs {
-            let r0 = p * 2;
-            let r1 = r0 + 1;
-            let w0 = weights[r0] as i32;
-            let w1 = weights[r1] as i32;
-            let pw = _mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
+            let pw = paired_weights[p];
             unsafe {
-                let src0 = _mm_loadu_si128(row_ptrs[r0].add(base) as *const __m128i);
-                let src1 = _mm_loadu_si128(row_ptrs[r1].add(base) as *const __m128i);
+                let src0 = _mm_loadu_si128(row_ptrs[p * 2].add(base) as *const __m128i);
+                let src1 = _mm_loadu_si128(row_ptrs[p * 2 + 1].add(base) as *const __m128i);
 
                 let interleaved_lo = _mm_unpacklo_epi8(src0, src1);
                 let interleaved_hi = _mm_unpackhi_epi8(src0, src1);

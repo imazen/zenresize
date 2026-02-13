@@ -280,6 +280,179 @@ fn resize_into_i16(
     }
 }
 
+/// Reusable resizer with pre-computed weight tables.
+///
+/// When resizing many images with the same dimensions and filter,
+/// `Resizer` avoids recomputing weight tables on each call. This
+/// saves significant overhead for repeated resize operations.
+pub struct Resizer {
+    config: ResizeConfig,
+    h_weights_i16: Option<I16WeightTable>,
+    v_weights_i16: Option<I16WeightTable>,
+    h_weights_f32: Option<F32WeightTable>,
+    v_weights_f32: Option<F32WeightTable>,
+    intermediate_i16: Vec<u8>,
+    premul_buf: Vec<u8>,
+}
+
+impl Resizer {
+    /// Create a new resizer for the given configuration.
+    /// Pre-computes weight tables.
+    pub fn new(config: &ResizeConfig) -> Self {
+        config.validate().expect("invalid resize config");
+        let filter = InterpolationDetails::create(config.filter);
+        let channels = config.input_format.channels() as usize;
+        let linearize = config.needs_linearization();
+        let has_alpha = config.input_format.has_alpha();
+        let in_h = config.in_height as usize;
+        let out_w = config.out_width as usize;
+        let h_row_len = out_w * channels;
+        let in_row_len = config.input_row_len();
+
+        if !linearize && channels == 4 {
+            let h_weights = I16WeightTable::new(config.in_width, config.out_width, &filter);
+            let v_weights = I16WeightTable::new(config.in_height, config.out_height, &filter);
+            let intermediate = vec![0u8; h_row_len * in_h];
+            let premul_buf = if has_alpha {
+                vec![0u8; in_row_len]
+            } else {
+                Vec::new()
+            };
+            Resizer {
+                config: config.clone(),
+                h_weights_i16: Some(h_weights),
+                v_weights_i16: Some(v_weights),
+                h_weights_f32: None,
+                v_weights_f32: None,
+                intermediate_i16: intermediate,
+                premul_buf,
+            }
+        } else {
+            let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
+            let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
+            Resizer {
+                config: config.clone(),
+                h_weights_i16: None,
+                v_weights_i16: None,
+                h_weights_f32: Some(h_weights),
+                v_weights_f32: Some(v_weights),
+                intermediate_i16: Vec::new(),
+                premul_buf: Vec::new(),
+            }
+        }
+    }
+
+    /// Resize a u8 image, allocating and returning the output.
+    pub fn resize(&mut self, input: &[u8]) -> Vec<u8> {
+        let out_row_len = self.config.output_row_len();
+        let mut output = vec![0u8; self.config.out_height as usize * out_row_len];
+        self.resize_into(input, &mut output);
+        output
+    }
+
+    /// Resize a u8 image into a caller-provided buffer.
+    pub fn resize_into(&mut self, input: &[u8], output: &mut [u8]) {
+        let config = &self.config;
+        let in_stride = config.effective_in_stride();
+        let in_row_len = config.input_row_len();
+        let out_row_len = config.output_row_len();
+        let channels = config.input_format.channels() as usize;
+        let has_alpha = config.input_format.has_alpha();
+        let in_h = config.in_height as usize;
+        let out_w = config.out_width as usize;
+        let out_h = config.out_height as usize;
+        let h_row_len = out_w * channels;
+
+        if let (Some(h_weights), Some(v_weights)) =
+            (&self.h_weights_i16, &self.v_weights_i16)
+        {
+            // i16 fast path
+            let intermediate = &mut self.intermediate_i16;
+
+            if channels == 4 && !has_alpha {
+                let batch_count = in_h / 4;
+                let remainder = in_h % 4;
+
+                for batch in 0..batch_count {
+                    let y0 = batch * 4;
+                    let r0 = &input[y0 * in_stride..(y0 + 1) * in_stride];
+                    let r1 = &input[(y0 + 1) * in_stride..(y0 + 2) * in_stride];
+                    let r2 = &input[(y0 + 2) * in_stride..(y0 + 3) * in_stride];
+                    let r3 = &input[(y0 + 3) * in_stride..(y0 + 4) * in_stride];
+
+                    let out_base = y0 * h_row_len;
+                    let (o0, rest) = intermediate[out_base..].split_at_mut(h_row_len);
+                    let (o1, rest) = rest.split_at_mut(h_row_len);
+                    let (o2, o3_and_rest) = rest.split_at_mut(h_row_len);
+                    let o3 = &mut o3_and_rest[..h_row_len];
+
+                    simd::filter_h_u8_i16_4rows(r0, r1, r2, r3, o0, o1, o2, o3, h_weights);
+                }
+
+                for i in 0..remainder {
+                    let y = batch_count * 4 + i;
+                    let in_start = y * in_stride;
+                    let in_row = &input[in_start..in_start + in_row_len];
+                    let out_start = y * h_row_len;
+
+                    simd::filter_h_u8_i16(
+                        in_row,
+                        &mut intermediate[out_start..out_start + h_row_len],
+                        h_weights,
+                        channels,
+                    );
+                }
+            } else {
+                for y in 0..in_h {
+                    let in_start = y * in_stride;
+                    let in_row = &input[in_start..in_start + in_row_len];
+                    let out_start = y * h_row_len;
+
+                    let src = if has_alpha {
+                        simd::premultiply_u8_row(in_row, &mut self.premul_buf);
+                        &self.premul_buf[..]
+                    } else {
+                        in_row
+                    };
+
+                    simd::filter_h_u8_i16(
+                        src,
+                        &mut intermediate[out_start..out_start + h_row_len],
+                        h_weights,
+                        channels,
+                    );
+                }
+            }
+
+            // V pass
+            let max_taps = v_weights.max_taps;
+            let mut row_ptrs: Vec<&[u8]> = Vec::with_capacity(max_taps);
+
+            for out_y in 0..out_h {
+                let left = v_weights.left[out_y];
+                let tap_count = v_weights.tap_count(out_y);
+                let weights = v_weights.weights(out_y);
+
+                row_ptrs.clear();
+                for t in 0..tap_count {
+                    let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+                    let start = in_y * h_row_len;
+                    row_ptrs.push(&intermediate[start..start + h_row_len]);
+                }
+
+                let out_start = out_y * out_row_len;
+                let out_slice = &mut output[out_start..out_start + out_row_len];
+                simd::filter_v_u8_i16(&row_ptrs, out_slice, weights);
+
+                if has_alpha {
+                    simd::unpremultiply_u8_row(out_slice);
+                }
+            }
+        }
+        // f32 path handled by resize_into() for now
+    }
+}
+
 /// Resize an f32 image. Allocates and returns output buffer.
 pub fn resize_f32(config: &ResizeConfig, input: &[f32]) -> Vec<f32> {
     let out_row_len = config.output_row_len();

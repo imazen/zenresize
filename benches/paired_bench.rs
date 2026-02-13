@@ -398,4 +398,41 @@ fn main() {
             c.name, diff_mean, diff_ci, label,
         );
     }
+
+    // --- Resizer (cached weights) benchmark ---
+    println!();
+    println!("Resizer (cached weights) vs one-shot:");
+    {
+        let config = zenresize::ResizeConfig::builder(img.width, img.height, out_w, out_h)
+            .filter(zenresize::Filter::Lanczos)
+            .format(zenresize::PixelFormat::Srgb8 {
+                channels: 4,
+                has_alpha: false,
+            })
+            .srgb()
+            .build();
+        let mut resizer = zenresize::Resizer::new(&config);
+
+        // Warmup
+        for _ in 0..5 {
+            let _ = resizer.resize(&img.rgba);
+        }
+
+        let mut times = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let start = Instant::now();
+            let result = resizer.resize(&img.rgba);
+            let elapsed = start.elapsed();
+            std::hint::black_box(&result);
+            times.push(elapsed.as_secs_f64() * 1000.0);
+        }
+        trim_outliers(&mut times);
+        let m = mean(&times);
+        let ci = ci95(&times);
+        let mps = megapixels / (m / 1000.0);
+        println!(
+            "{:<24} {:>7.2} ±{:.2} {:>10.0} MP/s",
+            "zenresize_resizer", m, ci, mps
+        );
+    }
 }
