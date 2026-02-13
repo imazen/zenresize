@@ -23,9 +23,10 @@ fn main() {
         .srgb()
         .build();
 
-    // Run 10 iterations to get stable counts
+    // Profile with Resizer (cached weights) for pure resize cost
+    let mut resizer = zenresize::Resizer::new(&config);
     for _ in 0..10 {
-        let result = zenresize::resize(&config, &rgba);
+        let result = resizer.resize(&rgba);
         std::hint::black_box(&result);
     }
 }
