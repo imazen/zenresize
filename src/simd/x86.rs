@@ -837,16 +837,29 @@ pub(crate) fn filter_v_u8_i16_v3(
 
     let chunks16 = width / 16;
 
+    // Use raw pointers to eliminate bounds checks in the inner loop.
+    // Safety: row_ptrs and paired_weights are pre-validated above.
+    let rp_base = row_ptrs.as_ptr();
+    let pw_base = paired_weights.as_ptr();
+    let odd_rp = if odd {
+        row_ptrs[num_rows - 1]
+    } else {
+        core::ptr::null()
+    };
+
     for chunk in 0..chunks16 {
         let base = chunk * 16;
         let mut acc_lo = _mm256_setzero_si256();
         let mut acc_hi = _mm256_setzero_si256();
 
-        for p in 0..pairs {
-            let pw = paired_weights[p];
-            unsafe {
-                let src0 = _mm_loadu_si128(row_ptrs[p * 2].add(base) as *const __m128i);
-                let src1 = _mm_loadu_si128(row_ptrs[p * 2 + 1].add(base) as *const __m128i);
+        unsafe {
+            let mut rp = rp_base;
+            let mut wp = pw_base;
+
+            for _ in 0..pairs {
+                let pw = *wp;
+                let src0 = _mm_loadu_si128((*rp).add(base) as *const __m128i);
+                let src1 = _mm_loadu_si128((*rp.add(1)).add(base) as *const __m128i);
 
                 let interleaved_lo = _mm_unpacklo_epi8(src0, src1);
                 let interleaved_hi = _mm_unpackhi_epi8(src0, src1);
@@ -856,12 +869,15 @@ pub(crate) fn filter_v_u8_i16_v3(
 
                 acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, pw));
                 acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, pw));
+
+                rp = rp.add(2);
+                wp = wp.add(1);
             }
         }
 
         if odd {
             unsafe {
-                let src = _mm_loadu_si128(row_ptrs[num_rows - 1].add(base) as *const __m128i);
+                let src = _mm_loadu_si128(odd_rp.add(base) as *const __m128i);
                 let zero_src = _mm_setzero_si128();
 
                 let interleaved_lo = _mm_unpacklo_epi8(src, zero_src);
