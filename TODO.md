@@ -30,10 +30,19 @@ overhead is inherent to safe bounds checking.
 
 ## Pending
 
-### NEON and WASM128 via `wide` crate
-Add portable SIMD kernels using the `wide` crate for ARM NEON and WASM SIMD128.
-These serve as scalar fallback when archmage x86 kernels aren't available.
-Use zerocopy/bytemuck for safe casting in basic loops.
+### NEON and WASM128 via `wide` crate — DONE
+
+All 12 kernel entry points implemented using `wide` crate types (f32x4, i16x8,
+i32x4, u8x16) that compile to NEON on AArch64 and WASM SIMD128 on wasm32:
+
+- `wide_kernels.rs`: Shared portable implementations, `#[inline(always)]`
+- `neon.rs`: NeonToken wrappers → wide_kernels (replaces raw NEON intrinsics)
+- `wasm128.rs`: Wasm128Token wrappers → wide_kernels (new)
+- archmage `incant!` dispatch updated for wasm128 tier
+
+Key SIMD patterns: f32x4 FMA for float path, i16x8.mul_widen→i32x8 for
+integer V kernel, u8x16.narrow_i16x8 for pack-back. Cross-compiled clean
+for aarch64-unknown-linux-gnu and wasm32-unknown-unknown.
 
 ### archmage 0.6.1 testing helpers
 Use archmage's built-in testing helpers (not a feature flag) to disable SIMD
