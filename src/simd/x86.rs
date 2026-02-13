@@ -286,65 +286,56 @@ pub(crate) fn filter_v_row_f32_v3(
     let width = output.len();
     debug_assert_eq!(rows.len(), weights.len());
 
-    let chunks8 = width / 8;
-    let base8 = chunks8 * 8;
+    let (out_chunks, out_tail) = output.as_chunks_mut::<8>();
 
     // Zero the output buffer using AVX2
     let zero = _mm256_setzero_ps();
-    {
-        // Guard: writes 8 f32 at i*8 for i in 0..chunks8
-        let mut out_guard = GuardedSliceMut::<f32, _, 8>::new(output, |i| i * 8, 0..chunks8);
-        for i in 0..chunks8 {
-            out_guard.store_ps256(i, zero, _token);
-        }
+    for chunk in out_chunks.iter_mut() {
+        _mm256_storeu_ps(chunk, zero);
     }
-    for v in &mut output[base8..width] {
+    for v in out_tail.iter_mut() {
         *v = 0.0;
     }
+
+    let base8 = out_chunks.len() * 8;
 
     // Row-major accumulation: broadcast weight once, sweep entire row
     for (row, &weight) in rows.iter().zip(weights.iter()) {
         let w = _mm256_set1_ps(weight);
-        // Guard: reads 8 f32 at i*8 for i in 0..chunks8
-        let row_guard = GuardedSlice::<f32, _, 8>::new(row, |i| i * 8, 0..chunks8);
+        let (row_chunks, _) = row.as_chunks::<8>();
 
         // Process 32 floats (4×8) at a time for ILP
-        let blocks4 = chunks8 / 4;
-        let block_rem = chunks8 % 4;
+        let (out_blocks, out_rem) = output[..base8].as_chunks_mut::<32>();
 
-        {
-            // Guard scoped to SIMD block; dropped before scalar tail accesses output
-            let mut out_guard = GuardedSliceMut::<f32, _, 8>::new(output, |i| i * 8, 0..chunks8);
+        for (out_block, row_block) in out_blocks.iter_mut().zip(row_chunks.chunks_exact(4)) {
+            let s0 = _mm256_loadu_ps(&row_block[0]);
+            let s1 = _mm256_loadu_ps(&row_block[1]);
+            let s2 = _mm256_loadu_ps(&row_block[2]);
+            let s3 = _mm256_loadu_ps(&row_block[3]);
 
-            for b in 0..blocks4 {
-                let bi = b * 4;
-                let s0 = row_guard.load_ps256(bi, _token);
-                let s1 = row_guard.load_ps256(bi + 1, _token);
-                let s2 = row_guard.load_ps256(bi + 2, _token);
-                let s3 = row_guard.load_ps256(bi + 3, _token);
+            let oc: &mut [[f32; 8]] = out_block.as_mut_slice().as_chunks_mut().0;
+            let a0 = _mm256_loadu_ps(&oc[0]);
+            let a1 = _mm256_loadu_ps(&oc[1]);
+            let a2 = _mm256_loadu_ps(&oc[2]);
+            let a3 = _mm256_loadu_ps(&oc[3]);
 
-                let a0 = out_guard.load_ps256(bi, _token);
-                let a1 = out_guard.load_ps256(bi + 1, _token);
-                let a2 = out_guard.load_ps256(bi + 2, _token);
-                let a3 = out_guard.load_ps256(bi + 3, _token);
-
-                out_guard.store_ps256(bi, _mm256_fmadd_ps(s0, w, a0), _token);
-                out_guard.store_ps256(bi + 1, _mm256_fmadd_ps(s1, w, a1), _token);
-                out_guard.store_ps256(bi + 2, _mm256_fmadd_ps(s2, w, a2), _token);
-                out_guard.store_ps256(bi + 3, _mm256_fmadd_ps(s3, w, a3), _token);
-            }
-
-            // Remaining 8-float chunks
-            let rem_start = blocks4 * 4;
-            for i in 0..block_rem {
-                let ci = rem_start + i;
-                let src = row_guard.load_ps256(ci, _token);
-                let acc = out_guard.load_ps256(ci, _token);
-                out_guard.store_ps256(ci, _mm256_fmadd_ps(src, w, acc), _token);
-            }
+            _mm256_storeu_ps(&mut oc[0], _mm256_fmadd_ps(s0, w, a0));
+            _mm256_storeu_ps(&mut oc[1], _mm256_fmadd_ps(s1, w, a1));
+            _mm256_storeu_ps(&mut oc[2], _mm256_fmadd_ps(s2, w, a2));
+            _mm256_storeu_ps(&mut oc[3], _mm256_fmadd_ps(s3, w, a3));
         }
 
-        // Scalar tail (out_guard dropped, output available)
+        // Remaining 8-float chunks (0..3 of them)
+        let blocks4 = out_blocks.len();
+        let rem_row_chunks = &row_chunks[blocks4 * 4..];
+        let (rem_out_chunks, _) = out_rem.as_chunks_mut::<8>();
+        for (out_chunk, row_chunk) in rem_out_chunks.iter_mut().zip(rem_row_chunks.iter()) {
+            let src = _mm256_loadu_ps(row_chunk);
+            let acc = _mm256_loadu_ps(out_chunk);
+            _mm256_storeu_ps(out_chunk, _mm256_fmadd_ps(src, w, acc));
+        }
+
+        // Scalar tail
         let w_scalar = weight;
         for x in base8..width {
             output[x] += row[x] * w_scalar;
