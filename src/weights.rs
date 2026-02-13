@@ -292,6 +292,15 @@ impl I16WeightTable {
         &self.expanded_4ch[offset..offset + self.expanded_stride]
     }
 
+    /// Entire expanded_4ch buffer as a slice.
+    ///
+    /// Layout: `out_size × expanded_stride` i16 values, contiguous.
+    /// Use with a single `GuardedSlice` to avoid per-pixel guard construction.
+    #[inline]
+    pub fn expanded_4ch_all(&self) -> &[i16] {
+        &self.expanded_4ch
+    }
+
     /// Pointer to the start of the expanded_4ch buffer.
     #[inline]
     pub fn expanded_4ch_ptr(&self) -> *const i16 {

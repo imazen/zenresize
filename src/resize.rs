@@ -202,14 +202,23 @@ fn resize_into_i16(
     };
 
     // Temp buffer for premultiplied input row (reused per row, L1-hot).
+    // Include h_padding extra bytes so the H kernel can use its efficient
+    // global-guard path. Padding bytes are zero-initialized; the H kernel's
+    // zero-padded weights ensure they don't affect results.
+    let h_padding = h_weights.groups4 * 16; // extra bytes for SIMD overread
     let mut premul_buf = if has_alpha {
-        vec![0u8; in_row_len]
+        vec![0u8; in_row_len + h_padding]
     } else {
         Vec::new()
     };
 
     // === Horizontal pass: u8 → i32 → u8 ===
     // Use 4-row batch for RGBA without alpha (most common case).
+    //
+    // Input slices are extended beyond the row pixel data to include "SIMD padding"
+    // from adjacent rows in the contiguous buffer. This allows the H kernel to use
+    // a single global guard (no per-pixel edge checks), since zero-padded weights
+    // ensure the padding data doesn't affect results.
     if channels == 4 && !has_alpha {
         // Process 4 rows at a time
         let batch_count = in_h / 4;
@@ -217,10 +226,12 @@ fn resize_into_i16(
 
         for batch in 0..batch_count {
             let y0 = batch * 4;
-            let r0 = &input[y0 * in_stride..(y0 + 1) * in_stride];
-            let r1 = &input[(y0 + 1) * in_stride..(y0 + 2) * in_stride];
-            let r2 = &input[(y0 + 2) * in_stride..(y0 + 3) * in_stride];
-            let r3 = &input[(y0 + 3) * in_stride..(y0 + 4) * in_stride];
+            // Extend each row slice to include padding from the buffer.
+            // rows 0-2 always have a next row. Row 3 may be the last row.
+            let r0 = &input[y0 * in_stride..(y0 * in_stride + in_row_len + h_padding).min(input.len())];
+            let r1 = &input[(y0 + 1) * in_stride..((y0 + 1) * in_stride + in_row_len + h_padding).min(input.len())];
+            let r2 = &input[(y0 + 2) * in_stride..((y0 + 2) * in_stride + in_row_len + h_padding).min(input.len())];
+            let r3 = &input[(y0 + 3) * in_stride..((y0 + 3) * in_stride + in_row_len + h_padding).min(input.len())];
 
             let out_base = y0 * h_row_len;
             // Split intermediate into 4 disjoint mutable slices
@@ -236,7 +247,8 @@ fn resize_into_i16(
         for i in 0..remainder {
             let y = batch_count * 4 + i;
             let in_start = y * in_stride;
-            let in_row = &input[in_start..in_start + in_row_len];
+            let in_end = (in_start + in_row_len + h_padding).min(input.len());
+            let in_row = &input[in_start..in_end];
             let out_start = y * h_row_len;
 
             simd::filter_h_u8_i16(
@@ -254,8 +266,8 @@ fn resize_into_i16(
             let out_start = y * h_row_len;
 
             let src = if has_alpha {
-                simd::premultiply_u8_row(in_row, &mut premul_buf);
-                &premul_buf[..]
+                simd::premultiply_u8_row(in_row, &mut premul_buf[..in_row_len]);
+                &premul_buf[..] // includes zero-initialized SIMD padding
             } else {
                 in_row
             };
@@ -270,39 +282,22 @@ fn resize_into_i16(
     }
 
     // === Vertical pass: u8 → i32 → u8 ===
-    if !has_alpha {
-        // Batch V kernel: processes all output rows in one call,
-        // avoiding per-row dispatch overhead and row_ptrs construction.
-        simd::filter_v_all_u8_i16(
-            &intermediate,
-            output,
-            h_row_len,
-            in_h,
-            out_h,
-            &v_weights,
-        );
-    } else {
-        // Per-row path needed for alpha unpremultiply after each row.
-        let max_taps = v_weights.max_taps;
-        let mut row_ptrs: Vec<&[u8]> = Vec::with_capacity(max_taps);
+    // Batch V kernel: processes all output rows in one call,
+    // avoiding per-row dispatch overhead and row_ptrs construction.
+    simd::filter_v_all_u8_i16(
+        &intermediate,
+        output,
+        h_row_len,
+        in_h,
+        out_h,
+        &v_weights,
+    );
 
+    // Unpremultiply alpha after V pass (separated from V for batch efficiency).
+    if has_alpha {
         for out_y in 0..out_h {
-            let left = v_weights.left[out_y];
-            let tap_count = v_weights.tap_count(out_y);
-            let weights = v_weights.weights(out_y);
-
-            row_ptrs.clear();
-            for t in 0..tap_count {
-                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                let start = in_y * h_row_len;
-                row_ptrs.push(&intermediate[start..start + h_row_len]);
-            }
-
             let out_start = out_y * out_row_len;
-            let out_slice = &mut output[out_start..out_start + out_row_len];
-
-            simd::filter_v_u8_i16(&row_ptrs, out_slice, weights);
-            simd::unpremultiply_u8_row(out_slice);
+            simd::unpremultiply_u8_row(&mut output[out_start..out_start + out_row_len]);
         }
     }
 }
@@ -350,8 +345,9 @@ impl Resizer {
                 unsafe { v.set_len(len) };
                 v
             };
+            let h_padding = h_weights.groups4 * 16;
             let premul_buf = if has_alpha {
-                vec![0u8; in_row_len]
+                vec![0u8; in_row_len + h_padding]
             } else {
                 Vec::new()
             };
@@ -460,8 +456,8 @@ impl Resizer {
                     let out_start = y * h_row_len;
 
                     let src = if has_alpha {
-                        simd::premultiply_u8_row(in_row, &mut self.premul_buf);
-                        &self.premul_buf[..]
+                        simd::premultiply_u8_row(in_row, &mut self.premul_buf[..in_row_len]);
+                        &self.premul_buf[..] // includes zero-initialized SIMD padding
                     } else {
                         in_row
                     };
@@ -475,36 +471,22 @@ impl Resizer {
                 }
             }
 
-            // V pass
-            if !has_alpha {
-                simd::filter_v_all_u8_i16(
-                    intermediate,
-                    output,
-                    h_row_len,
-                    in_h,
-                    out_h,
-                    v_weights,
-                );
-            } else {
-                let max_taps = v_weights.max_taps;
-                let mut row_ptrs: Vec<&[u8]> = Vec::with_capacity(max_taps);
+            // V pass — always use batch kernel (intermediate is contiguous)
+            simd::filter_v_all_u8_i16(
+                intermediate,
+                output,
+                h_row_len,
+                in_h,
+                out_h,
+                v_weights,
+            );
 
+            if has_alpha {
                 for out_y in 0..out_h {
-                    let left = v_weights.left[out_y];
-                    let tap_count = v_weights.tap_count(out_y);
-                    let weights = v_weights.weights(out_y);
-
-                    row_ptrs.clear();
-                    for t in 0..tap_count {
-                        let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                        let start = in_y * h_row_len;
-                        row_ptrs.push(&intermediate[start..start + h_row_len]);
-                    }
-
                     let out_start = out_y * out_row_len;
-                    let out_slice = &mut output[out_start..out_start + out_row_len];
-                    simd::filter_v_u8_i16(&row_ptrs, out_slice, weights);
-                    simd::unpremultiply_u8_row(out_slice);
+                    simd::unpremultiply_u8_row(
+                        &mut output[out_start..out_start + out_row_len],
+                    );
                 }
             }
         } else if let (Some(h_weights), Some(v_weights)) =

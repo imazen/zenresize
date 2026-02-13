@@ -531,10 +531,33 @@ pub(crate) fn filter_h_u8_i16_v3(
 /// Each ymm holds 2 pairs of taps (lo lane: taps i,i+1; hi lane: taps i+2,i+3)
 /// and one madd processes all 4 taps for all 4 channels simultaneously.
 ///
-/// Port-5 pressure: 2 uops per 4 taps (cvtepu8 + shuffle) vs 6 uops in xmm path.
+/// Fixed `groups4` loop count (from weight table) enables LLVM unrolling.
+/// The input slice should include padding beyond the actual pixel data
+/// (from adjacent rows) so all SIMD reads are in bounds.
+/// Edge pixels where padding is insufficient fall back to scalar.
 #[archmage::rite]
 fn filter_h_u8_4ch(_token: X64V3Token, input: &[u8], output: &mut [u8], weights: &I16WeightTable) {
     let out_width = weights.len();
+    let groups4 = weights.groups4;
+    let in_pixels = input.len() / 4;
+
+    // Need at least 4 pixels for the 16-byte loads
+    if in_pixels < 4 {
+        filter_h_u8_generic(_token, input, output, weights, 4);
+        return;
+    }
+
+    // Check if the input slice has enough padding for all SIMD reads.
+    // The +3 accounts for the 16-byte (4-pixel) SIMD load width: the last
+    // group's load at pixel max_left + (groups4-1)*4 reads 4 pixels forward.
+    let max_left = weights.left.iter().map(|&l| l as usize).max().unwrap_or(0);
+    let has_full_padding = max_left + groups4 * 4 + 3 < in_pixels;
+
+    if !has_full_padding {
+        // No padding: per-pixel edge check
+        filter_h_u8_4ch_with_edge_fallback(_token, input, output, weights);
+        return;
+    }
 
     // 256-bit shuffle mask: within each 128-bit lane, rearrange
     // [R0,G0,B0,A0,R1,G1,B1,A1] → [R0,R1,G0,G1,B0,B1,A0,A1]
@@ -543,80 +566,45 @@ fn filter_h_u8_4ch(_token: X64V3Token, input: &[u8], output: &mut [u8], weights:
         15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0,
     );
 
-    // XMM version for remainder handling (2 taps)
-    let xmm_shuffle = _mm_set_epi8(
-        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0,
-    );
     let half = _mm_set1_epi32(1 << (I16_PRECISION - 1));
     let zero = _mm_setzero_si128();
+
+    // Global guards: padding guarantees all accesses are in-bounds,
+    // no clamping needed. One guard per buffer, constructed once.
+    let in_guard = GuardedSlice::<u8, _, 16>::new(
+        input,
+        |px_start| px_start * 4,
+        0..max_left + groups4 * 4,
+    );
+
+    let ew_all = weights.expanded_4ch_all();
+    let ew_guard = GuardedSlice::<i16, _, 16>::new(
+        ew_all,
+        |group_idx| group_idx * 16,
+        0..out_width * groups4,
+    );
 
     let mut out_guard = GuardedSliceMut::<u8, _, 4>::new(output, |x| x * 4, 0..out_width);
 
     for out_x in 0..out_width {
         let left = weights.left[out_x] as usize;
-        let taps = weights.tap_count(out_x);
-        let byte_off = left * 4;
-
-        // Groups of 4 taps processed per ymm iteration
-        let groups4 = taps / 4;
-        let rem_taps = taps % 4;
-
-        // Guard: reads 16 bytes (4 RGBA pixels) per group of 4 taps
-        let in_guard = GuardedSlice::<u8, _, 16>::new(input, |g| byte_off + g * 16, 0..groups4);
-
-        // Expanded weights: 16 i16 per group
-        let ew = weights.weights_expanded_4ch(out_x);
-        let ew_guard = GuardedSlice::<i16, _, 16>::new(ew, |g| g * 16, 0..groups4);
+        let ew_base = out_x * groups4;
 
         let mut acc = _mm256_setzero_si256();
 
-        // Process 4 taps per iteration using 256-bit registers
+        // groups4 is constant across all pixels — enables LLVM unrolling.
         for g in 0..groups4 {
-            // Load 4 RGBA pixels (16 bytes) → zero-extend to 16 × i16
-            let pixels = in_guard.load_si128(g, _token);
+            let pixels = in_guard.load_si128(left + g * 4, _token);
             let ext = _mm256_cvtepu8_epi16(pixels);
             let shuffled = _mm256_shuffle_epi8(ext, ymm_shuffle);
-
-            // Load pre-expanded weights (32 bytes = 16 × i16)
-            let w = ew_guard.load_si256(g, _token);
-
+            let w = ew_guard.load_si256(ew_base + g, _token);
             acc = _mm256_add_epi32(acc, _mm256_madd_epi16(shuffled, w));
         }
 
-        // Combine upper and lower 128-bit lanes
         let lo = _mm256_castsi256_si128(acc);
         let hi = _mm256_extracti128_si256::<1>(acc);
-        let mut final_acc = _mm_add_epi32(lo, hi);
+        let final_acc = _mm_add_epi32(lo, hi);
 
-        // Handle remaining 2 taps (if taps % 4 >= 2)
-        let mut handled_taps = groups4 * 4;
-        if rem_taps >= 2 {
-            let t = handled_taps;
-            let rem_byte_off = byte_off + t * 4;
-            let rem_in_guard = GuardedSlice::<u8, _, 8>::new(input, |_| rem_byte_off, 0..1);
-            let bytes = rem_in_guard.loadl_epi64(0, _token);
-            let shuffled = _mm_shuffle_epi8(_mm_cvtepu8_epi16(bytes), xmm_shuffle);
-
-            // Load 2 weight values as 32-bit broadcast
-            let w_slice = weights.weights_padded(out_x);
-            let w_guard = GuardedSlice::<i16, _, 2>::new(w_slice, |_| t, 0..1);
-            let w = _mm_broadcastd_epi32(w_guard.load_si32(0, _token));
-            final_acc = _mm_add_epi32(final_acc, _mm_madd_epi16(shuffled, w));
-            handled_taps += 2;
-        }
-
-        // Handle single remaining tap (if taps is odd)
-        if rem_taps & 1 != 0 {
-            let t = handled_taps;
-            let w_val = weights.weights(out_x)[t] as i32;
-            let rem_guard = GuardedSlice::<u8, _, 4>::new(input, |_| byte_off + t * 4, 0..1);
-            let bytes = rem_guard.load_si32(0, _token);
-            let ext = _mm_cvtepu8_epi32(bytes);
-            let wv = _mm_set1_epi32(w_val);
-            final_acc = _mm_add_epi32(final_acc, _mm_mullo_epi32(ext, wv));
-        }
-
-        // Round, shift, pack to u8
         let rounded = _mm_add_epi32(final_acc, half);
         let shifted = _mm_srai_epi32::<{ I16_PRECISION }>(rounded);
         let packed16 = _mm_packs_epi32(shifted, zero);
@@ -624,6 +612,73 @@ fn filter_h_u8_4ch(_token: X64V3Token, input: &[u8], output: &mut [u8], weights:
 
         let pixel_val = _mm_cvtsi128_si32(packed8) as u32;
         out_guard.write_u32_ne(out_x, pixel_val);
+    }
+}
+
+/// Fallback for filter_h_u8_4ch when input lacks SIMD padding.
+/// Uses per-pixel edge checks for safety.
+#[archmage::rite]
+fn filter_h_u8_4ch_with_edge_fallback(
+    _token: X64V3Token,
+    input: &[u8],
+    output: &mut [u8],
+    weights: &I16WeightTable,
+) {
+    let out_width = weights.len();
+    let groups4 = weights.groups4;
+    let in_pixels = input.len() / 4;
+
+    let ymm_shuffle = _mm256_set_epi8(
+        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0,
+        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0,
+    );
+    let half = _mm_set1_epi32(1 << (I16_PRECISION - 1));
+    let zero = _mm_setzero_si128();
+
+    let safe_end = (0..out_width)
+        .rev()
+        .find(|&x| (weights.left[x] as usize) + groups4 * 4 <= in_pixels)
+        .map_or(0, |x| x + 1);
+
+    // Edge pixels: scalar
+    for out_x in safe_end..out_width {
+        let left = weights.left[out_x] as usize;
+        filter_h_u8_4ch_edge(_token, input, &mut output[out_x * 4..], out_x, left, weights);
+    }
+
+    // Interior pixels: SIMD
+    if safe_end > 0 {
+        let mut out_guard = GuardedSliceMut::<u8, _, 4>::new(output, |x| x * 4, 0..safe_end);
+
+        for out_x in 0..safe_end {
+            let left = weights.left[out_x] as usize;
+
+            let ew = weights.weights_expanded_4ch(out_x);
+            let ew_guard = GuardedSlice::<i16, _, 16>::new(ew, |g| g * 16, 0..groups4);
+            let in_guard = GuardedSlice::<u8, _, 16>::new(input, |g| left * 4 + g * 16, 0..groups4);
+
+            let mut acc = _mm256_setzero_si256();
+
+            for g in 0..groups4 {
+                let pixels = in_guard.load_si128(g, _token);
+                let ext = _mm256_cvtepu8_epi16(pixels);
+                let shuffled = _mm256_shuffle_epi8(ext, ymm_shuffle);
+                let w = ew_guard.load_si256(g, _token);
+                acc = _mm256_add_epi32(acc, _mm256_madd_epi16(shuffled, w));
+            }
+
+            let lo = _mm256_castsi256_si128(acc);
+            let hi = _mm256_extracti128_si256::<1>(acc);
+            let final_acc = _mm_add_epi32(lo, hi);
+
+            let rounded = _mm_add_epi32(final_acc, half);
+            let shifted = _mm_srai_epi32::<{ I16_PRECISION }>(rounded);
+            let packed16 = _mm_packs_epi32(shifted, zero);
+            let packed8 = _mm_packus_epi16(packed16, zero);
+
+            let pixel_val = _mm_cvtsi128_si32(packed8) as u32;
+            out_guard.write_u32_ne(out_x, pixel_val);
+        }
     }
 }
 
@@ -649,6 +704,10 @@ pub(crate) fn filter_h_u8_i16_4rows_v3(
 }
 
 /// Inner implementation of 4-row batch horizontal convolution.
+///
+/// Fixed `groups4` loop count (from weight table) enables LLVM unrolling.
+/// Input slices should include SIMD padding from adjacent row data.
+/// Falls back to single-row kernel when padding is insufficient.
 #[archmage::rite]
 fn filter_h_u8_4ch_4rows(
     _token: X64V3Token,
@@ -663,16 +722,40 @@ fn filter_h_u8_4ch_4rows(
     weights: &I16WeightTable,
 ) {
     let out_width = weights.len();
+    let groups4 = weights.groups4;
+    let in_pixels = [in0.len(), in1.len(), in2.len(), in3.len()].iter().copied().min().unwrap() / 4;
+
+    // Check if all rows have padding for SIMD reads.
+    // +3 accounts for 16-byte (4-pixel) SIMD load width.
+    let max_left = weights.left.iter().map(|&l| l as usize).max().unwrap_or(0);
+    if max_left + groups4 * 4 + 3 >= in_pixels || in_pixels < 4 {
+        // No padding: process rows individually (handles edge fallback internally)
+        filter_h_u8_4ch(_token, in0, out0, weights);
+        filter_h_u8_4ch(_token, in1, out1, weights);
+        filter_h_u8_4ch(_token, in2, out2, weights);
+        filter_h_u8_4ch(_token, in3, out3, weights);
+        return;
+    }
 
     let ymm_shuffle = _mm256_set_epi8(
         15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0,
         15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0,
     );
-
-    let xmm_shuffle = _mm_set_epi8(
-        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0,
-    );
     let half = _mm_set1_epi32(1 << (I16_PRECISION - 1));
+
+    // Global guards: padding guarantees all accesses in-bounds, no clamping.
+    let guard_range = 0..max_left + groups4 * 4;
+    let ig0 = GuardedSlice::<u8, _, 16>::new(in0, |px| px * 4, guard_range.clone());
+    let ig1 = GuardedSlice::<u8, _, 16>::new(in1, |px| px * 4, guard_range.clone());
+    let ig2 = GuardedSlice::<u8, _, 16>::new(in2, |px| px * 4, guard_range.clone());
+    let ig3 = GuardedSlice::<u8, _, 16>::new(in3, |px| px * 4, guard_range);
+
+    let ew_all = weights.expanded_4ch_all();
+    let ew_guard = GuardedSlice::<i16, _, 16>::new(
+        ew_all,
+        |group_idx| group_idx * 16,
+        0..out_width * groups4,
+    );
 
     let mut og0 = GuardedSliceMut::<u8, _, 4>::new(out0, |x| x * 4, 0..out_width);
     let mut og1 = GuardedSliceMut::<u8, _, 4>::new(out1, |x| x * 4, 0..out_width);
@@ -681,21 +764,7 @@ fn filter_h_u8_4ch_4rows(
 
     for out_x in 0..out_width {
         let left = weights.left[out_x] as usize;
-        let taps = weights.tap_count(out_x);
-        let byte_off = left * 4;
-
-        let groups4 = taps / 4;
-        let rem_taps = taps % 4;
-
-        // Per-pixel guards for 4 input rows (16 bytes per group of 4 taps)
-        let ig0 = GuardedSlice::<u8, _, 16>::new(in0, |g| byte_off + g * 16, 0..groups4);
-        let ig1 = GuardedSlice::<u8, _, 16>::new(in1, |g| byte_off + g * 16, 0..groups4);
-        let ig2 = GuardedSlice::<u8, _, 16>::new(in2, |g| byte_off + g * 16, 0..groups4);
-        let ig3 = GuardedSlice::<u8, _, 16>::new(in3, |g| byte_off + g * 16, 0..groups4);
-
-        // Expanded weights
-        let ew = weights.weights_expanded_4ch(out_x);
-        let ew_guard = GuardedSlice::<i16, _, 16>::new(ew, |g| g * 16, 0..groups4);
+        let ew_base = out_x * groups4;
 
         let mut acc0 = _mm256_setzero_si256();
         let mut acc1 = _mm256_setzero_si256();
@@ -703,91 +772,63 @@ fn filter_h_u8_4ch_4rows(
         let mut acc3 = _mm256_setzero_si256();
 
         for g in 0..groups4 {
-            let w = ew_guard.load_si256(g, _token);
+            let w = ew_guard.load_si256(ew_base + g, _token);
+            let px = left + g * 4;
 
-            let p0 = _mm256_cvtepu8_epi16(ig0.load_si128(g, _token));
+            let p0 = _mm256_cvtepu8_epi16(ig0.load_si128(px, _token));
             acc0 = _mm256_add_epi32(acc0, _mm256_madd_epi16(_mm256_shuffle_epi8(p0, ymm_shuffle), w));
 
-            let p1 = _mm256_cvtepu8_epi16(ig1.load_si128(g, _token));
+            let p1 = _mm256_cvtepu8_epi16(ig1.load_si128(px, _token));
             acc1 = _mm256_add_epi32(acc1, _mm256_madd_epi16(_mm256_shuffle_epi8(p1, ymm_shuffle), w));
 
-            let p2 = _mm256_cvtepu8_epi16(ig2.load_si128(g, _token));
+            let p2 = _mm256_cvtepu8_epi16(ig2.load_si128(px, _token));
             acc2 = _mm256_add_epi32(acc2, _mm256_madd_epi16(_mm256_shuffle_epi8(p2, ymm_shuffle), w));
 
-            let p3 = _mm256_cvtepu8_epi16(ig3.load_si128(g, _token));
+            let p3 = _mm256_cvtepu8_epi16(ig3.load_si128(px, _token));
             acc3 = _mm256_add_epi32(acc3, _mm256_madd_epi16(_mm256_shuffle_epi8(p3, ymm_shuffle), w));
         }
 
-        // Combine ymm lanes → xmm accumulators
-        let mut f0 = _mm_add_epi32(_mm256_castsi256_si128(acc0), _mm256_extracti128_si256::<1>(acc0));
-        let mut f1 = _mm_add_epi32(_mm256_castsi256_si128(acc1), _mm256_extracti128_si256::<1>(acc1));
-        let mut f2 = _mm_add_epi32(_mm256_castsi256_si128(acc2), _mm256_extracti128_si256::<1>(acc2));
-        let mut f3 = _mm_add_epi32(_mm256_castsi256_si128(acc3), _mm256_extracti128_si256::<1>(acc3));
+        let f0 = _mm_add_epi32(_mm256_castsi256_si128(acc0), _mm256_extracti128_si256::<1>(acc0));
+        let f1 = _mm_add_epi32(_mm256_castsi256_si128(acc1), _mm256_extracti128_si256::<1>(acc1));
+        let f2 = _mm_add_epi32(_mm256_castsi256_si128(acc2), _mm256_extracti128_si256::<1>(acc2));
+        let f3 = _mm_add_epi32(_mm256_castsi256_si128(acc3), _mm256_extracti128_si256::<1>(acc3));
 
-        // Handle remaining 2 taps
-        let mut handled_taps = groups4 * 4;
-        if rem_taps >= 2 {
-            let t = handled_taps;
-            let rem_byte_off = byte_off + t * 4;
-            let rg0 = GuardedSlice::<u8, _, 8>::new(in0, |_| rem_byte_off, 0..1);
-            let rg1 = GuardedSlice::<u8, _, 8>::new(in1, |_| rem_byte_off, 0..1);
-            let rg2 = GuardedSlice::<u8, _, 8>::new(in2, |_| rem_byte_off, 0..1);
-            let rg3 = GuardedSlice::<u8, _, 8>::new(in3, |_| rem_byte_off, 0..1);
-
-            let w_slice = weights.weights_padded(out_x);
-            let w_guard = GuardedSlice::<i16, _, 2>::new(w_slice, |_| t, 0..1);
-            let w = _mm_broadcastd_epi32(w_guard.load_si32(0, _token));
-
-            let s0 = _mm_shuffle_epi8(_mm_cvtepu8_epi16(rg0.loadl_epi64(0, _token)), xmm_shuffle);
-            f0 = _mm_add_epi32(f0, _mm_madd_epi16(s0, w));
-
-            let s1 = _mm_shuffle_epi8(_mm_cvtepu8_epi16(rg1.loadl_epi64(0, _token)), xmm_shuffle);
-            f1 = _mm_add_epi32(f1, _mm_madd_epi16(s1, w));
-
-            let s2 = _mm_shuffle_epi8(_mm_cvtepu8_epi16(rg2.loadl_epi64(0, _token)), xmm_shuffle);
-            f2 = _mm_add_epi32(f2, _mm_madd_epi16(s2, w));
-
-            let s3 = _mm_shuffle_epi8(_mm_cvtepu8_epi16(rg3.loadl_epi64(0, _token)), xmm_shuffle);
-            f3 = _mm_add_epi32(f3, _mm_madd_epi16(s3, w));
-            handled_taps += 2;
-        }
-
-        // Handle single remaining tap (if taps is odd)
-        if rem_taps & 1 != 0 {
-            let t = handled_taps;
-            let w_val = weights.weights(out_x)[t] as i32;
-            let wv = _mm_set1_epi32(w_val);
-            let odd_off = byte_off + t * 4;
-
-            let pg0 = GuardedSlice::<u8, _, 4>::new(in0, |_| odd_off, 0..1);
-            f0 = _mm_add_epi32(f0, _mm_mullo_epi32(_mm_cvtepu8_epi32(pg0.load_si32(0, _token)), wv));
-
-            let pg1 = GuardedSlice::<u8, _, 4>::new(in1, |_| odd_off, 0..1);
-            f1 = _mm_add_epi32(f1, _mm_mullo_epi32(_mm_cvtepu8_epi32(pg1.load_si32(0, _token)), wv));
-
-            let pg2 = GuardedSlice::<u8, _, 4>::new(in2, |_| odd_off, 0..1);
-            f2 = _mm_add_epi32(f2, _mm_mullo_epi32(_mm_cvtepu8_epi32(pg2.load_si32(0, _token)), wv));
-
-            let pg3 = GuardedSlice::<u8, _, 4>::new(in3, |_| odd_off, 0..1);
-            f3 = _mm_add_epi32(f3, _mm_mullo_epi32(_mm_cvtepu8_epi32(pg3.load_si32(0, _token)), wv));
-        }
-
-        // Round and shift all 4 rows
         let s0 = _mm_srai_epi32::<{ I16_PRECISION }>(_mm_add_epi32(f0, half));
         let s1 = _mm_srai_epi32::<{ I16_PRECISION }>(_mm_add_epi32(f1, half));
         let s2 = _mm_srai_epi32::<{ I16_PRECISION }>(_mm_add_epi32(f2, half));
         let s3 = _mm_srai_epi32::<{ I16_PRECISION }>(_mm_add_epi32(f3, half));
 
-        // Pack 4 pixels: i32×4 → i16×8 → u8×16
         let pack01 = _mm_packs_epi32(s0, s1);
         let pack23 = _mm_packs_epi32(s2, s3);
         let result = _mm_packus_epi16(pack01, pack23);
 
-        // Store one pixel per row (4 bytes each)
         og0.write_u32_ne(out_x, _mm_cvtsi128_si32(result) as u32);
         og1.write_u32_ne(out_x, _mm_extract_epi32::<1>(result) as u32);
         og2.write_u32_ne(out_x, _mm_extract_epi32::<2>(result) as u32);
         og3.write_u32_ne(out_x, _mm_extract_epi32::<3>(result) as u32);
+    }
+}
+
+/// Scalar fallback for a single edge pixel in 4ch integer horizontal filter.
+///
+/// Called for pixels where SIMD 16-byte reads would extend past the input buffer.
+#[inline]
+fn filter_h_u8_4ch_edge(
+    _token: X64V3Token,
+    input: &[u8],
+    output: &mut [u8],
+    out_x: usize,
+    left: usize,
+    weights: &I16WeightTable,
+) {
+    let w = weights.weights(out_x);
+    for c in 0..4 {
+        let mut acc: i32 = 0;
+        for (t, &weight) in w.iter().enumerate() {
+            acc += input[(left + t) * 4 + c] as i32 * weight as i32;
+        }
+        let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+        output[c] = rounded.clamp(0, 255) as u8;
     }
 }
 
