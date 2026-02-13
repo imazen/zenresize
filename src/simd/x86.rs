@@ -717,3 +717,138 @@ pub(crate) fn filter_v_u8_i16_v3(
         output[x] = rounded.clamp(0, 255) as u8;
     }
 }
+
+// =============================================================================
+// Pre-converted i16 path (for benchmarking alternative approaches)
+// =============================================================================
+
+/// Convert u8 → i16 (zero-extend) using AVX2.
+#[archmage::arcane]
+pub(crate) fn u8_to_i16_row_v3(_token: X64V3Token, input: &[u8], output: &mut [i16]) {
+    debug_assert_eq!(input.len(), output.len());
+    let len = input.len();
+
+    let chunks16 = len / 16;
+    for i in 0..chunks16 {
+        let base = i * 16;
+        unsafe {
+            let bytes = _mm_loadu_si128(input.as_ptr().add(base) as *const __m128i);
+            let extended = _mm256_cvtepu8_epi16(bytes);
+            _mm256_storeu_si256(output.as_mut_ptr().add(base) as *mut __m256i, extended);
+        }
+    }
+
+    for i in (chunks16 * 16)..len {
+        output[i] = input[i] as i16;
+    }
+}
+
+/// Integer horizontal convolution from pre-converted i16 input → u8 output.
+#[archmage::arcane]
+pub(crate) fn filter_h_i16_to_u8_v3(
+    _token: X64V3Token,
+    input: &[i16],
+    output: &mut [u8],
+    weights: &I16WeightTable,
+    channels: usize,
+) {
+    match channels {
+        4 => filter_h_i16_4ch(_token, input, output, weights),
+        _ => filter_h_i16_generic(_token, input, output, weights, channels),
+    }
+}
+
+/// Integer horizontal filter for 4-channel i16 input → u8 output.
+#[archmage::rite]
+fn filter_h_i16_4ch(
+    _token: X64V3Token,
+    input: &[i16],
+    output: &mut [u8],
+    weights: &I16WeightTable,
+) {
+    let out_width = weights.len();
+    let max_taps = weights.max_taps;
+    let in_ptr = input.as_ptr();
+    let out_ptr = output.as_mut_ptr();
+
+    let shuffle_mask = _mm_set_epi8(
+        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0,
+    );
+
+    let half = _mm_set1_epi32(1 << (I16_PRECISION - 1));
+    let zero = _mm_setzero_si128();
+
+    let pairs = max_taps / 2;
+    let pairs2 = pairs / 2;
+    let pairs_rem = pairs % 2;
+
+    for out_x in 0..out_width {
+        let left = weights.left[out_x] as usize;
+        let w_ptr = weights.weights_padded(out_x).as_ptr();
+        let in_base = unsafe { in_ptr.add(left * 4) };
+
+        let mut acc0 = _mm_setzero_si128();
+        let mut acc1 = _mm_setzero_si128();
+
+        for p in 0..pairs2 {
+            let t = p * 4;
+            unsafe {
+                let pixels0 = _mm_loadu_si128(in_base.add(t * 4) as *const __m128i);
+                let shuffled0 = _mm_shuffle_epi8(pixels0, shuffle_mask);
+                let w0 = _mm_broadcastd_epi32(_mm_loadu_si32(w_ptr.add(t) as *const _));
+                acc0 = _mm_add_epi32(acc0, _mm_madd_epi16(shuffled0, w0));
+
+                let pixels1 = _mm_loadu_si128(in_base.add((t + 2) * 4) as *const __m128i);
+                let shuffled1 = _mm_shuffle_epi8(pixels1, shuffle_mask);
+                let w1 = _mm_broadcastd_epi32(_mm_loadu_si32(w_ptr.add(t + 2) as *const _));
+                acc1 = _mm_add_epi32(acc1, _mm_madd_epi16(shuffled1, w1));
+            }
+        }
+
+        if pairs_rem > 0 {
+            let t = pairs2 * 4;
+            unsafe {
+                let pixels = _mm_loadu_si128(in_base.add(t * 4) as *const __m128i);
+                let shuffled = _mm_shuffle_epi8(pixels, shuffle_mask);
+                let w = _mm_broadcastd_epi32(_mm_loadu_si32(w_ptr.add(t) as *const _));
+                acc0 = _mm_add_epi32(acc0, _mm_madd_epi16(shuffled, w));
+            }
+        }
+
+        let acc = _mm_add_epi32(acc0, acc1);
+        let rounded = _mm_add_epi32(acc, half);
+        let shifted = _mm_srai_epi32::<{ I16_PRECISION }>(rounded);
+        let packed16 = _mm_packs_epi32(shifted, zero);
+        let packed8 = _mm_packus_epi16(packed16, zero);
+
+        let pixel_val = _mm_cvtsi128_si32(packed8) as u32;
+        unsafe {
+            core::ptr::write_unaligned(out_ptr.add(out_x * 4) as *mut u32, pixel_val);
+        }
+    }
+}
+
+/// Scalar fallback for i16 horizontal filter (arbitrary channel count).
+#[archmage::rite]
+fn filter_h_i16_generic(
+    _token: X64V3Token,
+    input: &[i16],
+    output: &mut [u8],
+    weights: &I16WeightTable,
+    channels: usize,
+) {
+    let out_width = weights.len();
+    for out_x in 0..out_width {
+        let left = weights.left[out_x] as usize;
+        let w = weights.weights(out_x);
+        let out_base = out_x * channels;
+        for c in 0..channels {
+            let mut acc: i32 = 0;
+            for (t, &weight) in w.iter().enumerate() {
+                acc += input[(left + t) * channels + c] as i32 * weight as i32;
+            }
+            let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+            output[out_base + c] = rounded.clamp(0, 255) as u8;
+        }
+    }
+}

@@ -173,6 +173,41 @@ pub(crate) fn unpremultiply_u8_row_scalar(_token: ScalarToken, row: &mut [u8]) {
     }
 }
 
+/// Convert u8 → i16 (zero-extend), scalar fallback.
+pub(crate) fn u8_to_i16_row_scalar(_token: ScalarToken, input: &[u8], output: &mut [i16]) {
+    debug_assert_eq!(input.len(), output.len());
+    for (inp, out) in input.iter().zip(output.iter_mut()) {
+        *out = *inp as i16;
+    }
+}
+
+/// Integer horizontal convolution: i16 input → u8 output, scalar fallback.
+/// Input values must be in 0..255 range (zero-extended from u8).
+pub(crate) fn filter_h_i16_to_u8_scalar(
+    _token: ScalarToken,
+    input: &[i16],
+    output: &mut [u8],
+    weights: &I16WeightTable,
+    channels: usize,
+) {
+    let out_width = weights.len();
+
+    for out_x in 0..out_width {
+        let left = weights.left[out_x] as usize;
+        let w = weights.weights(out_x);
+        let out_base = out_x * channels;
+
+        for c in 0..channels {
+            let mut acc: i32 = 0;
+            for (t, &weight) in w.iter().enumerate() {
+                acc += input[(left + t) * channels + c] as i32 * weight as i32;
+            }
+            let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+            output[out_base + c] = rounded.clamp(0, 255) as u8;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

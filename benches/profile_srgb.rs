@@ -18,7 +18,7 @@ fn main() {
         .filter(zenresize::Filter::Lanczos)
         .format(zenresize::PixelFormat::Srgb8 {
             channels: 4,
-            has_alpha: false,
+            has_alpha: true,
         })
         .srgb()
         .build();
