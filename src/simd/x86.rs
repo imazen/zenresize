@@ -4,16 +4,19 @@
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use crate::weights::{F32WeightTable, I16_PRECISION, I16WeightTable};
 use archmage::X64V3Token;
-use hoisted_bounds::{GuardedSlice, GuardedSlice2D, GuardedSliceMut};
+use hoisted_bounds::{GuardedSlice, GuardedSliceMut};
 
 // Safe unaligned SIMD load/store — takes references instead of raw pointers.
 // Explicit imports because names overlap with core::arch intrinsics.
 #[cfg(target_arch = "x86_64")]
 use safe_unaligned_simd::x86_64::{
-    _mm256_loadu_ps, _mm256_storeu_ps, _mm_loadu_ps, _mm_loadu_si32, _mm_loadu_si64,
-    _mm_storeu_ps, _mm_storeu_si64,
+    _mm256_loadu_ps, _mm256_storeu_ps, _mm_loadu_ps, _mm_loadu_si128, _mm_loadu_si32,
+    _mm_loadu_si64, _mm_storeu_ps, _mm_storeu_si128, _mm_storeu_si64,
 };
 
 // =============================================================================
@@ -815,7 +818,6 @@ pub(crate) fn filter_v_u8_i16_v3(
     output: &mut [u8],
     weights: &[i16],
 ) {
-    let width = output.len();
     let num_rows = rows.len();
     debug_assert_eq!(num_rows, weights.len());
 
@@ -838,23 +840,22 @@ pub(crate) fn filter_v_u8_i16_v3(
         _mm256_setzero_si256()
     };
 
-    let chunks16 = width / 16;
+    let (out_chunks, out_tail) = output.as_chunks_mut::<16>();
 
-    // Output guard: writes 16 bytes at chunk * 16
-    let mut out_guard = GuardedSliceMut::<u8, _, 16>::new(output, |c| c * 16, 0..chunks16);
+    // Pre-chunk all rows for direct indexing
+    let mut row_chunks_arr: [&[[u8; 16]]; 128] = [&[]; 128];
+    for (i, row) in rows.iter().enumerate() {
+        row_chunks_arr[i] = row.as_chunks::<16>().0;
+    }
 
-    for chunk in 0..chunks16 {
-        let base = chunk * 16;
+    for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
         let mut acc_lo = _mm256_setzero_si256();
         let mut acc_hi = _mm256_setzero_si256();
 
         for p in 0..pairs {
             let pw = paired_weights[p];
-            // Per-load guards: each row is a separate slice, O(1) construction cost
-            let g0 = GuardedSlice::<u8, _, 16>::new(rows[p * 2], |_| base, 0..1);
-            let g1 = GuardedSlice::<u8, _, 16>::new(rows[p * 2 + 1], |_| base, 0..1);
-            let src0 = g0.load_si128(0, _token);
-            let src1 = g1.load_si128(0, _token);
+            let src0 = _mm_loadu_si128(&row_chunks_arr[p * 2][ci]);
+            let src1 = _mm_loadu_si128(&row_chunks_arr[p * 2 + 1][ci]);
 
             let interleaved_lo = _mm_unpacklo_epi8(src0, src1);
             let interleaved_hi = _mm_unpackhi_epi8(src0, src1);
@@ -867,8 +868,7 @@ pub(crate) fn filter_v_u8_i16_v3(
         }
 
         if odd {
-            let g = GuardedSlice::<u8, _, 16>::new(rows[num_rows - 1], |_| base, 0..1);
-            let src = g.load_si128(0, _token);
+            let src = _mm_loadu_si128(&row_chunks_arr[num_rows - 1][ci]);
             let zero_src = _mm_setzero_si128();
 
             let interleaved_lo = _mm_unpacklo_epi8(src, zero_src);
@@ -897,18 +897,18 @@ pub(crate) fn filter_v_u8_i16_v3(
         let pack23 = _mm_packs_epi32(hi_lo, hi_hi);
         let result = _mm_packus_epi16(pack01, pack23);
 
-        out_guard.store_si128(chunk, result, _token);
+        _mm_storeu_si128(out_chunk, result);
     }
 
-    // Scalar tail (out_guard dropped, output available)
-    let tail_start = chunks16 * 16;
-    for x in tail_start..width {
+    // Scalar tail
+    let tail_start = out_chunks.len() * 16;
+    for (x, out_byte) in out_tail.iter_mut().enumerate() {
         let mut acc: i32 = 0;
         for (row, &w) in rows.iter().zip(weights.iter()) {
-            acc += row[x] as i32 * w as i32;
+            acc += row[tail_start + x] as i32 * w as i32;
         }
         let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
-        output[x] = rounded.clamp(0, 255) as u8;
+        *out_byte = rounded.clamp(0, 255) as u8;
     }
 }
 
@@ -931,24 +931,29 @@ pub(crate) fn filter_v_all_u8_i16_v3(
     let chunks16 = h_row_len / 16;
     let in_h_i32 = in_h as i32;
 
+    // Pre-chunk all intermediate rows for direct indexing.
+    // Each row's chunked view is stored once, reused across output rows.
+    let mut int_row_chunks: Vec<&[[u8; 16]]> = Vec::with_capacity(in_h);
+    for y in 0..in_h {
+        let row = &intermediate[y * h_row_len..y * h_row_len + h_row_len];
+        int_row_chunks.push(row.as_chunks::<16>().0);
+    }
+
     for out_y in 0..out_h {
         let left = weights.left[out_y];
         let tap_count = weights.tap_count(out_y);
         let w = weights.weights(out_y);
         let out_base = out_y * h_row_len;
 
-        // Pre-compute paired weights and row offsets for this output row.
+        // Pre-compute paired weights and clamped row indices for this output row.
         let pairs = tap_count / 2;
         let odd = tap_count % 2 != 0;
 
-        // Stack arrays: row byte offsets and paired weight vectors.
-        // 128 taps max (Lanczos3 at 10× downscale).
-        let mut row_offsets = [0usize; 128];
+        let mut row_indices = [0usize; 128];
         let mut paired_wts = [_mm256_setzero_si256(); 64];
 
         for t in 0..tap_count {
-            let in_y = (left + t as i32).clamp(0, in_h_i32 - 1) as usize;
-            row_offsets[t] = in_y * h_row_len;
+            row_indices[t] = (left + t as i32).clamp(0, in_h_i32 - 1) as usize;
         }
         for p in 0..pairs {
             let w0 = w[p * 2] as i32;
@@ -961,81 +966,66 @@ pub(crate) fn filter_v_all_u8_i16_v3(
             _mm256_setzero_si256()
         };
 
-        // 2D guard on intermediate: (tap, chunk) → row_offsets[tap] + chunk * 16
-        // row_offsets is monotonically non-decreasing (clamped row indices).
-        let int_guard = GuardedSlice2D::<u8, _, 16>::new(
-            intermediate,
-            |tap, chunk| row_offsets[tap] + chunk * 16,
-            0..tap_count,
-            0..chunks16,
-        );
+        let (out_chunks, out_tail) =
+            output[out_base..out_base + h_row_len].as_chunks_mut::<16>();
 
-        // Output guard scoped to this row's SIMD region; dropped before scalar tail.
-        {
-            let mut out_guard = GuardedSliceMut::<u8, _, 16>::new(
-                &mut output[out_base..out_base + h_row_len],
-                |c| c * 16,
-                0..chunks16,
-            );
+        for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
+            let mut acc_lo = _mm256_setzero_si256();
+            let mut acc_hi = _mm256_setzero_si256();
 
-            for chunk in 0..chunks16 {
-                let mut acc_lo = _mm256_setzero_si256();
-                let mut acc_hi = _mm256_setzero_si256();
+            for p in 0..pairs {
+                let pw = paired_wts[p];
+                let src0 = _mm_loadu_si128(&int_row_chunks[row_indices[p * 2]][ci]);
+                let src1 = _mm_loadu_si128(&int_row_chunks[row_indices[p * 2 + 1]][ci]);
 
-                for p in 0..pairs {
-                    let pw = paired_wts[p];
-                    let src0 = int_guard.load_si128(p * 2, chunk, _token);
-                    let src1 = int_guard.load_si128(p * 2 + 1, chunk, _token);
+                let il_lo = _mm_unpacklo_epi8(src0, src1);
+                let il_hi = _mm_unpackhi_epi8(src0, src1);
 
-                    let il_lo = _mm_unpacklo_epi8(src0, src1);
-                    let il_hi = _mm_unpackhi_epi8(src0, src1);
+                let ext_lo = _mm256_cvtepu8_epi16(il_lo);
+                let ext_hi = _mm256_cvtepu8_epi16(il_hi);
 
-                    let ext_lo = _mm256_cvtepu8_epi16(il_lo);
-                    let ext_hi = _mm256_cvtepu8_epi16(il_hi);
-
-                    acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, pw));
-                    acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, pw));
-                }
-
-                if odd {
-                    let src = int_guard.load_si128(tap_count - 1, chunk, _token);
-                    let zero_src = _mm_setzero_si128();
-                    let il_lo = _mm_unpacklo_epi8(src, zero_src);
-                    let il_hi = _mm_unpackhi_epi8(src, zero_src);
-                    let ext_lo = _mm256_cvtepu8_epi16(il_lo);
-                    let ext_hi = _mm256_cvtepu8_epi16(il_hi);
-                    acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, odd_weight));
-                    acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, odd_weight));
-                }
-
-                let rounded_lo = _mm256_add_epi32(acc_lo, half);
-                let rounded_hi = _mm256_add_epi32(acc_hi, half);
-                let shifted_lo = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded_lo);
-                let shifted_hi = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded_hi);
-
-                let lo_lo = _mm256_castsi256_si128(shifted_lo);
-                let lo_hi = _mm256_extracti128_si256::<1>(shifted_lo);
-                let hi_lo = _mm256_castsi256_si128(shifted_hi);
-                let hi_hi = _mm256_extracti128_si256::<1>(shifted_hi);
-
-                let pack01 = _mm_packs_epi32(lo_lo, lo_hi);
-                let pack23 = _mm_packs_epi32(hi_lo, hi_hi);
-                let result = _mm_packus_epi16(pack01, pack23);
-
-                out_guard.store_si128(chunk, result, _token);
+                acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, pw));
+                acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, pw));
             }
+
+            if odd {
+                let src = _mm_loadu_si128(&int_row_chunks[row_indices[tap_count - 1]][ci]);
+                let zero_src = _mm_setzero_si128();
+                let il_lo = _mm_unpacklo_epi8(src, zero_src);
+                let il_hi = _mm_unpackhi_epi8(src, zero_src);
+                let ext_lo = _mm256_cvtepu8_epi16(il_lo);
+                let ext_hi = _mm256_cvtepu8_epi16(il_hi);
+                acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, odd_weight));
+                acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, odd_weight));
+            }
+
+            let rounded_lo = _mm256_add_epi32(acc_lo, half);
+            let rounded_hi = _mm256_add_epi32(acc_hi, half);
+            let shifted_lo = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded_lo);
+            let shifted_hi = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded_hi);
+
+            let lo_lo = _mm256_castsi256_si128(shifted_lo);
+            let lo_hi = _mm256_extracti128_si256::<1>(shifted_lo);
+            let hi_lo = _mm256_castsi256_si128(shifted_hi);
+            let hi_hi = _mm256_extracti128_si256::<1>(shifted_hi);
+
+            let pack01 = _mm_packs_epi32(lo_lo, lo_hi);
+            let pack23 = _mm_packs_epi32(hi_lo, hi_hi);
+            let result = _mm_packus_epi16(pack01, pack23);
+
+            _mm_storeu_si128(out_chunk, result);
         }
 
-        // Scalar tail (out_guard dropped, output available)
+        // Scalar tail
         let tail_start = chunks16 * 16;
-        for x in tail_start..h_row_len {
+        for (x, out_byte) in out_tail.iter_mut().enumerate() {
             let mut acc: i32 = 0;
             for t in 0..tap_count {
-                let in_y = (left + t as i32).clamp(0, in_h_i32 - 1) as usize;
-                acc += intermediate[in_y * h_row_len + x] as i32 * w[t] as i32;
+                let in_y = row_indices[t];
+                acc += intermediate[in_y * h_row_len + tail_start + x] as i32 * w[t] as i32;
             }
             let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
-            output[out_base + x] = rounded.clamp(0, 255) as u8;
+            *out_byte = rounded.clamp(0, 255) as u8;
         }
     }
 }
