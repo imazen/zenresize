@@ -1,14 +1,15 @@
-//! AArch64 NEON convolution kernels via portable `wide` SIMD.
+//! WASM SIMD128 convolution kernels via portable `wide` SIMD.
 //!
 //! All implementations delegate to `wide_kernels` which uses `wide` crate types
-//! (f32x4, i16x8, etc.) that compile to NEON instructions on AArch64.
+//! (f32x4, i16x8, etc.) that compile to WASM SIMD128 instructions when built
+//! with `-C target-feature=+simd128`.
 
 use crate::weights::{F32WeightTable, I16WeightTable};
-use archmage::NeonToken;
+use archmage::Wasm128Token;
 
 #[archmage::arcane]
-pub(crate) fn filter_h_row_f32_neon(
-    _token: NeonToken,
+pub(crate) fn filter_h_row_f32_wasm128(
+    _token: Wasm128Token,
     input: &[f32],
     output: &mut [f32],
     weights: &F32WeightTable,
@@ -18,8 +19,8 @@ pub(crate) fn filter_h_row_f32_neon(
 }
 
 #[archmage::arcane]
-pub(crate) fn filter_v_row_f32_neon(
-    _token: NeonToken,
+pub(crate) fn filter_v_row_f32_wasm128(
+    _token: Wasm128Token,
     rows: &[&[f32]],
     output: &mut [f32],
     weights: &[f32],
@@ -28,28 +29,28 @@ pub(crate) fn filter_v_row_f32_neon(
 }
 
 #[archmage::arcane]
-pub(crate) fn u8_to_f32_row_neon(_token: NeonToken, input: &[u8], output: &mut [f32]) {
+pub(crate) fn u8_to_f32_row_wasm128(_token: Wasm128Token, input: &[u8], output: &mut [f32]) {
     super::wide_kernels::u8_to_f32_row(input, output)
 }
 
 #[archmage::arcane]
-pub(crate) fn f32_to_u8_row_neon(_token: NeonToken, input: &[f32], output: &mut [u8]) {
+pub(crate) fn f32_to_u8_row_wasm128(_token: Wasm128Token, input: &[f32], output: &mut [u8]) {
     super::wide_kernels::f32_to_u8_row(input, output)
 }
 
 #[archmage::arcane]
-pub(crate) fn premultiply_alpha_row_neon(_token: NeonToken, row: &mut [f32]) {
+pub(crate) fn premultiply_alpha_row_wasm128(_token: Wasm128Token, row: &mut [f32]) {
     super::wide_kernels::premultiply_alpha_row(row)
 }
 
 #[archmage::arcane]
-pub(crate) fn unpremultiply_alpha_row_neon(_token: NeonToken, row: &mut [f32]) {
+pub(crate) fn unpremultiply_alpha_row_wasm128(_token: Wasm128Token, row: &mut [f32]) {
     super::wide_kernels::unpremultiply_alpha_row(row)
 }
 
 #[archmage::arcane]
-pub(crate) fn filter_h_u8_i16_neon(
-    _token: NeonToken,
+pub(crate) fn filter_h_u8_i16_wasm128(
+    _token: Wasm128Token,
     input: &[u8],
     output: &mut [u8],
     weights: &I16WeightTable,
@@ -59,8 +60,8 @@ pub(crate) fn filter_h_u8_i16_neon(
 }
 
 #[archmage::arcane]
-pub(crate) fn filter_h_u8_i16_4rows_neon(
-    _token: NeonToken,
+pub(crate) fn filter_h_u8_i16_4rows_wasm128(
+    _token: Wasm128Token,
     in0: &[u8],
     in1: &[u8],
     in2: &[u8],
@@ -75,8 +76,8 @@ pub(crate) fn filter_h_u8_i16_4rows_neon(
 }
 
 #[archmage::arcane]
-pub(crate) fn filter_v_u8_i16_neon(
-    _token: NeonToken,
+pub(crate) fn filter_v_u8_i16_wasm128(
+    _token: Wasm128Token,
     rows: &[&[u8]],
     output: &mut [u8],
     weights: &[i16],
@@ -85,8 +86,8 @@ pub(crate) fn filter_v_u8_i16_neon(
 }
 
 #[archmage::arcane]
-pub(crate) fn filter_v_all_u8_i16_neon(
-    _token: NeonToken,
+pub(crate) fn filter_v_all_u8_i16_wasm128(
+    _token: Wasm128Token,
     intermediate: &[u8],
     output: &mut [u8],
     h_row_len: usize,
@@ -98,11 +99,11 @@ pub(crate) fn filter_v_all_u8_i16_neon(
 }
 
 #[archmage::arcane]
-pub(crate) fn premultiply_u8_row_neon(_token: NeonToken, input: &[u8], output: &mut [u8]) {
+pub(crate) fn premultiply_u8_row_wasm128(_token: Wasm128Token, input: &[u8], output: &mut [u8]) {
     super::wide_kernels::premultiply_u8_row(input, output)
 }
 
 #[archmage::arcane]
-pub(crate) fn unpremultiply_u8_row_neon(_token: NeonToken, row: &mut [u8]) {
+pub(crate) fn unpremultiply_u8_row_wasm128(_token: Wasm128Token, row: &mut [u8]) {
     super::wide_kernels::unpremultiply_u8_row(row)
 }

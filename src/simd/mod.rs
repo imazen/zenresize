@@ -2,7 +2,8 @@
 //!
 //! Uses archmage incant! dispatch to select the best available implementation:
 //! - x86_64: AVX2+FMA (X64V3Token)
-//! - AArch64: NEON (NeonToken)
+//! - AArch64: NEON via wide (NeonToken)
+//! - WASM32: SIMD128 via wide (Wasm128Token)
 //! - Fallback: Scalar
 
 #![allow(unsafe_code)]
@@ -17,11 +18,21 @@ mod x86;
 #[allow(unused_imports)]
 use x86::*;
 
+// Portable wide SIMD kernels (shared by NEON and WASM128)
+#[cfg(any(target_arch = "aarch64", target_arch = "wasm32"))]
+mod wide_kernels;
+
 #[cfg(target_arch = "aarch64")]
 mod neon;
 #[cfg(target_arch = "aarch64")]
 #[allow(unused_imports)]
 use neon::*;
+
+#[cfg(target_arch = "wasm32")]
+mod wasm128;
+#[cfg(target_arch = "wasm32")]
+#[allow(unused_imports)]
+use wasm128::*;
 
 use crate::weights::{F32WeightTable, I16WeightTable};
 
