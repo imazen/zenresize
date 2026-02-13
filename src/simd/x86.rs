@@ -167,27 +167,38 @@ pub(crate) fn filter_h_row_f32_v3(
 /// Uses 4 independent accumulators to break the serial FMA dependency chain.
 /// FMA latency is 4 cycles, throughput is 2/cycle — with 4 independent chains
 /// the CPU's out-of-order engine can keep both FMA ports busy.
+///
+/// Fixed `max_taps` loop count enables LLVM unrolling. Edge pixels that would
+/// read beyond the input are handled by clamping to the last valid pixel;
+/// the zero-padded weights ensure these clamped reads don't affect the result.
 #[archmage::rite]
 fn filter_h_4ch(_token: X64V3Token, input: &[f32], output: &mut [f32], weights: &F32WeightTable) {
     let out_width = weights.len();
+    let max_taps = weights.max_taps;
+    let in_pixels = input.len() / 4;
+    let max_pixel = in_pixels - 1;
     let mut out_guard = GuardedSliceMut::<f32, _, 4>::new(output, |x| x * 4, 0..out_width);
+
+    // Single guard for all pixel loads across all output pixels.
+    // Clamping ensures edge pixels read from the last valid position;
+    // zero-padded weights make these clamped reads contribute nothing.
+    let in_guard = GuardedSlice::<f32, _, 4>::new(
+        input,
+        |px| px.min(max_pixel) * 4,
+        0..in_pixels + max_taps,
+    );
+
+    let chunks4 = max_taps / 4;
+    let remainder = max_taps % 4;
 
     for out_x in 0..out_width {
         let left = weights.left[out_x] as usize;
-        let w = weights.weights(out_x);
-        let taps = w.len();
-        let base_in = left * 4;
-
-        // Guard: reads 4 f32 (one RGBA pixel) at base_in + t * 4 for t in 0..taps
-        let in_guard = GuardedSlice::<f32, _, 4>::new(input, |t| base_in + t * 4, 0..taps);
+        let w = weights.weights_padded(out_x);
 
         let mut acc0 = _mm_setzero_ps();
         let mut acc1 = _mm_setzero_ps();
         let mut acc2 = _mm_setzero_ps();
         let mut acc3 = _mm_setzero_ps();
-
-        let chunks4 = taps / 4;
-        let remainder = taps % 4;
 
         for c in 0..chunks4 {
             let t = c * 4;
@@ -196,10 +207,10 @@ fn filter_h_4ch(_token: X64V3Token, input: &[f32], output: &mut [f32], weights: 
             let w2 = _mm_set1_ps(w[t + 2]);
             let w3 = _mm_set1_ps(w[t + 3]);
 
-            let p0 = in_guard.load_ps(t, _token);
-            let p1 = in_guard.load_ps(t + 1, _token);
-            let p2 = in_guard.load_ps(t + 2, _token);
-            let p3 = in_guard.load_ps(t + 3, _token);
+            let p0 = in_guard.load_ps(left + t, _token);
+            let p1 = in_guard.load_ps(left + t + 1, _token);
+            let p2 = in_guard.load_ps(left + t + 2, _token);
+            let p3 = in_guard.load_ps(left + t + 3, _token);
 
             acc0 = _mm_fmadd_ps(p0, w0, acc0);
             acc1 = _mm_fmadd_ps(p1, w1, acc1);
@@ -211,7 +222,7 @@ fn filter_h_4ch(_token: X64V3Token, input: &[f32], output: &mut [f32], weights: 
         for t in 0..remainder {
             let tt = t_start + t;
             let w_val = _mm_set1_ps(w[tt]);
-            let pixel = in_guard.load_ps(tt, _token);
+            let pixel = in_guard.load_ps(left + tt, _token);
             acc0 = _mm_fmadd_ps(pixel, w_val, acc0);
         }
 
