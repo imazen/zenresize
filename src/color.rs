@@ -5,42 +5,37 @@
 
 /// Convert a row of sRGB u8 pixels to linear f32.
 ///
-/// The output slice must have the same number of elements as the input.
+/// Uses LUT-based batch conversion (~20x faster than per-pixel scalar powf).
 /// Alpha channels (if `has_alpha` is true and `channels` is 4) are copied
 /// as-is (divided by 255.0 but not gamma-converted).
 pub fn srgb_u8_to_linear_f32(input: &[u8], output: &mut [f32], channels: usize, has_alpha: bool) {
     debug_assert_eq!(input.len(), output.len());
 
+    // Batch LUT conversion: all channels including alpha go through sRGB curve
+    linear_srgb::default::srgb_u8_to_linear_slice(input, output);
+
+    // Fix alpha: should be linear scale (v/255), not sRGB curve
     if has_alpha && channels == 4 {
         for (chunk_in, chunk_out) in input.chunks_exact(4).zip(output.chunks_exact_mut(4)) {
-            chunk_out[0] = linear_srgb::scalar::srgb_to_linear(chunk_in[0] as f32 / 255.0);
-            chunk_out[1] = linear_srgb::scalar::srgb_to_linear(chunk_in[1] as f32 / 255.0);
-            chunk_out[2] = linear_srgb::scalar::srgb_to_linear(chunk_in[2] as f32 / 255.0);
-            chunk_out[3] = chunk_in[3] as f32 / 255.0; // alpha: no gamma
-        }
-    } else {
-        for (inp, out) in input.iter().zip(output.iter_mut()) {
-            *out = linear_srgb::scalar::srgb_to_linear(*inp as f32 / 255.0);
+            chunk_out[3] = chunk_in[3] as f32 / 255.0;
         }
     }
 }
 
 /// Convert a row of linear f32 pixels to sRGB u8.
 ///
+/// Uses SIMD-accelerated batch conversion.
 /// Alpha channels are copied as-is (scaled by 255 but not gamma-converted).
 pub fn linear_f32_to_srgb_u8(input: &[f32], output: &mut [u8], channels: usize, has_alpha: bool) {
     debug_assert_eq!(input.len(), output.len());
 
+    // SIMD batch conversion: all channels including alpha go through sRGB curve
+    linear_srgb::default::linear_to_srgb_u8_slice(input, output);
+
+    // Fix alpha: should be linear scale (v*255+0.5), not sRGB curve
     if has_alpha && channels == 4 {
         for (chunk_in, chunk_out) in input.chunks_exact(4).zip(output.chunks_exact_mut(4)) {
-            chunk_out[0] = (linear_srgb::scalar::linear_to_srgb(chunk_in[0]) * 255.0 + 0.5) as u8;
-            chunk_out[1] = (linear_srgb::scalar::linear_to_srgb(chunk_in[1]) * 255.0 + 0.5) as u8;
-            chunk_out[2] = (linear_srgb::scalar::linear_to_srgb(chunk_in[2]) * 255.0 + 0.5) as u8;
-            chunk_out[3] = (chunk_in[3] * 255.0 + 0.5) as u8; // alpha: no gamma
-        }
-    } else {
-        for (inp, out) in input.iter().zip(output.iter_mut()) {
-            *out = (linear_srgb::scalar::linear_to_srgb(*inp) * 255.0 + 0.5) as u8;
+            chunk_out[3] = (chunk_in[3] * 255.0 + 0.5) as u8;
         }
     }
 }
