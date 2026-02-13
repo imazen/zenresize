@@ -1,5 +1,4 @@
 //! x86-64 AVX2+FMA convolution and conversion kernels.
-#![cfg_attr(feature = "unsafe_kernels", allow(unsafe_code))]
 // Range loops in SIMD kernels index into multiple arrays (weights, pixels, chunks)
 // simultaneously. Iterator refactoring would hurt readability and risk codegen regressions.
 #![allow(clippy::needless_range_loop)]
@@ -22,30 +21,6 @@ use safe_unaligned_simd::x86_64::{
     _mm_loadu_ps, _mm_loadu_si32, _mm_loadu_si64, _mm_loadu_si128, _mm_storeu_ps, _mm_storeu_si64,
     _mm_storeu_si128, _mm256_loadu_ps, _mm256_loadu_si256, _mm256_storeu_ps,
 };
-
-/// Load a `[u8; 16]` chunk from a 2D collection of pre-chunked rows.
-///
-/// Indexes first by row, then by chunk position within that row.
-/// With `unsafe_kernels`, both levels use unchecked indexing.
-#[archmage::rite]
-#[allow(unsafe_code)]
-fn load_v_chunk(
-    _token: X64V3Token,
-    row_chunks: &[&[[u8; 16]]],
-    row_idx: usize,
-    chunk_idx: usize,
-) -> __m128i {
-    #[cfg(feature = "unsafe_kernels")]
-    {
-        // SAFETY: row_idx is clamped to 0..in_h (row_chunks.len() == in_h).
-        // chunk_idx = ci < chunks16 = h_row_len/16, all rows have h_row_len bytes.
-        unsafe { _mm_loadu_si128(row_chunks.get_unchecked(row_idx).get_unchecked(chunk_idx)) }
-    }
-    #[cfg(not(feature = "unsafe_kernels"))]
-    {
-        _mm_loadu_si128(&row_chunks[row_idx][chunk_idx])
-    }
-}
 
 // =============================================================================
 // Color conversion kernels
@@ -911,10 +886,14 @@ pub(crate) fn filter_v_all_u8_i16_v3(
         } else {
             _mm256_setzero_si256()
         };
-        // Hoist odd row index out of the inner loop (one bounds check per output row).
-        let odd_row_idx = if odd { row_indices[tap_count - 1] } else { 0 };
-
         let (out_chunks, out_tail) = output[out_base..out_base + h_row_len].as_chunks_mut::<16>();
+
+        // Pre-fetch row chunk slices for this output row's taps.
+        // Slicing to [..chunks16] proves inner-loop [ci] accesses are in bounds.
+        let tap_rows: Vec<&[[u8; 16]]> = row_indices[..tap_count]
+            .iter()
+            .map(|&ri| &int_row_chunks[ri][..chunks16])
+            .collect();
 
         for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
             let mut acc_lo = _mm256_setzero_si256();
@@ -922,10 +901,10 @@ pub(crate) fn filter_v_all_u8_i16_v3(
 
             for (pw, ri_pair) in paired_wts[..pairs]
                 .iter()
-                .zip(row_indices[..tap_count].chunks_exact(2))
+                .zip(tap_rows.chunks_exact(2))
             {
-                let src0 = load_v_chunk(_token, &int_row_chunks, ri_pair[0], ci);
-                let src1 = load_v_chunk(_token, &int_row_chunks, ri_pair[1], ci);
+                let src0 = _mm_loadu_si128(&ri_pair[0][ci]);
+                let src1 = _mm_loadu_si128(&ri_pair[1][ci]);
 
                 let il_lo = _mm_unpacklo_epi8(src0, src1);
                 let il_hi = _mm_unpackhi_epi8(src0, src1);
@@ -938,7 +917,7 @@ pub(crate) fn filter_v_all_u8_i16_v3(
             }
 
             if odd {
-                let src = load_v_chunk(_token, &int_row_chunks, odd_row_idx, ci);
+                let src = _mm_loadu_si128(&tap_rows[tap_count - 1][ci]);
                 let zero_src = _mm_setzero_si128();
                 let il_lo = _mm_unpacklo_epi8(src, zero_src);
                 let il_hi = _mm_unpackhi_epi8(src, zero_src);
