@@ -767,6 +767,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pic-scale-safe"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ffa06aef7cfec71a2157d1b98ab15acd60757ee0fd5e2e93fcb93a41d1ebda0"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "plain"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1499,6 +1508,7 @@ dependencies = [
  "imgref",
  "linear-srgb",
  "pic-scale",
+ "pic-scale-safe",
  "resize",
  "rgb",
  "safe_unaligned_simd",

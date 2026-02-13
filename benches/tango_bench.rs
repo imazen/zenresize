@@ -157,6 +157,20 @@ fn competitor_benchmarks() -> impl IntoBenchmarks {
                 black_box(dst.as_bytes().to_vec())
             })
         }),
+        benchmark_fn("picscale_safe/srgb/down50/1024", |b| {
+            let img = test_image(1024, 1024);
+            b.iter(move || {
+                use pic_scale_safe::*;
+                let src_size = ImageSize::new(img.width as usize, img.height as usize);
+                let dst_size = ImageSize::new(512, 512);
+                let mut src = img.rgba.clone();
+                image_to_linear::<4>(&mut src, TransferFunction::Srgb);
+                let mut result =
+                    resize_rgba8(&src, src_size, dst_size, ResamplingFunction::Lanczos3).unwrap();
+                linear_to_gamma_image::<4>(&mut result, TransferFunction::Srgb);
+                black_box(result)
+            })
+        }),
         benchmark_fn("fir/srgb/down50/1024", |b| {
             let img = test_image(1024, 1024);
             b.iter(move || {

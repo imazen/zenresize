@@ -154,6 +154,25 @@ fn run_fir_linear(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     dst.into_vec()
 }
 
+fn run_picscale_safe_srgb(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
+    use pic_scale_safe::*;
+    let src_size = ImageSize::new(img.width as usize, img.height as usize);
+    let dst_size = ImageSize::new(out_w as usize, out_h as usize);
+    // sRGB-aware: linearize, resize, re-gamma
+    let mut src = img.rgba.clone();
+    image_to_linear::<4>(&mut src, TransferFunction::Srgb);
+    let mut result = resize_rgba8(&src, src_size, dst_size, ResamplingFunction::Lanczos3).unwrap();
+    linear_to_gamma_image::<4>(&mut result, TransferFunction::Srgb);
+    result
+}
+
+fn run_picscale_safe_linear(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
+    use pic_scale_safe::*;
+    let src_size = ImageSize::new(img.width as usize, img.height as usize);
+    let dst_size = ImageSize::new(out_w as usize, out_h as usize);
+    resize_rgba8(&img.rgba, src_size, dst_size, ResamplingFunction::Lanczos3).unwrap()
+}
+
 fn run_resize_crate(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     use rgb::FromSlice;
     let mut dst = vec![0u8; out_w as usize * out_h as usize * 4];
@@ -290,6 +309,14 @@ fn main() {
         Contender {
             name: Box::leak(format!("pic_scale_{ps_label}_lin").into_boxed_str()),
             func: run_picscale_linear,
+        },
+        Contender {
+            name: "pic_scale_safe_srgb",
+            func: run_picscale_safe_srgb,
+        },
+        Contender {
+            name: "pic_scale_safe_lin",
+            func: run_picscale_safe_linear,
         },
         Contender {
             name: "fir_srgb",
