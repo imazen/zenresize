@@ -6,7 +6,7 @@
 //! Run with `cargo test --test dispatch_tiers -- --test-threads=1`
 //! for accurate results (token disabling is process-wide).
 
-use archmage::testing::{for_each_token_permutation, CompileTimePolicy};
+use archmage::testing::{CompileTimePolicy, for_each_token_permutation};
 use zenresize::filter::Filter;
 use zenresize::pixel::{PixelFormat, ResizeConfig};
 use zenresize::resize::resize;
