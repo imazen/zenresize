@@ -825,8 +825,7 @@ pub(crate) fn filter_v_u8_i16_v3(
     let pairs = num_rows / 2;
     let odd = num_rows % 2 != 0;
 
-    assert!(num_rows <= 128, "V kernel: too many taps ({num_rows} > 128)");
-    let mut paired_weights = [_mm256_setzero_si256(); 64];
+    let mut paired_weights = vec![_mm256_setzero_si256(); pairs];
     for p in 0..pairs {
         let w0 = weights[p * 2] as i32;
         let w1 = weights[p * 2 + 1] as i32;
@@ -841,10 +840,7 @@ pub(crate) fn filter_v_u8_i16_v3(
     let (out_chunks, out_tail) = output.as_chunks_mut::<16>();
 
     // Pre-chunk all rows for direct indexing
-    let mut row_chunks_arr: [&[[u8; 16]]; 128] = [&[]; 128];
-    for (i, row) in rows.iter().enumerate() {
-        row_chunks_arr[i] = row.as_chunks::<16>().0;
-    }
+    let row_chunks_arr: Vec<&[[u8; 16]]> = rows.iter().map(|r| r.as_chunks::<16>().0).collect();
 
     for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
         let mut acc_lo = _mm256_setzero_si256();
@@ -937,6 +933,11 @@ pub(crate) fn filter_v_all_u8_i16_v3(
         int_row_chunks.push(row.as_chunks::<16>().0);
     }
 
+    // Allocate working buffers once, sized for max tap count.
+    let max_taps = weights.max_taps;
+    let mut row_indices = vec![0usize; max_taps];
+    let mut paired_wts = vec![_mm256_setzero_si256(); (max_taps + 1) / 2];
+
     for out_y in 0..out_h {
         let left = weights.left[out_y];
         let tap_count = weights.tap_count(out_y);
@@ -946,9 +947,6 @@ pub(crate) fn filter_v_all_u8_i16_v3(
         // Pre-compute paired weights and clamped row indices for this output row.
         let pairs = tap_count / 2;
         let odd = tap_count % 2 != 0;
-
-        let mut row_indices = [0usize; 128];
-        let mut paired_wts = [_mm256_setzero_si256(); 64];
 
         for t in 0..tap_count {
             row_indices[t] = (left + t as i32).clamp(0, in_h_i32 - 1) as usize;

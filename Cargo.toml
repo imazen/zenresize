@@ -31,7 +31,7 @@ rgb = { version = "0.8", optional = true, default-features = false }
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # Competitors
 pic-scale = "0.6"
