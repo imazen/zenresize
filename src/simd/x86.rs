@@ -38,6 +38,50 @@ fn load_si128_at(_token: X64V3Token, slice: &[u8], offset: usize) -> __m128i {
     }
 }
 
+/// Load a `[u8; 16]` chunk from pre-chunked row data by chunk index.
+///
+/// With the default (safe) build, this uses standard bounds checking.
+/// With `unsafe_kernels`, this uses unchecked indexing for V kernel inner loops
+/// where chunk indices are pre-validated (ci < chunks16, all rows same length).
+#[archmage::rite]
+#[allow(unsafe_code)]
+fn load_chunk(_token: X64V3Token, chunks: &[[u8; 16]], idx: usize) -> __m128i {
+    #[cfg(feature = "unsafe_kernels")]
+    {
+        // SAFETY: idx must be < chunks.len(). Callers ensure idx = ci < chunks16
+        // where chunks16 = h_row_len / 16 and all rows have h_row_len bytes.
+        unsafe { _mm_loadu_si128(chunks.get_unchecked(idx)) }
+    }
+    #[cfg(not(feature = "unsafe_kernels"))]
+    {
+        _mm_loadu_si128(&chunks[idx])
+    }
+}
+
+/// Load a `[u8; 16]` chunk from a 2D collection of pre-chunked rows.
+///
+/// Indexes first by row, then by chunk position within that row.
+/// With `unsafe_kernels`, both levels use unchecked indexing.
+#[archmage::rite]
+#[allow(unsafe_code)]
+fn load_v_chunk(
+    _token: X64V3Token,
+    row_chunks: &[&[[u8; 16]]],
+    row_idx: usize,
+    chunk_idx: usize,
+) -> __m128i {
+    #[cfg(feature = "unsafe_kernels")]
+    {
+        // SAFETY: row_idx is clamped to 0..in_h (row_chunks.len() == in_h).
+        // chunk_idx = ci < chunks16 = h_row_len/16, all rows have h_row_len bytes.
+        unsafe { _mm_loadu_si128(row_chunks.get_unchecked(row_idx).get_unchecked(chunk_idx)) }
+    }
+    #[cfg(not(feature = "unsafe_kernels"))]
+    {
+        _mm_loadu_si128(&row_chunks[row_idx][chunk_idx])
+    }
+}
+
 // =============================================================================
 // Color conversion kernels
 // =============================================================================
@@ -872,10 +916,9 @@ pub(crate) fn filter_v_u8_i16_v3(
         let mut acc_lo = _mm256_setzero_si256();
         let mut acc_hi = _mm256_setzero_si256();
 
-        for p in 0..pairs {
-            let pw = paired_weights[p];
-            let src0 = _mm_loadu_si128(&row_chunks_arr[p * 2][ci]);
-            let src1 = _mm_loadu_si128(&row_chunks_arr[p * 2 + 1][ci]);
+        for (pw, chunk_pair) in paired_weights.iter().zip(row_chunks_arr.chunks_exact(2)) {
+            let src0 = load_chunk(_token, chunk_pair[0], ci);
+            let src1 = load_chunk(_token, chunk_pair[1], ci);
 
             let interleaved_lo = _mm_unpacklo_epi8(src0, src1);
             let interleaved_hi = _mm_unpackhi_epi8(src0, src1);
@@ -883,12 +926,12 @@ pub(crate) fn filter_v_u8_i16_v3(
             let ext_lo = _mm256_cvtepu8_epi16(interleaved_lo);
             let ext_hi = _mm256_cvtepu8_epi16(interleaved_hi);
 
-            acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, pw));
-            acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, pw));
+            acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, *pw));
+            acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, *pw));
         }
 
         if odd {
-            let src = _mm_loadu_si128(&row_chunks_arr[num_rows - 1][ci]);
+            let src = load_chunk(_token, row_chunks_arr[num_rows - 1], ci);
             let zero_src = _mm_setzero_si128();
 
             let interleaved_lo = _mm_unpacklo_epi8(src, zero_src);
@@ -987,6 +1030,8 @@ pub(crate) fn filter_v_all_u8_i16_v3(
         } else {
             _mm256_setzero_si256()
         };
+        // Hoist odd row index out of the inner loop (one bounds check per output row).
+        let odd_row_idx = if odd { row_indices[tap_count - 1] } else { 0 };
 
         let (out_chunks, out_tail) = output[out_base..out_base + h_row_len].as_chunks_mut::<16>();
 
@@ -994,10 +1039,12 @@ pub(crate) fn filter_v_all_u8_i16_v3(
             let mut acc_lo = _mm256_setzero_si256();
             let mut acc_hi = _mm256_setzero_si256();
 
-            for p in 0..pairs {
-                let pw = paired_wts[p];
-                let src0 = _mm_loadu_si128(&int_row_chunks[row_indices[p * 2]][ci]);
-                let src1 = _mm_loadu_si128(&int_row_chunks[row_indices[p * 2 + 1]][ci]);
+            for (pw, ri_pair) in paired_wts[..pairs]
+                .iter()
+                .zip(row_indices[..tap_count].chunks_exact(2))
+            {
+                let src0 = load_v_chunk(_token, &int_row_chunks, ri_pair[0], ci);
+                let src1 = load_v_chunk(_token, &int_row_chunks, ri_pair[1], ci);
 
                 let il_lo = _mm_unpacklo_epi8(src0, src1);
                 let il_hi = _mm_unpackhi_epi8(src0, src1);
@@ -1005,12 +1052,12 @@ pub(crate) fn filter_v_all_u8_i16_v3(
                 let ext_lo = _mm256_cvtepu8_epi16(il_lo);
                 let ext_hi = _mm256_cvtepu8_epi16(il_hi);
 
-                acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, pw));
-                acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, pw));
+                acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, *pw));
+                acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, *pw));
             }
 
             if odd {
-                let src = _mm_loadu_si128(&int_row_chunks[row_indices[tap_count - 1]][ci]);
+                let src = load_v_chunk(_token, &int_row_chunks, odd_row_idx, ci);
                 let zero_src = _mm_setzero_si128();
                 let il_lo = _mm_unpacklo_epi8(src, zero_src);
                 let il_hi = _mm_unpackhi_epi8(src, zero_src);
