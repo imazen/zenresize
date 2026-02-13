@@ -47,6 +47,10 @@ pub struct F32WeightTable {
 /// Weights are scaled to 14-bit precision (1 << 14 = 1.0).
 /// The flat layout stores all weights in a single contiguous allocation,
 /// zero-padded to `max_taps` per output pixel (similar to [`F32WeightTable`]).
+///
+/// Includes a pre-expanded weight format for 4-channel horizontal convolution:
+/// each group of 4 taps is broadcast into a 256-bit (16 × i16) pattern for
+/// direct ymm load+madd without per-pixel broadcasts.
 #[derive(Clone)]
 pub struct I16WeightTable {
     /// For each output pixel, the starting input pixel index.
@@ -57,6 +61,14 @@ pub struct I16WeightTable {
     tap_counts: Vec<u16>,
     /// Maximum taps across all output pixels.
     pub max_taps: usize,
+    /// Pre-expanded weights for 4ch ymm horizontal convolution.
+    /// Layout per output pixel: `groups4 × 16` i16 values.
+    /// Each group: lo lane [w0,w1]×4, hi lane [w2,w3]×4.
+    expanded_4ch: Vec<i16>,
+    /// Number of 4-tap groups (ceil(max_taps / 4)).
+    pub(crate) groups4: usize,
+    /// Stride in i16 values per output pixel in expanded_4ch.
+    pub(crate) expanded_stride: usize,
 }
 
 // =============================================================================
@@ -211,11 +223,43 @@ impl I16WeightTable {
             weights_flat[offset..offset + w.len()].copy_from_slice(w);
         }
 
+        // Pre-expand weights for 4ch ymm horizontal convolution.
+        // Each group of 4 taps [w0,w1,w2,w3] is stored as:
+        //   lo lane: [w0,w1,w0,w1,w0,w1,w0,w1]
+        //   hi lane: [w2,w3,w2,w3,w2,w3,w2,w3]
+        let groups4 = (max_taps + 3) / 4;
+        let expanded_stride = groups4 * 16;
+        let mut expanded_4ch = vec![0i16; out_size as usize * expanded_stride];
+
+        for (px, w) in all_weights.iter().enumerate() {
+            let base = px * expanded_stride;
+            for g in 0..groups4 {
+                let t = g * 4;
+                let w0 = if t < w.len() { w[t] } else { 0 };
+                let w1 = if t + 1 < w.len() { w[t + 1] } else { 0 };
+                let w2 = if t + 2 < w.len() { w[t + 2] } else { 0 };
+                let w3 = if t + 3 < w.len() { w[t + 3] } else { 0 };
+                // Lower lane: [w0,w1] repeated 4 times
+                for i in 0..4 {
+                    expanded_4ch[base + g * 16 + i * 2] = w0;
+                    expanded_4ch[base + g * 16 + i * 2 + 1] = w1;
+                }
+                // Upper lane: [w2,w3] repeated 4 times
+                for i in 0..4 {
+                    expanded_4ch[base + g * 16 + 8 + i * 2] = w2;
+                    expanded_4ch[base + g * 16 + 8 + i * 2 + 1] = w3;
+                }
+            }
+        }
+
         Self {
             left: left_vec,
             weights_flat,
             tap_counts: all_tap_counts,
             max_taps,
+            expanded_4ch,
+            groups4,
+            expanded_stride,
         }
     }
 
@@ -238,6 +282,20 @@ impl I16WeightTable {
     #[inline]
     pub fn tap_count(&self, out_pixel: usize) -> usize {
         self.tap_counts[out_pixel] as usize
+    }
+
+    /// Get pre-expanded 4ch weights for ymm horizontal convolution.
+    /// Returns `groups4 × 16` i16 values per output pixel.
+    #[inline]
+    pub fn weights_expanded_4ch(&self, out_pixel: usize) -> &[i16] {
+        let offset = out_pixel * self.expanded_stride;
+        &self.expanded_4ch[offset..offset + self.expanded_stride]
+    }
+
+    /// Pointer to the start of the expanded_4ch buffer.
+    #[inline]
+    pub fn expanded_4ch_ptr(&self) -> *const i16 {
+        self.expanded_4ch.as_ptr()
     }
 
     /// Number of output pixels.

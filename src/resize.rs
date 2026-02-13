@@ -156,12 +156,11 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
 
 /// Integer (i16 weights) fast path for sRGB-space resize.
 ///
-/// Works entirely in u8 → i32 → u8 space, avoiding all f32 conversion.
-/// The intermediate buffer is u8 (4x smaller than f32), fitting in L2 cache.
+/// Uses horizontal-first architecture with u8 intermediate buffer:
+/// 1. H pass: premul → horizontal filter → intermediate (u8, 4× smaller than f32)
+/// 2. V pass: vertical filter from intermediate → unpremul → output
 ///
-/// When `has_alpha` is true, premultiplies each input row before horizontal
-/// convolution and unpremultiplies each output row after vertical convolution.
-/// This keeps premul/unpremul in the row-level cache-hot path.
+/// The u8 intermediate fits in L2 cache, giving excellent V-pass locality.
 #[allow(clippy::too_many_arguments)]
 fn resize_into_i16(
     config: &ResizeConfig,
