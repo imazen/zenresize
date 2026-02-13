@@ -1,5 +1,10 @@
 //! x86-64 AVX2+FMA convolution and conversion kernels.
 #![cfg_attr(feature = "unsafe_kernels", allow(unsafe_code))]
+// Range loops in SIMD kernels index into multiple arrays (weights, pixels, chunks)
+// simultaneously. Iterator refactoring would hurt readability and risk codegen regressions.
+#![allow(clippy::needless_range_loop)]
+// 4-row batch functions naturally have many parameters (4 in + 4 out + weights + token).
+#![allow(clippy::too_many_arguments)]
 
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
@@ -884,7 +889,7 @@ pub(crate) fn filter_v_all_u8_i16_v3(
     // Allocate working buffers once, sized for max tap count.
     let max_taps = weights.max_taps;
     let mut row_indices = vec![0usize; max_taps];
-    let mut paired_wts = vec![_mm256_setzero_si256(); (max_taps + 1) / 2];
+    let mut paired_wts = vec![_mm256_setzero_si256(); max_taps.div_ceil(2)];
 
     for out_y in 0..out_h {
         let left = weights.left[out_y];
@@ -894,7 +899,7 @@ pub(crate) fn filter_v_all_u8_i16_v3(
 
         // Pre-compute paired weights and clamped row indices for this output row.
         let pairs = tap_count / 2;
-        let odd = tap_count % 2 != 0;
+        let odd = !tap_count.is_multiple_of(2);
 
         for t in 0..tap_count {
             row_indices[t] = (left + t as i32).clamp(0, in_h_i32 - 1) as usize;

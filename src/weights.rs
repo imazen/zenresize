@@ -227,7 +227,7 @@ impl I16WeightTable {
         // Each group of 4 taps [w0,w1,w2,w3] is stored as:
         //   lo lane: [w0,w1,w0,w1,w0,w1,w0,w1]
         //   hi lane: [w2,w3,w2,w3,w2,w3,w2,w3]
-        let groups4 = (max_taps + 3) / 4;
+        let groups4 = max_taps.div_ceil(4);
         let expanded_stride = groups4 * 16;
         let mut expanded_4ch = vec![0i16; out_size as usize * expanded_stride];
 

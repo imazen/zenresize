@@ -1,4 +1,5 @@
 //! Scalar fallback convolution kernels.
+#![allow(clippy::too_many_arguments)]
 
 use crate::weights::{F32WeightTable, I16_PRECISION, I16WeightTable};
 use archmage::ScalarToken;
@@ -161,9 +162,9 @@ pub(crate) fn filter_v_all_u8_i16_scalar(
 
         for x in 0..h_row_len {
             let mut acc: i32 = 0;
-            for t in 0..tap_count {
+            for (t, &weight) in w[..tap_count].iter().enumerate() {
                 let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                acc += intermediate[in_y * h_row_len + x] as i32 * w[t] as i32;
+                acc += intermediate[in_y * h_row_len + x] as i32 * weight as i32;
             }
             let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
             output[out_start + x] = rounded.clamp(0, 255) as u8;

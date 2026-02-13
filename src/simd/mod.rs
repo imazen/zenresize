@@ -5,6 +5,7 @@
 //! - AArch64: NEON via wide (NeonToken)
 //! - WASM32: SIMD128 via wide (Wasm128Token)
 //! - Fallback: Scalar
+#![allow(clippy::too_many_arguments)]
 
 mod scalar;
 #[allow(unused_imports)]
