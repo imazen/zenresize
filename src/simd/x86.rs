@@ -901,10 +901,7 @@ pub(crate) fn filter_v_all_u8_i16_v3(
             let mut acc_lo = _mm256_setzero_si256();
             let mut acc_hi = _mm256_setzero_si256();
 
-            for (pw, ri_pair) in paired_wts[..pairs]
-                .iter()
-                .zip(tap_rows.chunks_exact(2))
-            {
+            for (pw, ri_pair) in paired_wts[..pairs].iter().zip(tap_rows.chunks_exact(2)) {
                 let src0 = _mm_loadu_si128(&ri_pair[0][ci]);
                 let src1 = _mm_loadu_si128(&ri_pair[1][ci]);
 

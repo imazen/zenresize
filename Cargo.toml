@@ -14,9 +14,11 @@ default = ["std"]
 std = ["archmage/std", "linear-srgb/std", "wide/std"]
 avx512 = ["archmage/avx512"]
 imgref = ["dep:imgref", "dep:rgb"]
+# Enable SIMD features on pic-scale for benchmarks (default: scalar-only)
+bench-simd-competitors = ["pic-scale/sse", "pic-scale/avx", "pic-scale/rdm"]
 
 [lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512"))'] }
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512", "bench-simd-competitors"))'] }
 
 [dependencies]
 archmage = { version = "0.6", path = "../archmage", default-features = false, features = ["macros"] }
@@ -28,10 +30,11 @@ rgb = { version = "0.8", optional = true, default-features = false }
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
+tango-bench = "0.6"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
-# Competitors
-pic-scale = "0.6"
+# Competitors (pic-scale: SIMD controlled by bench-simd-competitors feature)
+pic-scale = { version = "0.6", default-features = false, features = ["colorspaces"] }
 fast_image_resize = "6"
 resize = "0.8"
 rgb = "0.8"
@@ -50,4 +53,8 @@ harness = false
 
 [[bench]]
 name = "sweep_bench"
+harness = false
+
+[[bench]]
+name = "tango_bench"
 harness = false

@@ -1,4 +1,4 @@
-//! Paired (interleaved) benchmark for fair comparison under system load.
+//! Paired (interleaved) benchmark for fair cross-library comparison.
 //!
 //! Unlike criterion which runs each benchmark to completion before the next,
 //! this interleaves measurements: A, B, A, B, ... so both experience identical
@@ -6,9 +6,11 @@
 //! difference (A_i - B_i) cancels systematic drift, giving much tighter confidence
 //! intervals for the *relative* performance.
 //!
-//! Usage: cargo bench --bench paired_bench
+//! Usage:
+//!   cargo bench --bench paired_bench                              # pic-scale scalar
+//!   cargo bench --bench paired_bench --features bench-simd-competitors  # pic-scale with SSE+AVX
 //!
-//! Inspired by tango-bench's paired methodology, adapted for cross-library comparison.
+//! For zenresize self-regression detection, use tango_bench instead.
 
 use std::time::{Duration, Instant};
 
@@ -266,6 +268,12 @@ fn main() {
     println!("Rounds: {} (interleaved A/B/B/A pattern)", rounds);
     println!();
 
+    let ps_label = if cfg!(feature = "bench-simd-competitors") {
+        "simd"
+    } else {
+        "scalar"
+    };
+
     let contenders: Vec<Contender> = vec![
         Contender {
             name: "zenresize_srgb",
@@ -276,11 +284,11 @@ fn main() {
             func: run_zenresize_linear,
         },
         Contender {
-            name: "pic_scale_srgb",
+            name: Box::leak(format!("pic_scale_{ps_label}_srgb").into_boxed_str()),
             func: run_picscale_srgb,
         },
         Contender {
-            name: "pic_scale_linear",
+            name: Box::leak(format!("pic_scale_{ps_label}_lin").into_boxed_str()),
             func: run_picscale_linear,
         },
         Contender {
