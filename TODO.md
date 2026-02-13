@@ -50,9 +50,12 @@ Added `tests/dispatch_tiers.rs` using `archmage::testing::for_each_token_permuta
 to verify all dispatch tiers produce consistent results (constant color, gradient,
 upscale). Run with `--test-threads=1` for accurate token disabling.
 
-### bytemuck chunks
-Replace manual `as_chunks` patterns with bytemuck's safe transmute/cast where
-applicable. May simplify some of the chunk-based SIMD load patterns.
+### bytemuck chunks — NOT NEEDED
+
+Evaluated: `bytemuck::cast_slice` can't replace `as_chunks` + `wide::type::new()`
+because wide SIMD types may have stricter alignment than input slice data.
+The current pattern (`as_chunks` for splitting, `::new()` for loading) is zero-overhead
+and alignment-safe. bytemuck dependency removed.
 
 ### AVX-512 support
 Add AVX-512 kernel variants behind the existing `avx512` feature flag.

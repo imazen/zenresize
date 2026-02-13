@@ -27,7 +27,6 @@ archmage = { version = "0.6", path = "../archmage", default-features = false, fe
 linear-srgb = { version = "0.4", path = "../linear-srgb", default-features = false }
 safe_unaligned_simd = "0.2.4"
 wide = { version = "1.1", default-features = false }
-bytemuck = { version = "1", default-features = false }
 imgref = { version = "1.12", optional = true }
 rgb = { version = "0.8", optional = true, default-features = false }
 
