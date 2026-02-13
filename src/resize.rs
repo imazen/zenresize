@@ -183,7 +183,16 @@ fn resize_into_i16(
     let h_row_len = out_w * channels;
 
     // u8 intermediate: 4x smaller than f32 → fits in L2 cache.
-    let mut intermediate = vec![0u8; h_row_len * in_h];
+    // Skip zeroing — every byte is written by the H pass before being read.
+    let mut intermediate = {
+        let len = h_row_len * in_h;
+        let mut v = Vec::with_capacity(len);
+        #[allow(unsafe_code)]
+        // SAFETY: H pass writes every element in intermediate[0..len] before V pass reads.
+        // The 4-row batch covers (in_h / 4) * 4 rows, remainder loop covers the rest.
+        unsafe { v.set_len(len) };
+        v
+    };
 
     // Temp buffer for premultiplied input row (reused per row, L1-hot).
     let mut premul_buf = if has_alpha {
@@ -312,7 +321,14 @@ impl Resizer {
         if !linearize && channels == 4 {
             let h_weights = I16WeightTable::new(config.in_width, config.out_width, &filter);
             let v_weights = I16WeightTable::new(config.in_height, config.out_height, &filter);
-            let intermediate = vec![0u8; h_row_len * in_h];
+            let intermediate = {
+                let len = h_row_len * in_h;
+                let mut v = Vec::with_capacity(len);
+                #[allow(unsafe_code)]
+                // SAFETY: H pass writes every element before V pass reads.
+                unsafe { v.set_len(len) };
+                v
+            };
             let premul_buf = if has_alpha {
                 vec![0u8; in_row_len]
             } else {
