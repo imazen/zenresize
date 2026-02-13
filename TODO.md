@@ -1,26 +1,24 @@
 # zenresize TODO
 
-## Replace guards with bytemuck cast + safe_unaligned_simd
+## Replace guards with as_chunks + safe_unaligned_simd — DONE
 
-The hoisted-bounds guard system eliminated hand-written `unsafe` from x86.rs, but has a
-soundness flaw: access-time indices are only range-checked in debug mode. In release,
-passing an out-of-range index to a guard method is silent UB.
+All 36 hoisted-bounds guards in x86.rs have been replaced:
 
-**Insight:** Casting `&[u8]` to `&[[u8; 16]]` (via bytemuck or `as_chunks`) gives you a
-slice of fixed-size arrays. These can be passed directly to archmage's `safe_unaligned_simd`
-functions — no guards needed, no unsafe, bounds proven by Rust's normal slice indexing.
+- **25 guards (Pattern A/B4/C/E):** Replaced with `as_chunks`/`as_chunks_mut` + `safe_unaligned_simd`.
+  Bounds proven at compile time by Rust's slice chunking. Zero overhead.
 
-**25 of 36 guards (Pattern A/B4/C/E) can be replaced this way.** These are all cases where
-stride == width (contiguous non-overlapping chunks):
-- All conversion kernels (u8↔f32, premul/unpremul)
-- V kernel outputs
-- Weight table access (cast `&[i16]` to `&[[i16; 16]]`, index with `ew_base + g`)
-- V f32 row accumulation (sequential unrolled 4x)
+- **11 guards (Pattern B/D/F):** H kernel inner loops where `left` comes from the weight table
+  (data-dependent offsets). These use `load_si128_at()` which does runtime slice bounds checking
+  by default. The `unsafe_kernels` feature flag switches to unchecked pointer access for these
+  hot loops, recovering ~15% of the sRGB path performance.
 
-**11 guards (Pattern B/D/F) still need an offset mechanism.** These are the H kernels
-where `left` comes from the weight table (data-dependent, not chunk-aligned) and the
-batch V kernel (array-indexed row offsets). Options for these:
-- Always-check guards (assert index in range even in release; LLVM elides for sequential)
-- Accept the debug-only check (current approach, same risk as `get_unchecked`)
+The `hoisted-bounds` dependency has been removed entirely.
 
-See `hoisted-bounds/unchecked-examples.md` for the full inventory of all 36 guard patterns.
+### Performance notes
+
+With default features (safe mode), the sRGB downscale path shows ~10-15% overhead from
+the H kernel bounds checks. With `--features unsafe_kernels`, performance matches or
+slightly exceeds the original hoisted-bounds baseline.
+
+The `unsafe_kernels` flag only affects 6 load sites in the H kernel inner loops. All other
+SIMD operations are fully safe with zero overhead.

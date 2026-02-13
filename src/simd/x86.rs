@@ -1,5 +1,5 @@
 //! x86-64 AVX2+FMA convolution and conversion kernels.
-#![allow(unsafe_code)]
+#![cfg_attr(feature = "unsafe_kernels", allow(unsafe_code))]
 
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
@@ -17,6 +17,30 @@ use safe_unaligned_simd::x86_64::{
     _mm256_loadu_ps, _mm256_loadu_si256, _mm256_storeu_ps, _mm_loadu_ps, _mm_loadu_si128,
     _mm_loadu_si32, _mm_loadu_si64, _mm_storeu_ps, _mm_storeu_si128, _mm_storeu_si64,
 };
+
+/// Load 16 bytes from `slice` at `offset` as `__m128i`.
+///
+/// With the default (safe) build, this uses slice bounds checking + safe_unaligned_simd.
+/// With the `unsafe_kernels` feature, this uses unchecked pointer access for maximum
+/// performance in hot loops where bounds have been pre-validated.
+#[archmage::rite]
+#[allow(unsafe_code)]
+fn load_si128_at(_token: X64V3Token, slice: &[u8], offset: usize) -> __m128i {
+    #[cfg(feature = "unsafe_kernels")]
+    {
+        // SAFETY: Caller must ensure offset + 16 <= slice.len().
+        // The H kernel functions verify this with the has_full_padding / safe_end checks.
+        unsafe {
+            core::arch::x86_64::_mm_loadu_si128(slice.as_ptr().add(offset) as *const __m128i)
+        }
+    }
+    #[cfg(not(feature = "unsafe_kernels"))]
+    {
+        _mm_loadu_si128(
+            <&[u8; 16]>::try_from(&slice[offset..offset + 16]).unwrap(),
+        )
+    }
+}
 
 // =============================================================================
 // Color conversion kernels
@@ -522,12 +546,8 @@ fn filter_h_u8_4ch(_token: X64V3Token, input: &[u8], output: &mut [u8], weights:
 
         // groups4 is constant across all pixels — enables LLVM unrolling.
         for g in 0..groups4 {
-            // Input: load 16 bytes (4 pixels) at data-dependent offset.
-            // Padding check guarantees (left + g*4)*4 + 16 <= input.len().
             let byte_offset = (left + g * 4) * 4;
-            let pixels = _mm_loadu_si128(
-                <&[u8; 16]>::try_from(&input[byte_offset..byte_offset + 16]).unwrap(),
-            );
+            let pixels = load_si128_at(_token, input, byte_offset);
             let ext = _mm256_cvtepu8_epi16(pixels);
             let shuffled = _mm256_shuffle_epi8(ext, ymm_shuffle);
             let w = _mm256_loadu_si256(&ew_chunks[ew_base + g]);
@@ -593,9 +613,7 @@ fn filter_h_u8_4ch_with_edge_fallback(
 
             for g in 0..groups4 {
                 let byte_offset = left * 4 + g * 16;
-                let pixels = _mm_loadu_si128(
-                    <&[u8; 16]>::try_from(&input[byte_offset..byte_offset + 16]).unwrap(),
-                );
+                let pixels = load_si128_at(_token, input, byte_offset);
                 let ext = _mm256_cvtepu8_epi16(pixels);
                 let shuffled = _mm256_shuffle_epi8(ext, ymm_shuffle);
                 let w = _mm256_loadu_si256(&ew_chunks[g]);
@@ -701,24 +719,16 @@ fn filter_h_u8_4ch_4rows(
             let w = _mm256_loadu_si256(&ew_chunks[ew_base + g]);
             let byte_off = (left + g * 4) * 4;
 
-            let p0 = _mm256_cvtepu8_epi16(_mm_loadu_si128(
-                <&[u8; 16]>::try_from(&in0[byte_off..byte_off + 16]).unwrap(),
-            ));
+            let p0 = _mm256_cvtepu8_epi16(load_si128_at(_token, in0, byte_off));
             acc0 = _mm256_add_epi32(acc0, _mm256_madd_epi16(_mm256_shuffle_epi8(p0, ymm_shuffle), w));
 
-            let p1 = _mm256_cvtepu8_epi16(_mm_loadu_si128(
-                <&[u8; 16]>::try_from(&in1[byte_off..byte_off + 16]).unwrap(),
-            ));
+            let p1 = _mm256_cvtepu8_epi16(load_si128_at(_token, in1, byte_off));
             acc1 = _mm256_add_epi32(acc1, _mm256_madd_epi16(_mm256_shuffle_epi8(p1, ymm_shuffle), w));
 
-            let p2 = _mm256_cvtepu8_epi16(_mm_loadu_si128(
-                <&[u8; 16]>::try_from(&in2[byte_off..byte_off + 16]).unwrap(),
-            ));
+            let p2 = _mm256_cvtepu8_epi16(load_si128_at(_token, in2, byte_off));
             acc2 = _mm256_add_epi32(acc2, _mm256_madd_epi16(_mm256_shuffle_epi8(p2, ymm_shuffle), w));
 
-            let p3 = _mm256_cvtepu8_epi16(_mm_loadu_si128(
-                <&[u8; 16]>::try_from(&in3[byte_off..byte_off + 16]).unwrap(),
-            ));
+            let p3 = _mm256_cvtepu8_epi16(load_si128_at(_token, in3, byte_off));
             acc3 = _mm256_add_epi32(acc3, _mm256_madd_epi16(_mm256_shuffle_epi8(p3, ymm_shuffle), w));
         }
 

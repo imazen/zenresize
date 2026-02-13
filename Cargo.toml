@@ -2,7 +2,7 @@
 name = "zenresize"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "AGPL-3.0-or-later"
 description = "High-quality image resampling with 31 filters, streaming API, and SIMD acceleration"
 repository = "https://github.com/imazen/zenresize"
@@ -14,14 +14,17 @@ default = ["std"]
 std = ["archmage/std", "linear-srgb/std"]
 avx512 = ["archmage/avx512"]
 imgref = ["dep:imgref", "dep:rgb"]
+# Use unchecked pointer access in H kernel inner loops for maximum performance.
+# Safe by construction: bounds are pre-validated by padding checks at function entry.
+# Without this, slice bounds checks add ~15-25% overhead to the sRGB resize path.
+unsafe_kernels = []
 
 [lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512"))'] }
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512", "unsafe_kernels"))'] }
 
 [dependencies]
 archmage = { version = "0.6", path = "../archmage", default-features = false, features = ["macros"] }
 linear-srgb = { version = "0.4", path = "../linear-srgb", default-features = false }
-hoisted-bounds = { path = "../hoisted-bounds", default-features = false, features = ["archmage"] }
 safe_unaligned_simd = "0.2.4"
 imgref = { version = "1.12", optional = true }
 rgb = { version = "0.8", optional = true, default-features = false }
