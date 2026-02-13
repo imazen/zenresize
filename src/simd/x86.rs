@@ -23,26 +23,6 @@ use safe_unaligned_simd::x86_64::{
     _mm_storeu_si128, _mm256_loadu_ps, _mm256_loadu_si256, _mm256_storeu_ps,
 };
 
-/// Load 16 bytes from `slice` at `offset` as `__m128i`.
-///
-/// With the default (safe) build, this uses slice bounds checking + safe_unaligned_simd.
-/// With the `unsafe_kernels` feature, this uses unchecked pointer access for maximum
-/// performance in hot loops where bounds have been pre-validated.
-#[archmage::rite]
-#[allow(unsafe_code)]
-fn load_si128_at(_token: X64V3Token, slice: &[u8], offset: usize) -> __m128i {
-    #[cfg(feature = "unsafe_kernels")]
-    {
-        // SAFETY: Caller must ensure offset + 16 <= slice.len().
-        // The H kernel functions verify this with the has_full_padding / safe_end checks.
-        unsafe { core::arch::x86_64::_mm_loadu_si128(slice.as_ptr().add(offset) as *const __m128i) }
-    }
-    #[cfg(not(feature = "unsafe_kernels"))]
-    {
-        _mm_loadu_si128(<&[u8; 16]>::try_from(&slice[offset..offset + 16]).unwrap())
-    }
-}
-
 /// Load a `[u8; 16]` chunk from a 2D collection of pre-chunked rows.
 ///
 /// Indexes first by row, then by chunk position within that row.
@@ -559,17 +539,22 @@ fn filter_h_u8_4ch(_token: X64V3Token, input: &[u8], output: &mut [u8], weights:
 
     for out_x in 0..out_width {
         let left = weights.left[out_x] as usize;
+        let byte_start = left * 4;
+
+        // Pre-slice input window and weight window: ONE bounds check each per pixel.
+        // Inner loop then iterates chunks with no bounds checks.
+        let input_window = &input[byte_start..byte_start + groups4 * 16];
+        let (in_chunks, _) = input_window.as_chunks::<16>();
         let ew_base = out_x * groups4;
+        let ew_window = &ew_chunks[ew_base..ew_base + groups4];
 
         let mut acc = _mm256_setzero_si256();
 
-        // groups4 is constant across all pixels — enables LLVM unrolling.
-        for g in 0..groups4 {
-            let byte_offset = (left + g * 4) * 4;
-            let pixels = load_si128_at(_token, input, byte_offset);
+        for (chunk, ew) in in_chunks.iter().zip(ew_window.iter()) {
+            let pixels = _mm_loadu_si128(chunk);
             let ext = _mm256_cvtepu8_epi16(pixels);
             let shuffled = _mm256_shuffle_epi8(ext, ymm_shuffle);
-            let w = _mm256_loadu_si256(&ew_chunks[ew_base + g]);
+            let w = _mm256_loadu_si256(ew);
             acc = _mm256_add_epi32(acc, _mm256_madd_epi16(shuffled, w));
         }
 
@@ -631,18 +616,22 @@ fn filter_h_u8_4ch_with_edge_fallback(
 
         for out_x in 0..safe_end {
             let left = weights.left[out_x] as usize;
+            let byte_start = left * 4;
 
             let ew = weights.weights_expanded_4ch(out_x);
             let (ew_chunks, _) = ew.as_chunks::<16>();
 
+            // Pre-slice input window: ONE bounds check per pixel.
+            let input_window = &input[byte_start..byte_start + groups4 * 16];
+            let (in_chunks, _) = input_window.as_chunks::<16>();
+
             let mut acc = _mm256_setzero_si256();
 
-            for g in 0..groups4 {
-                let byte_offset = left * 4 + g * 16;
-                let pixels = load_si128_at(_token, input, byte_offset);
+            for (chunk, ew) in in_chunks.iter().zip(ew_chunks.iter()) {
+                let pixels = _mm_loadu_si128(chunk);
                 let ext = _mm256_cvtepu8_epi16(pixels);
                 let shuffled = _mm256_shuffle_epi8(ext, ymm_shuffle);
-                let w = _mm256_loadu_si256(&ew_chunks[g]);
+                let w = _mm256_loadu_si256(ew);
                 acc = _mm256_add_epi32(acc, _mm256_madd_epi16(shuffled, w));
             }
 
@@ -739,7 +728,16 @@ fn filter_h_u8_4ch_4rows(
 
     for out_x in 0..out_width {
         let left = weights.left[out_x] as usize;
+        let byte_start = left * 4;
+        let byte_end = byte_start + groups4 * 16;
         let ew_base = out_x * groups4;
+
+        // Pre-slice all 4 input windows + weight window: bounds checks here, not inner loop.
+        let (c0, _) = in0[byte_start..byte_end].as_chunks::<16>();
+        let (c1, _) = in1[byte_start..byte_end].as_chunks::<16>();
+        let (c2, _) = in2[byte_start..byte_end].as_chunks::<16>();
+        let (c3, _) = in3[byte_start..byte_end].as_chunks::<16>();
+        let ew_window = &ew_chunks[ew_base..ew_base + groups4];
 
         let mut acc0 = _mm256_setzero_si256();
         let mut acc1 = _mm256_setzero_si256();
@@ -747,28 +745,27 @@ fn filter_h_u8_4ch_4rows(
         let mut acc3 = _mm256_setzero_si256();
 
         for g in 0..groups4 {
-            let w = _mm256_loadu_si256(&ew_chunks[ew_base + g]);
-            let byte_off = (left + g * 4) * 4;
+            let w = _mm256_loadu_si256(&ew_window[g]);
 
-            let p0 = _mm256_cvtepu8_epi16(load_si128_at(_token, in0, byte_off));
+            let p0 = _mm256_cvtepu8_epi16(_mm_loadu_si128(&c0[g]));
             acc0 = _mm256_add_epi32(
                 acc0,
                 _mm256_madd_epi16(_mm256_shuffle_epi8(p0, ymm_shuffle), w),
             );
 
-            let p1 = _mm256_cvtepu8_epi16(load_si128_at(_token, in1, byte_off));
+            let p1 = _mm256_cvtepu8_epi16(_mm_loadu_si128(&c1[g]));
             acc1 = _mm256_add_epi32(
                 acc1,
                 _mm256_madd_epi16(_mm256_shuffle_epi8(p1, ymm_shuffle), w),
             );
 
-            let p2 = _mm256_cvtepu8_epi16(load_si128_at(_token, in2, byte_off));
+            let p2 = _mm256_cvtepu8_epi16(_mm_loadu_si128(&c2[g]));
             acc2 = _mm256_add_epi32(
                 acc2,
                 _mm256_madd_epi16(_mm256_shuffle_epi8(p2, ymm_shuffle), w),
             );
 
-            let p3 = _mm256_cvtepu8_epi16(load_si128_at(_token, in3, byte_off));
+            let p3 = _mm256_cvtepu8_epi16(_mm_loadu_si128(&c3[g]));
             acc3 = _mm256_add_epi32(
                 acc3,
                 _mm256_madd_epi16(_mm256_shuffle_epi8(p3, ymm_shuffle), w),
