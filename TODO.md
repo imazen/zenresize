@@ -18,15 +18,17 @@ The `hoisted-bounds` dependency has been removed entirely.
 
 ### Performance summary
 
-| Mode | sRGB downscale 50% 1024sq | vs baseline |
-|------|--------------------------|-------------|
-| Safe (default) | ~2.37ms | +20% |
-| unsafe_kernels | ~2.05ms | +3% |
-| Baseline (main) | ~1.98ms | — |
+Paired bench: sRGB downscale 50% 1024sq → 512sq:
 
-H kernel bounds checks are well-predicted branches; restructuring attempts (window
-sub-slicing, assert hints) added more overhead than they saved. The ~15% H kernel
-overhead is inherent to safe bounds checking.
+| Library | Time (ms) | vs zenresize |
+|---------|-----------|-------------|
+| **zenresize (safe)** | **1.31** | — |
+| pic_scale | 1.31 | tied |
+| fast_image_resize | 1.55+ | 18% slower |
+
+Window-slicing eliminates ALL inner-loop bounds checks without unsafe.
+Pre-slice input per output pixel, `as_chunks::<16>()` gives exact chunk count,
+zip iterator proves bounds at compile time. `unsafe_kernels` feature removed.
 
 ## Pending
 
