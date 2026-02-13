@@ -97,11 +97,6 @@ pub(crate) fn filter_h_u8_i16_4rows(
     ))
 }
 
-/// Integer vertical filter: u8 rows → u8 output via i16 weights.
-pub(crate) fn filter_v_u8_i16(rows: &[&[u8]], output: &mut [u8], weights: &[i16]) {
-    archmage::incant!(filter_v_u8_i16(rows, output, weights))
-}
-
 /// Batch vertical filter: process all output rows from the intermediate buffer.
 ///
 /// Avoids per-row dispatch overhead and row pointer construction.

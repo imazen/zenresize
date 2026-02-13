@@ -300,49 +300,6 @@ pub(super) fn filter_h_u8_i16_4rows(
     filter_h_u8_i16_4ch(in3, out3, weights);
 }
 
-/// Integer vertical convolution: process 16 bytes at a time using i16x8.
-#[inline(always)]
-pub(super) fn filter_v_u8_i16(rows: &[&[u8]], output: &mut [u8], weights: &[i16]) {
-    let width = output.len();
-    debug_assert_eq!(rows.len(), weights.len());
-    let chunks16 = width / 16;
-    let base16 = chunks16 * 16;
-
-    for chunk_idx in 0..chunks16 {
-        let x = chunk_idx * 16;
-        let mut acc_lo = i32x8::splat(0);
-        let mut acc_hi = i32x8::splat(0);
-
-        for (row, &weight) in rows.iter().zip(weights.iter()) {
-            let bytes: [u8; 16] = row[x..x + 16].try_into().unwrap();
-            let src = u8x16::new(bytes);
-            let lo = i16x8::from_u8x16_low(src);
-            let hi = i16x8::from_u8x16_high(src);
-            let wv = i16x8::splat(weight);
-            acc_lo += lo.mul_widen(wv);
-            acc_hi += hi.mul_widen(wv);
-        }
-
-        let half = i32x8::splat(1 << (I16_PRECISION - 1));
-        let shifted_lo = (acc_lo + half) >> I16_PRECISION;
-        let shifted_hi = (acc_hi + half) >> I16_PRECISION;
-        let packed_lo = i16x8::from_i32x8_saturate(shifted_lo);
-        let packed_hi = i16x8::from_i32x8_saturate(shifted_hi);
-        let result = u8x16::narrow_i16x8(packed_lo, packed_hi);
-        output[x..x + 16].copy_from_slice(&result.to_array());
-    }
-
-    // Scalar tail
-    for x in base16..width {
-        let mut acc: i32 = 0;
-        for (row, &w) in rows.iter().zip(weights.iter()) {
-            acc += row[x] as i32 * w as i32;
-        }
-        let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
-        output[x] = rounded.clamp(0, 255) as u8;
-    }
-}
-
 /// Batch vertical filter: process all output rows from the intermediate buffer.
 #[inline(always)]
 pub(super) fn filter_v_all_u8_i16(

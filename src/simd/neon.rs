@@ -75,16 +75,6 @@ pub(crate) fn filter_h_u8_i16_4rows_neon(
 }
 
 #[archmage::arcane]
-pub(crate) fn filter_v_u8_i16_neon(
-    _token: NeonToken,
-    rows: &[&[u8]],
-    output: &mut [u8],
-    weights: &[i16],
-) {
-    super::wide_kernels::filter_v_u8_i16(rows, output, weights)
-}
-
-#[archmage::arcane]
 pub(crate) fn filter_v_all_u8_i16_neon(
     _token: NeonToken,
     intermediate: &[u8],

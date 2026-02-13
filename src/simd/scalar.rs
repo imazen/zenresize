@@ -143,26 +143,6 @@ pub(crate) fn filter_h_u8_i16_4rows_scalar(
     filter_h_u8_i16_scalar(_token, in3, out3, weights, ch);
 }
 
-/// Integer vertical convolution: u8 rows → u8 output, scalar fallback.
-pub(crate) fn filter_v_u8_i16_scalar(
-    _token: ScalarToken,
-    rows: &[&[u8]],
-    output: &mut [u8],
-    weights: &[i16],
-) {
-    let width = output.len();
-    debug_assert_eq!(rows.len(), weights.len());
-
-    for x in 0..width {
-        let mut acc: i32 = 0;
-        for (row, &w) in rows.iter().zip(weights.iter()) {
-            acc += row[x] as i32 * w as i32;
-        }
-        let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
-        output[x] = rounded.clamp(0, 255) as u8;
-    }
-}
-
 /// Batch vertical filter for all output rows, scalar fallback.
 pub(crate) fn filter_v_all_u8_i16_scalar(
     _token: ScalarToken,
