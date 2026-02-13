@@ -11,16 +11,20 @@
 //!
 //! # Quick Start
 //!
-//! ```ignore
+//! ```
 //! use zenresize::{resize, ResizeConfig, Filter, PixelFormat};
 //!
-//! let config = ResizeConfig::builder(1024, 768, 512, 384)
+//! // Create a 4×4 RGBA test image
+//! let input_pixels = vec![128u8; 4 * 4 * 4];
+//!
+//! let config = ResizeConfig::builder(4, 4, 2, 2)
 //!     .filter(Filter::Lanczos)
 //!     .format(PixelFormat::Srgb8 { channels: 4, has_alpha: true })
 //!     .linear()
 //!     .build();
 //!
 //! let output = resize(&config, &input_pixels);
+//! assert_eq!(output.len(), 2 * 2 * 4);
 //! ```
 
 #![cfg_attr(not(feature = "std"), no_std)]

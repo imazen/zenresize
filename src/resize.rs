@@ -29,7 +29,7 @@ pub fn resize(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
     let len = config.out_height as usize * out_row_len;
     let mut output = {
         let mut v = Vec::with_capacity(len);
-        #[allow(unsafe_code)]
+        #[allow(unsafe_code, clippy::uninit_vec)]
         // SAFETY: resize_into writes every byte in output via the V pass.
         unsafe { v.set_len(len) };
         v
@@ -194,7 +194,7 @@ fn resize_into_i16(
     let mut intermediate = {
         let len = h_row_len * in_h;
         let mut v = Vec::with_capacity(len);
-        #[allow(unsafe_code)]
+        #[allow(unsafe_code, clippy::uninit_vec)]
         // SAFETY: H pass writes every element in intermediate[0..len] before V pass reads.
         // The 4-row batch covers (in_h / 4) * 4 rows, remainder loop covers the rest.
         unsafe { v.set_len(len) };
@@ -318,8 +318,11 @@ pub struct Resizer {
     v_weights_i16: Option<I16WeightTable>,
     h_weights_f32: Option<F32WeightTable>,
     v_weights_f32: Option<F32WeightTable>,
-    intermediate_i16: Vec<u8>,
+    intermediate_u8: Vec<u8>,
+    intermediate_f32: Vec<f32>,
     premul_buf: Vec<u8>,
+    temp_row_f32: Vec<f32>,
+    temp_output_f32: Vec<f32>,
 }
 
 impl Resizer {
@@ -342,7 +345,7 @@ impl Resizer {
             let intermediate = {
                 let len = h_row_len * in_h;
                 let mut v = Vec::with_capacity(len);
-                #[allow(unsafe_code)]
+                #[allow(unsafe_code, clippy::uninit_vec)]
                 // SAFETY: H pass writes every element before V pass reads.
                 unsafe { v.set_len(len) };
                 v
@@ -358,20 +361,27 @@ impl Resizer {
                 v_weights_i16: Some(v_weights),
                 h_weights_f32: None,
                 v_weights_f32: None,
-                intermediate_i16: intermediate,
+                intermediate_u8: intermediate,
+                intermediate_f32: Vec::new(),
                 premul_buf,
+                temp_row_f32: Vec::new(),
+                temp_output_f32: Vec::new(),
             }
         } else {
             let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
             let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
+            let in_w = config.in_width as usize;
             Resizer {
                 config: config.clone(),
                 h_weights_i16: None,
                 v_weights_i16: None,
                 h_weights_f32: Some(h_weights),
                 v_weights_f32: Some(v_weights),
-                intermediate_i16: Vec::new(),
+                intermediate_u8: Vec::new(),
+                intermediate_f32: vec![0.0f32; h_row_len * in_h],
                 premul_buf: Vec::new(),
+                temp_row_f32: vec![0.0f32; in_w * channels],
+                temp_output_f32: vec![0.0f32; h_row_len],
             }
         }
     }
@@ -382,7 +392,7 @@ impl Resizer {
         let len = self.config.out_height as usize * out_row_len;
         let mut output = {
             let mut v = Vec::with_capacity(len);
-            #[allow(unsafe_code)]
+            #[allow(unsafe_code, clippy::uninit_vec)]
             // SAFETY: resize_into writes every byte via the V pass.
             unsafe { v.set_len(len) };
             v
@@ -408,7 +418,7 @@ impl Resizer {
             (&self.h_weights_i16, &self.v_weights_i16)
         {
             // i16 fast path
-            let intermediate = &mut self.intermediate_i16;
+            let intermediate = &mut self.intermediate_u8;
 
             if channels == 4 && !has_alpha {
                 let batch_count = in_h / 4;
@@ -497,8 +507,75 @@ impl Resizer {
                     simd::unpremultiply_u8_row(out_slice);
                 }
             }
+        } else if let (Some(h_weights), Some(v_weights)) =
+            (&self.h_weights_f32, &self.v_weights_f32)
+        {
+            // f32 path (linear color space or non-4ch formats)
+            let linearize = config.needs_linearization();
+            let intermediate = &mut self.intermediate_f32;
+            let temp_row = &mut self.temp_row_f32;
+
+            // === Horizontal pass ===
+            for y in 0..in_h {
+                let in_start = y * in_stride;
+                let in_row = &input[in_start..in_start + in_row_len];
+
+                if linearize {
+                    color::srgb_u8_to_linear_f32(in_row, temp_row, channels, has_alpha);
+                } else {
+                    simd::u8_to_f32_row(in_row, temp_row);
+                }
+
+                if has_alpha && channels == 4 {
+                    simd::premultiply_alpha_row(temp_row);
+                }
+
+                let out_start = y * h_row_len;
+                simd::filter_h_row_f32(
+                    temp_row,
+                    &mut intermediate[out_start..out_start + h_row_len],
+                    h_weights,
+                    channels,
+                );
+            }
+
+            // === Vertical pass ===
+            let max_taps = v_weights.max_taps;
+            let mut row_ptrs: Vec<&[f32]> = Vec::with_capacity(max_taps);
+            let temp_output = &mut self.temp_output_f32;
+
+            for out_y in 0..out_h {
+                let left = v_weights.left[out_y];
+                let tap_count = v_weights.tap_count(out_y);
+                let weights = v_weights.weights(out_y);
+
+                row_ptrs.clear();
+                for t in 0..tap_count {
+                    let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+                    let start = in_y * h_row_len;
+                    row_ptrs.push(&intermediate[start..start + h_row_len]);
+                }
+
+                simd::filter_v_row_f32(&row_ptrs, &mut temp_output[..h_row_len], weights);
+
+                if has_alpha && channels == 4 {
+                    simd::unpremultiply_alpha_row(&mut temp_output[..h_row_len]);
+                }
+
+                let out_start = out_y * out_row_len;
+                let out_slice = &mut output[out_start..out_start + out_row_len];
+                if linearize {
+                    color::linear_f32_to_srgb_u8(
+                        &temp_output[..h_row_len],
+                        out_slice,
+                        channels,
+                        has_alpha,
+                    );
+                } else {
+                    simd::f32_to_u8_row(&temp_output[..h_row_len], out_slice);
+                }
+            }
         }
-        // f32 path handled by resize_into() for now
     }
 }
 
@@ -862,6 +939,74 @@ mod tests {
 
         let output = resize(&config, &input);
         assert_eq!(output.len(), 5 * 5 * 4);
+    }
+
+    #[test]
+    fn test_resizer_matches_resize_srgb() {
+        let config = test_config(20, 20, 10, 10);
+        let input = vec![100u8; 20 * 20 * 4];
+
+        let output_oneshot = resize(&config, &input);
+        let mut resizer = Resizer::new(&config);
+        let output_cached = resizer.resize(&input);
+
+        assert_eq!(output_oneshot, output_cached);
+    }
+
+    #[test]
+    fn test_resizer_matches_resize_linear() {
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .filter(Filter::Lanczos)
+            .format(PixelFormat::Srgb8 {
+                channels: 4,
+                has_alpha: true,
+            })
+            .linear()
+            .build();
+        let input = vec![100u8; 20 * 20 * 4];
+
+        let output_oneshot = resize(&config, &input);
+        let mut resizer = Resizer::new(&config);
+        let output_cached = resizer.resize(&input);
+
+        assert_eq!(output_oneshot, output_cached);
+    }
+
+    #[test]
+    fn test_resizer_matches_resize_3ch() {
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .filter(Filter::Lanczos)
+            .format(PixelFormat::Srgb8 {
+                channels: 3,
+                has_alpha: false,
+            })
+            .srgb()
+            .build();
+        let input = vec![100u8; 20 * 20 * 3];
+
+        let output_oneshot = resize(&config, &input);
+        let mut resizer = Resizer::new(&config);
+        let output_cached = resizer.resize(&input);
+
+        assert_eq!(output_oneshot, output_cached);
+    }
+
+    #[test]
+    fn test_resizer_reuse() {
+        let config = test_config(20, 20, 10, 10);
+        let mut resizer = Resizer::new(&config);
+
+        let input1 = vec![100u8; 20 * 20 * 4];
+        let output1 = resizer.resize(&input1);
+
+        let input2 = vec![200u8; 20 * 20 * 4];
+        let output2 = resizer.resize(&input2);
+
+        // Different inputs should produce different outputs
+        assert_ne!(output1, output2);
+        // Same input should produce same output
+        let output1b = resizer.resize(&input1);
+        assert_eq!(output1, output1b);
     }
 
     #[cfg(feature = "imgref")]

@@ -189,7 +189,9 @@ impl ResizeConfig {
 /// Builder for [`ResizeConfig`].
 ///
 /// # Example
-/// ```ignore
+/// ```
+/// use zenresize::{ResizeConfig, Filter, PixelFormat};
+///
 /// let config = ResizeConfig::builder(1024, 768, 512, 384)
 ///     .filter(Filter::Lanczos)
 ///     .format(PixelFormat::Srgb8 { channels: 4, has_alpha: true })

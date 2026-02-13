@@ -119,18 +119,3 @@ pub(crate) fn unpremultiply_u8_row(row: &mut [u8]) {
     archmage::incant!(unpremultiply_u8_row(row))
 }
 
-/// Convert u8 row to i16 (zero-extend) for pre-conversion before horizontal filter.
-pub(crate) fn u8_to_i16_row(input: &[u8], output: &mut [i16]) {
-    archmage::incant!(u8_to_i16_row(input, output))
-}
-
-/// Integer horizontal filter from pre-converted i16 input → u8 output.
-/// Input must be zero-extended u8 values (0..255 range as i16).
-pub(crate) fn filter_h_i16_to_u8(
-    input: &[i16],
-    output: &mut [u8],
-    weights: &I16WeightTable,
-    channels: usize,
-) {
-    archmage::incant!(filter_h_i16_to_u8(input, output, weights, channels))
-}
