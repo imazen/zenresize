@@ -932,7 +932,6 @@ name = "zenresize"
 version = "0.1.0"
 dependencies = [
  "archmage",
- "bytemuck",
  "criterion",
  "fast_image_resize",
  "image",
