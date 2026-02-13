@@ -335,6 +335,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 
 [[package]]
+name = "hoisted-bounds"
+version = "0.1.0"
+
+[[package]]
 name = "image"
 version = "0.25.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -926,6 +930,7 @@ dependencies = [
  "archmage",
  "criterion",
  "fast_image_resize",
+ "hoisted-bounds",
  "image",
  "imgref",
  "linear-srgb",
