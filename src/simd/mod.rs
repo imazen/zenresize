@@ -6,8 +6,6 @@
 //! - WASM32: SIMD128 via wide (Wasm128Token)
 //! - Fallback: Scalar
 
-#![allow(unsafe_code)]
-
 mod scalar;
 #[allow(unused_imports)]
 use scalar::*;
