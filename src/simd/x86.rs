@@ -587,6 +587,181 @@ fn filter_h_u8_4ch(_token: X64V3Token, input: &[u8], output: &mut [u8], weights:
     }
 }
 
+/// 4-row batch horizontal filter for 4-channel (RGBA) u8 data.
+///
+/// Processes 4 input rows simultaneously with shared weight computation.
+/// Amortizes outer loop overhead (left offset lookup, weight pointer setup)
+/// across 4 rows. Each row gets its own accumulator chain.
+#[archmage::arcane]
+pub(crate) fn filter_h_u8_i16_4rows_v3(
+    _token: X64V3Token,
+    in0: &[u8],
+    in1: &[u8],
+    in2: &[u8],
+    in3: &[u8],
+    out0: &mut [u8],
+    out1: &mut [u8],
+    out2: &mut [u8],
+    out3: &mut [u8],
+    weights: &I16WeightTable,
+) {
+    filter_h_u8_4ch_4rows(_token, in0, in1, in2, in3, out0, out1, out2, out3, weights);
+}
+
+/// Inner implementation of 4-row batch horizontal convolution.
+#[archmage::rite]
+fn filter_h_u8_4ch_4rows(
+    _token: X64V3Token,
+    in0: &[u8],
+    in1: &[u8],
+    in2: &[u8],
+    in3: &[u8],
+    out0: &mut [u8],
+    out1: &mut [u8],
+    out2: &mut [u8],
+    out3: &mut [u8],
+    weights: &I16WeightTable,
+) {
+    let out_width = weights.len();
+    let max_taps = weights.max_taps;
+
+    let in_ptr0 = in0.as_ptr();
+    let in_ptr1 = in1.as_ptr();
+    let in_ptr2 = in2.as_ptr();
+    let in_ptr3 = in3.as_ptr();
+    let out_ptr0 = out0.as_mut_ptr();
+    let out_ptr1 = out1.as_mut_ptr();
+    let out_ptr2 = out2.as_mut_ptr();
+    let out_ptr3 = out3.as_mut_ptr();
+
+    let groups4 = max_taps / 4;
+    let rem_taps = max_taps % 4;
+
+    let ew_ptr = weights.expanded_4ch_ptr();
+    let expanded_stride = weights.expanded_stride;
+
+    let ymm_shuffle = _mm256_set_epi8(
+        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0,
+        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0,
+    );
+
+    let xmm_shuffle = _mm_set_epi8(
+        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0,
+    );
+    let half = _mm_set1_epi32(1 << (I16_PRECISION - 1));
+
+    for out_x in 0..out_width {
+        let left = weights.left[out_x] as usize;
+        let byte_off = left * 4;
+        let ew_base = unsafe { ew_ptr.add(out_x * expanded_stride) };
+
+        let mut acc0 = _mm256_setzero_si256();
+        let mut acc1 = _mm256_setzero_si256();
+        let mut acc2 = _mm256_setzero_si256();
+        let mut acc3 = _mm256_setzero_si256();
+
+        for g in 0..groups4 {
+            unsafe {
+                let w = _mm256_loadu_si256(ew_base.add(g * 16) as *const __m256i);
+                let g_off = g * 16;
+
+                let p0 = _mm256_cvtepu8_epi16(
+                    _mm_loadu_si128(in_ptr0.add(byte_off + g_off) as *const __m128i),
+                );
+                acc0 = _mm256_add_epi32(
+                    acc0,
+                    _mm256_madd_epi16(_mm256_shuffle_epi8(p0, ymm_shuffle), w),
+                );
+
+                let p1 = _mm256_cvtepu8_epi16(
+                    _mm_loadu_si128(in_ptr1.add(byte_off + g_off) as *const __m128i),
+                );
+                acc1 = _mm256_add_epi32(
+                    acc1,
+                    _mm256_madd_epi16(_mm256_shuffle_epi8(p1, ymm_shuffle), w),
+                );
+
+                let p2 = _mm256_cvtepu8_epi16(
+                    _mm_loadu_si128(in_ptr2.add(byte_off + g_off) as *const __m128i),
+                );
+                acc2 = _mm256_add_epi32(
+                    acc2,
+                    _mm256_madd_epi16(_mm256_shuffle_epi8(p2, ymm_shuffle), w),
+                );
+
+                let p3 = _mm256_cvtepu8_epi16(
+                    _mm_loadu_si128(in_ptr3.add(byte_off + g_off) as *const __m128i),
+                );
+                acc3 = _mm256_add_epi32(
+                    acc3,
+                    _mm256_madd_epi16(_mm256_shuffle_epi8(p3, ymm_shuffle), w),
+                );
+            }
+        }
+
+        // Combine ymm lanes → xmm accumulators
+        let mut f0 = _mm_add_epi32(_mm256_castsi256_si128(acc0), _mm256_extracti128_si256::<1>(acc0));
+        let mut f1 = _mm_add_epi32(_mm256_castsi256_si128(acc1), _mm256_extracti128_si256::<1>(acc1));
+        let mut f2 = _mm_add_epi32(_mm256_castsi256_si128(acc2), _mm256_extracti128_si256::<1>(acc2));
+        let mut f3 = _mm_add_epi32(_mm256_castsi256_si128(acc3), _mm256_extracti128_si256::<1>(acc3));
+
+        // Handle remaining 2 taps
+        if rem_taps >= 2 {
+            let t = groups4 * 4;
+            let t_off = t * 4;
+            unsafe {
+                let w = _mm_broadcastd_epi32(
+                    _mm_loadu_si32(weights.weights_padded(out_x).as_ptr().add(t) as *const _),
+                );
+
+                let s0 = _mm_shuffle_epi8(
+                    _mm_cvtepu8_epi16(_mm_loadl_epi64(in_ptr0.add(byte_off + t_off) as *const __m128i)),
+                    xmm_shuffle,
+                );
+                f0 = _mm_add_epi32(f0, _mm_madd_epi16(s0, w));
+
+                let s1 = _mm_shuffle_epi8(
+                    _mm_cvtepu8_epi16(_mm_loadl_epi64(in_ptr1.add(byte_off + t_off) as *const __m128i)),
+                    xmm_shuffle,
+                );
+                f1 = _mm_add_epi32(f1, _mm_madd_epi16(s1, w));
+
+                let s2 = _mm_shuffle_epi8(
+                    _mm_cvtepu8_epi16(_mm_loadl_epi64(in_ptr2.add(byte_off + t_off) as *const __m128i)),
+                    xmm_shuffle,
+                );
+                f2 = _mm_add_epi32(f2, _mm_madd_epi16(s2, w));
+
+                let s3 = _mm_shuffle_epi8(
+                    _mm_cvtepu8_epi16(_mm_loadl_epi64(in_ptr3.add(byte_off + t_off) as *const __m128i)),
+                    xmm_shuffle,
+                );
+                f3 = _mm_add_epi32(f3, _mm_madd_epi16(s3, w));
+            }
+        }
+
+        // Round and shift all 4 rows
+        let s0 = _mm_srai_epi32::<{ I16_PRECISION }>(_mm_add_epi32(f0, half));
+        let s1 = _mm_srai_epi32::<{ I16_PRECISION }>(_mm_add_epi32(f1, half));
+        let s2 = _mm_srai_epi32::<{ I16_PRECISION }>(_mm_add_epi32(f2, half));
+        let s3 = _mm_srai_epi32::<{ I16_PRECISION }>(_mm_add_epi32(f3, half));
+
+        // Pack 4 pixels: i32×4 → i16×8 → u8×16
+        let pack01 = _mm_packs_epi32(s0, s1);
+        let pack23 = _mm_packs_epi32(s2, s3);
+        let result = _mm_packus_epi16(pack01, pack23);
+
+        // Store one pixel per row (4 bytes each)
+        let out_off = out_x * 4;
+        unsafe {
+            core::ptr::write_unaligned(out_ptr0.add(out_off) as *mut u32, _mm_cvtsi128_si32(result) as u32);
+            core::ptr::write_unaligned(out_ptr1.add(out_off) as *mut u32, _mm_extract_epi32::<1>(result) as u32);
+            core::ptr::write_unaligned(out_ptr2.add(out_off) as *mut u32, _mm_extract_epi32::<2>(result) as u32);
+            core::ptr::write_unaligned(out_ptr3.add(out_off) as *mut u32, _mm_extract_epi32::<3>(result) as u32);
+        }
+    }
+}
+
 /// Scalar fallback for integer horizontal filter (arbitrary channel count).
 #[archmage::rite]
 fn filter_h_u8_generic(

@@ -70,6 +70,24 @@ pub(crate) fn filter_h_u8_i16(
     archmage::incant!(filter_h_u8_i16(input, output, weights, channels))
 }
 
+/// Integer horizontal filter: 4 rows at once, RGBA only.
+/// Shares weight computation across rows for better throughput.
+pub(crate) fn filter_h_u8_i16_4rows(
+    in0: &[u8],
+    in1: &[u8],
+    in2: &[u8],
+    in3: &[u8],
+    out0: &mut [u8],
+    out1: &mut [u8],
+    out2: &mut [u8],
+    out3: &mut [u8],
+    weights: &I16WeightTable,
+) {
+    archmage::incant!(filter_h_u8_i16_4rows(
+        in0, in1, in2, in3, out0, out1, out2, out3, weights
+    ))
+}
+
 /// Integer vertical filter: u8 rows → u8 output via i16 weights.
 pub(crate) fn filter_v_u8_i16(rows: &[&[u8]], output: &mut [u8], weights: &[i16]) {
     archmage::incant!(filter_v_u8_i16(rows, output, weights))

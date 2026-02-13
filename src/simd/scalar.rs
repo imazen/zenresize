@@ -122,6 +122,27 @@ pub(crate) fn filter_h_u8_i16_scalar(
     }
 }
 
+/// 4-row batch horizontal convolution, scalar fallback.
+/// Just calls filter_h_u8_i16_scalar 4 times.
+pub(crate) fn filter_h_u8_i16_4rows_scalar(
+    _token: ScalarToken,
+    in0: &[u8],
+    in1: &[u8],
+    in2: &[u8],
+    in3: &[u8],
+    out0: &mut [u8],
+    out1: &mut [u8],
+    out2: &mut [u8],
+    out3: &mut [u8],
+    weights: &I16WeightTable,
+) {
+    let ch = 4;
+    filter_h_u8_i16_scalar(_token, in0, out0, weights, ch);
+    filter_h_u8_i16_scalar(_token, in1, out1, weights, ch);
+    filter_h_u8_i16_scalar(_token, in2, out2, weights, ch);
+    filter_h_u8_i16_scalar(_token, in3, out3, weights, ch);
+}
+
 /// Integer vertical convolution: u8 rows → u8 output, scalar fallback.
 pub(crate) fn filter_v_u8_i16_scalar(
     _token: ScalarToken,

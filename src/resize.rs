@@ -193,24 +193,64 @@ fn resize_into_i16(
     };
 
     // === Horizontal pass: u8 → i32 → u8 ===
-    for y in 0..in_h {
-        let in_start = y * in_stride;
-        let in_row = &input[in_start..in_start + in_row_len];
-        let out_start = y * h_row_len;
+    // Use 4-row batch for RGBA without alpha (most common case).
+    if channels == 4 && !has_alpha {
+        // Process 4 rows at a time
+        let batch_count = in_h / 4;
+        let remainder = in_h % 4;
 
-        let src = if has_alpha {
-            simd::premultiply_u8_row(in_row, &mut premul_buf);
-            &premul_buf[..]
-        } else {
-            in_row
-        };
+        for batch in 0..batch_count {
+            let y0 = batch * 4;
+            let r0 = &input[y0 * in_stride..(y0 + 1) * in_stride];
+            let r1 = &input[(y0 + 1) * in_stride..(y0 + 2) * in_stride];
+            let r2 = &input[(y0 + 2) * in_stride..(y0 + 3) * in_stride];
+            let r3 = &input[(y0 + 3) * in_stride..(y0 + 4) * in_stride];
 
-        simd::filter_h_u8_i16(
-            src,
-            &mut intermediate[out_start..out_start + h_row_len],
-            &h_weights,
-            channels,
-        );
+            let out_base = y0 * h_row_len;
+            // Split intermediate into 4 disjoint mutable slices
+            let (o0, rest) = intermediate[out_base..].split_at_mut(h_row_len);
+            let (o1, rest) = rest.split_at_mut(h_row_len);
+            let (o2, o3_and_rest) = rest.split_at_mut(h_row_len);
+            let o3 = &mut o3_and_rest[..h_row_len];
+
+            simd::filter_h_u8_i16_4rows(r0, r1, r2, r3, o0, o1, o2, o3, &h_weights);
+        }
+
+        // Handle remaining rows
+        for i in 0..remainder {
+            let y = batch_count * 4 + i;
+            let in_start = y * in_stride;
+            let in_row = &input[in_start..in_start + in_row_len];
+            let out_start = y * h_row_len;
+
+            simd::filter_h_u8_i16(
+                in_row,
+                &mut intermediate[out_start..out_start + h_row_len],
+                &h_weights,
+                channels,
+            );
+        }
+    } else {
+        // Single-row path: handles alpha premul and non-4ch formats
+        for y in 0..in_h {
+            let in_start = y * in_stride;
+            let in_row = &input[in_start..in_start + in_row_len];
+            let out_start = y * h_row_len;
+
+            let src = if has_alpha {
+                simd::premultiply_u8_row(in_row, &mut premul_buf);
+                &premul_buf[..]
+            } else {
+                in_row
+            };
+
+            simd::filter_h_u8_i16(
+                src,
+                &mut intermediate[out_start..out_start + h_row_len],
+                &h_weights,
+                channels,
+            );
+        }
     }
 
     // === Vertical pass: u8 → i32 → u8 ===
