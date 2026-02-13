@@ -28,14 +28,14 @@ pub(crate) fn u8_to_f32_row_v3(_token: X64V3Token, input: &[u8], output: &mut [f
 
     for i in 0..chunks8 {
         // Load 8 bytes into low 64 bits of __m128i
-        let bytes = unsafe { _mm_loadl_epi64(in_guard.read_ptr(i) as *const __m128i) };
+        let bytes = in_guard.loadl_epi64(i, _token);
         // Zero-extend 8×u8 → 8×i32
         let ints = _mm256_cvtepu8_epi32(bytes);
         // Convert 8×i32 → 8×f32
         let floats = _mm256_cvtepi32_ps(ints);
         // Multiply by 1/255
         let result = _mm256_mul_ps(floats, scale);
-        unsafe { _mm256_storeu_ps(out_guard.write_ptr(i), result) };
+        out_guard.store_ps256(i, result, _token);
     }
 
     // Scalar tail
@@ -61,7 +61,7 @@ pub(crate) fn f32_to_u8_row_v3(_token: X64V3Token, input: &[f32], output: &mut [
     let mut out_guard = GuardedSliceMut::<u8, _, 8>::new(output, |i| i * 8, 0..chunks8);
 
     for i in 0..chunks8 {
-        let floats = unsafe { _mm256_loadu_ps(in_guard.read_ptr(i)) };
+        let floats = in_guard.load_ps256(i, _token);
         // val * 255 + 0.5
         let scaled = _mm256_fmadd_ps(floats, scale, half);
         // Clamp to [0, 255]
@@ -78,14 +78,12 @@ pub(crate) fn f32_to_u8_row_v3(_token: X64V3Token, input: &[f32], output: &mut [
         // We need the first 4 bytes from lane 0 and first 4 from lane 1.
         let lo = _mm256_extracti128_si256::<0>(packed8);
         let hi = _mm256_extracti128_si256::<1>(packed8);
-        unsafe {
-            // Write 4 bytes from each lane
-            let lo_val = _mm_cvtsi128_si32(lo) as u32;
-            let hi_val = _mm_cvtsi128_si32(hi) as u32;
-            let out_base = out_guard.write_ptr(i);
-            core::ptr::write_unaligned(out_base as *mut u32, lo_val);
-            core::ptr::write_unaligned(out_base.add(4) as *mut u32, hi_val);
-        }
+        // Write 4 bytes from each lane (safe value extraction + guard write)
+        let lo_val = _mm_cvtsi128_si32(lo) as u32;
+        let hi_val = _mm_cvtsi128_si32(hi) as u32;
+        let arr = out_guard.write(i);
+        arr[..4].copy_from_slice(&lo_val.to_ne_bytes());
+        arr[4..8].copy_from_slice(&hi_val.to_ne_bytes());
     }
 
     // Scalar tail
@@ -102,7 +100,7 @@ pub(crate) fn premultiply_alpha_row_v3(_token: X64V3Token, row: &mut [f32]) {
     let mut guard = GuardedSliceMut::<f32, _, 8>::new(row, |i| i * 8, 0..chunks2);
 
     for i in 0..chunks2 {
-        let px = unsafe { _mm256_loadu_ps(guard.read_ptr(i)) };
+        let px = guard.load_ps256(i, _token);
         // Extract alpha values: indices 3 and 7
         // Shuffle to broadcast alpha within each pixel
         // For pixel 0: [r,g,b,a] → need [a,a,a,a]
@@ -111,7 +109,7 @@ pub(crate) fn premultiply_alpha_row_v3(_token: X64V3Token, row: &mut [f32]) {
         let result = _mm256_mul_ps(px, alpha);
         // Restore original alpha values (don't multiply alpha by itself)
         let mask = _mm256_blend_ps::<0b10001000>(result, px); // bits 3,7 from px
-        unsafe { _mm256_storeu_ps(guard.write_ptr(i), mask) };
+        guard.store_ps256(i, mask, _token);
     }
     // Scalar tail for remaining pixels
     let remaining = &mut row[chunks2 * 8..];
@@ -129,9 +127,11 @@ pub(crate) fn unpremultiply_alpha_row_v3(_token: X64V3Token, row: &mut [f32]) {
     let threshold = _mm_set1_ps(1.0 / 1024.0);
     let one = _mm_set1_ps(1.0);
 
-    for pixel in row.chunks_exact_mut(4) {
-        // Bounds established by chunks_exact_mut(4); unsafe is only the SIMD intrinsics.
-        let px = unsafe { _mm_loadu_ps(pixel.as_ptr()) };
+    let pixels = row.len() / 4;
+    let mut guard = GuardedSliceMut::<f32, _, 4>::new(row, |i| i * 4, 0..pixels);
+
+    for i in 0..pixels {
+        let px = guard.load_ps(i, _token);
         let alpha = _mm_shuffle_ps::<0xFF>(px, px); // broadcast alpha
         let mask = _mm_cmpgt_ps(alpha, threshold);
         let inv_alpha = _mm_div_ps(one, alpha);
@@ -139,7 +139,7 @@ pub(crate) fn unpremultiply_alpha_row_v3(_token: X64V3Token, row: &mut [f32]) {
         let unpremul = _mm_mul_ps(px, inv_alpha_masked);
         // Restore alpha channel
         let result = _mm_blend_ps::<0b1000>(unpremul, px);
-        unsafe { _mm_storeu_ps(pixel.as_mut_ptr(), result) };
+        guard.store_ps(i, result, _token);
     }
 }
 
@@ -305,7 +305,7 @@ pub(crate) fn filter_v_row_f32_v3(
         // Guard: writes 8 f32 at i*8 for i in 0..chunks8
         let mut out_guard = GuardedSliceMut::<f32, _, 8>::new(output, |i| i * 8, 0..chunks8);
         for i in 0..chunks8 {
-            unsafe { _mm256_storeu_ps(out_guard.write_ptr(i), zero) };
+            out_guard.store_ps256(i, zero, _token);
         }
     }
     for v in &mut output[base8..width] {
@@ -328,33 +328,29 @@ pub(crate) fn filter_v_row_f32_v3(
 
             for b in 0..blocks4 {
                 let bi = b * 4;
-                unsafe {
-                    let s0 = _mm256_loadu_ps(row_guard.read_ptr(bi));
-                    let s1 = _mm256_loadu_ps(row_guard.read_ptr(bi + 1));
-                    let s2 = _mm256_loadu_ps(row_guard.read_ptr(bi + 2));
-                    let s3 = _mm256_loadu_ps(row_guard.read_ptr(bi + 3));
+                let s0 = row_guard.load_ps256(bi, _token);
+                let s1 = row_guard.load_ps256(bi + 1, _token);
+                let s2 = row_guard.load_ps256(bi + 2, _token);
+                let s3 = row_guard.load_ps256(bi + 3, _token);
 
-                    let a0 = _mm256_loadu_ps(out_guard.read_ptr(bi));
-                    let a1 = _mm256_loadu_ps(out_guard.read_ptr(bi + 1));
-                    let a2 = _mm256_loadu_ps(out_guard.read_ptr(bi + 2));
-                    let a3 = _mm256_loadu_ps(out_guard.read_ptr(bi + 3));
+                let a0 = out_guard.load_ps256(bi, _token);
+                let a1 = out_guard.load_ps256(bi + 1, _token);
+                let a2 = out_guard.load_ps256(bi + 2, _token);
+                let a3 = out_guard.load_ps256(bi + 3, _token);
 
-                    _mm256_storeu_ps(out_guard.write_ptr(bi), _mm256_fmadd_ps(s0, w, a0));
-                    _mm256_storeu_ps(out_guard.write_ptr(bi + 1), _mm256_fmadd_ps(s1, w, a1));
-                    _mm256_storeu_ps(out_guard.write_ptr(bi + 2), _mm256_fmadd_ps(s2, w, a2));
-                    _mm256_storeu_ps(out_guard.write_ptr(bi + 3), _mm256_fmadd_ps(s3, w, a3));
-                }
+                out_guard.store_ps256(bi, _mm256_fmadd_ps(s0, w, a0), _token);
+                out_guard.store_ps256(bi + 1, _mm256_fmadd_ps(s1, w, a1), _token);
+                out_guard.store_ps256(bi + 2, _mm256_fmadd_ps(s2, w, a2), _token);
+                out_guard.store_ps256(bi + 3, _mm256_fmadd_ps(s3, w, a3), _token);
             }
 
             // Remaining 8-float chunks
             let rem_start = blocks4 * 4;
             for i in 0..block_rem {
                 let ci = rem_start + i;
-                unsafe {
-                    let src = _mm256_loadu_ps(row_guard.read_ptr(ci));
-                    let acc = _mm256_loadu_ps(out_guard.read_ptr(ci));
-                    _mm256_storeu_ps(out_guard.write_ptr(ci), _mm256_fmadd_ps(src, w, acc));
-                }
+                let src = row_guard.load_ps256(ci, _token);
+                let acc = out_guard.load_ps256(ci, _token);
+                out_guard.store_ps256(ci, _mm256_fmadd_ps(src, w, acc), _token);
             }
         }
 
@@ -401,7 +397,7 @@ pub(crate) fn premultiply_u8_row_v3(_token: X64V3Token, input: &[u8], output: &m
     let mut out_guard = GuardedSliceMut::<u8, _, 8>::new(output, |i| i * 8, 0..chunks2);
 
     for i in 0..chunks2 {
-        let bytes = unsafe { _mm_loadl_epi64(in_guard.read_ptr(i) as *const __m128i) };
+        let bytes = in_guard.loadl_epi64(i, _token);
         let ext = _mm_cvtepu8_epi16(bytes); // [R0,G0,B0,A0,R1,G1,B1,A1] as i16
 
         // Broadcast alpha
@@ -420,14 +416,8 @@ pub(crate) fn premultiply_u8_row_v3(_token: X64V3Token, input: &[u8], output: &m
         // Pack i16 → u8
         let packed = _mm_packus_epi16(result, result);
 
-        // Store 8 bytes
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                &packed as *const __m128i as *const u8,
-                out_guard.write_ptr(i),
-                8,
-            );
-        }
+        // Store low 8 bytes
+        out_guard.storel_epi64(i, packed, _token);
     }
 
     // Scalar tail
@@ -457,12 +447,16 @@ pub(crate) fn unpremultiply_u8_row_v3(_token: X64V3Token, row: &mut [u8]) {
     let half = _mm_set1_ps(0.5);
 
     // Process 1 pixel (4 bytes) at a time
-    for pixel in row.chunks_exact_mut(4) {
-        let a = pixel[3];
+    let pixels = row.len() / 4;
+    let mut guard = GuardedSliceMut::<u8, _, 4>::new(row, |i| i * 4, 0..pixels);
+
+    for i in 0..pixels {
+        let a = guard.read(i)[3];
         if a == 0 {
-            pixel[0] = 0;
-            pixel[1] = 0;
-            pixel[2] = 0;
+            let arr = guard.write(i);
+            arr[0] = 0;
+            arr[1] = 0;
+            arr[2] = 0;
             continue;
         }
         if a == 255 {
@@ -470,8 +464,7 @@ pub(crate) fn unpremultiply_u8_row_v3(_token: X64V3Token, row: &mut [u8]) {
         }
 
         // Load pixel as 4 × i32 → f32
-        let bytes =
-            unsafe { _mm_cvtsi32_si128(core::ptr::read_unaligned(pixel.as_ptr() as *const i32)) };
+        let bytes = guard.load_si32(i, _token);
         let ext = _mm_cvtepu8_epi32(bytes);
         let fpixel = _mm_cvtepi32_ps(ext);
 
@@ -491,9 +484,7 @@ pub(crate) fn unpremultiply_u8_row_v3(_token: X64V3Token, row: &mut [u8]) {
 
         // Restore original alpha
         let val_with_alpha = (val & 0x00FF_FFFF) | ((a as u32) << 24);
-        unsafe {
-            core::ptr::write_unaligned(pixel.as_mut_ptr() as *mut u32, val_with_alpha);
-        }
+        guard.write_u32_ne(i, val_with_alpha);
     }
 }
 
