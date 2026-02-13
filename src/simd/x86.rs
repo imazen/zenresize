@@ -862,6 +862,9 @@ pub(crate) fn filter_v_all_u8_i16_v3(
     let max_taps = weights.max_taps;
     let mut row_indices = vec![0usize; max_taps];
     let mut paired_wts = vec![_mm256_setzero_si256(); max_taps.div_ceil(2)];
+    // Pre-allocated buffer for per-output-row tap chunk slices (avoids per-row Vec alloc).
+    let empty_chunks: &[[u8; 16]] = &[];
+    let mut tap_rows = vec![empty_chunks; max_taps];
 
     for out_y in 0..out_h {
         let left = weights.left[out_y];
@@ -890,10 +893,9 @@ pub(crate) fn filter_v_all_u8_i16_v3(
 
         // Pre-fetch row chunk slices for this output row's taps.
         // Slicing to [..chunks16] proves inner-loop [ci] accesses are in bounds.
-        let tap_rows: Vec<&[[u8; 16]]> = row_indices[..tap_count]
-            .iter()
-            .map(|&ri| &int_row_chunks[ri][..chunks16])
-            .collect();
+        for (t, &ri) in row_indices[..tap_count].iter().enumerate() {
+            tap_rows[t] = &int_row_chunks[ri][..chunks16];
+        }
 
         for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
             let mut acc_lo = _mm256_setzero_si256();
