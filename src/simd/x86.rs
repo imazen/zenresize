@@ -9,14 +9,13 @@ use alloc::vec::Vec;
 
 use crate::weights::{F32WeightTable, I16_PRECISION, I16WeightTable};
 use archmage::X64V3Token;
-use hoisted_bounds::{GuardedSlice, GuardedSliceMut};
 
 // Safe unaligned SIMD load/store — takes references instead of raw pointers.
 // Explicit imports because names overlap with core::arch intrinsics.
 #[cfg(target_arch = "x86_64")]
 use safe_unaligned_simd::x86_64::{
-    _mm256_loadu_ps, _mm256_storeu_ps, _mm_loadu_ps, _mm_loadu_si128, _mm_loadu_si32,
-    _mm_loadu_si64, _mm_storeu_ps, _mm_storeu_si128, _mm_storeu_si64,
+    _mm256_loadu_ps, _mm256_loadu_si256, _mm256_storeu_ps, _mm_loadu_ps, _mm_loadu_si128,
+    _mm_loadu_si32, _mm_loadu_si64, _mm_storeu_ps, _mm_storeu_si128, _mm_storeu_si64,
 };
 
 // =============================================================================
@@ -161,16 +160,10 @@ fn filter_h_4ch(_token: X64V3Token, input: &[f32], output: &mut [f32], weights: 
     let max_taps = weights.max_taps;
     let in_pixels = input.len() / 4;
     let max_pixel = in_pixels - 1;
-    let mut out_guard = GuardedSliceMut::<f32, _, 4>::new(output, |x| x * 4, 0..out_width);
 
-    // Single guard for all pixel loads across all output pixels.
-    // Clamping ensures edge pixels read from the last valid position;
-    // zero-padded weights make these clamped reads contribute nothing.
-    let in_guard = GuardedSlice::<f32, _, 4>::new(
-        input,
-        |px| px.min(max_pixel) * 4,
-        0..in_pixels + max_taps,
-    );
+    // View input/output as per-pixel [f32; 4] chunks for bounds-proven access.
+    let in_pixels_arr: &[[f32; 4]] = input.as_chunks().0;
+    let (out_pixels, _) = output.as_chunks_mut::<4>();
 
     let chunks4 = max_taps / 4;
     let remainder = max_taps % 4;
@@ -191,10 +184,11 @@ fn filter_h_4ch(_token: X64V3Token, input: &[f32], output: &mut [f32], weights: 
             let w2 = _mm_set1_ps(w[t + 2]);
             let w3 = _mm_set1_ps(w[t + 3]);
 
-            let p0 = in_guard.load_ps(left + t, _token);
-            let p1 = in_guard.load_ps(left + t + 1, _token);
-            let p2 = in_guard.load_ps(left + t + 2, _token);
-            let p3 = in_guard.load_ps(left + t + 3, _token);
+            // Clamp to last valid pixel; zero-padded weights make clamped reads inert.
+            let p0 = _mm_loadu_ps(&in_pixels_arr[(left + t).min(max_pixel)]);
+            let p1 = _mm_loadu_ps(&in_pixels_arr[(left + t + 1).min(max_pixel)]);
+            let p2 = _mm_loadu_ps(&in_pixels_arr[(left + t + 2).min(max_pixel)]);
+            let p3 = _mm_loadu_ps(&in_pixels_arr[(left + t + 3).min(max_pixel)]);
 
             acc0 = _mm_fmadd_ps(p0, w0, acc0);
             acc1 = _mm_fmadd_ps(p1, w1, acc1);
@@ -206,7 +200,7 @@ fn filter_h_4ch(_token: X64V3Token, input: &[f32], output: &mut [f32], weights: 
         for t in 0..remainder {
             let tt = t_start + t;
             let w_val = _mm_set1_ps(w[tt]);
-            let pixel = in_guard.load_ps(left + tt, _token);
+            let pixel = _mm_loadu_ps(&in_pixels_arr[(left + tt).min(max_pixel)]);
             acc0 = _mm_fmadd_ps(pixel, w_val, acc0);
         }
 
@@ -214,7 +208,7 @@ fn filter_h_4ch(_token: X64V3Token, input: &[f32], output: &mut [f32], weights: 
         let sum23 = _mm_add_ps(acc2, acc3);
         let acc = _mm_add_ps(sum01, sum23);
 
-        out_guard.store_ps(out_x, acc, _token);
+        _mm_storeu_ps(&mut out_pixels[out_x], acc);
     }
 }
 
@@ -505,8 +499,6 @@ fn filter_h_u8_4ch(_token: X64V3Token, input: &[u8], output: &mut [u8], weights:
         return;
     }
 
-    // 256-bit shuffle mask: within each 128-bit lane, rearrange
-    // [R0,G0,B0,A0,R1,G1,B1,A1] → [R0,R1,G0,G1,B0,B1,A0,A1]
     let ymm_shuffle = _mm256_set_epi8(
         15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0,
         15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0,
@@ -515,22 +507,12 @@ fn filter_h_u8_4ch(_token: X64V3Token, input: &[u8], output: &mut [u8], weights:
     let half = _mm_set1_epi32(1 << (I16_PRECISION - 1));
     let zero = _mm_setzero_si128();
 
-    // Global guards: padding guarantees all accesses are in-bounds,
-    // no clamping needed. One guard per buffer, constructed once.
-    let in_guard = GuardedSlice::<u8, _, 16>::new(
-        input,
-        |px_start| px_start * 4,
-        0..max_left + groups4 * 4,
-    );
-
+    // Weight chunks: contiguous stride-16 i16 array, perfect for as_chunks.
     let ew_all = weights.expanded_4ch_all();
-    let ew_guard = GuardedSlice::<i16, _, 16>::new(
-        ew_all,
-        |group_idx| group_idx * 16,
-        0..out_width * groups4,
-    );
+    let (ew_chunks, _) = ew_all.as_chunks::<16>();
 
-    let mut out_guard = GuardedSliceMut::<u8, _, 4>::new(output, |x| x * 4, 0..out_width);
+    // Output: contiguous stride-4 u8 pixels.
+    let (out_pixels, _) = output.as_chunks_mut::<4>();
 
     for out_x in 0..out_width {
         let left = weights.left[out_x] as usize;
@@ -540,10 +522,15 @@ fn filter_h_u8_4ch(_token: X64V3Token, input: &[u8], output: &mut [u8], weights:
 
         // groups4 is constant across all pixels — enables LLVM unrolling.
         for g in 0..groups4 {
-            let pixels = in_guard.load_si128(left + g * 4, _token);
+            // Input: load 16 bytes (4 pixels) at data-dependent offset.
+            // Padding check guarantees (left + g*4)*4 + 16 <= input.len().
+            let byte_offset = (left + g * 4) * 4;
+            let pixels = _mm_loadu_si128(
+                <&[u8; 16]>::try_from(&input[byte_offset..byte_offset + 16]).unwrap(),
+            );
             let ext = _mm256_cvtepu8_epi16(pixels);
             let shuffled = _mm256_shuffle_epi8(ext, ymm_shuffle);
-            let w = ew_guard.load_si256(ew_base + g, _token);
+            let w = _mm256_loadu_si256(&ew_chunks[ew_base + g]);
             acc = _mm256_add_epi32(acc, _mm256_madd_epi16(shuffled, w));
         }
 
@@ -557,7 +544,7 @@ fn filter_h_u8_4ch(_token: X64V3Token, input: &[u8], output: &mut [u8], weights:
         let packed8 = _mm_packus_epi16(packed16, zero);
 
         let pixel_val = _mm_cvtsi128_si32(packed8) as u32;
-        out_guard.write_u32_ne(out_x, pixel_val);
+        out_pixels[out_x].copy_from_slice(&pixel_val.to_ne_bytes());
     }
 }
 
@@ -594,22 +581,24 @@ fn filter_h_u8_4ch_with_edge_fallback(
 
     // Interior pixels: SIMD
     if safe_end > 0 {
-        let mut out_guard = GuardedSliceMut::<u8, _, 4>::new(output, |x| x * 4, 0..safe_end);
+        let (out_pixels, _) = output.as_chunks_mut::<4>();
 
         for out_x in 0..safe_end {
             let left = weights.left[out_x] as usize;
 
             let ew = weights.weights_expanded_4ch(out_x);
-            let ew_guard = GuardedSlice::<i16, _, 16>::new(ew, |g| g * 16, 0..groups4);
-            let in_guard = GuardedSlice::<u8, _, 16>::new(input, |g| left * 4 + g * 16, 0..groups4);
+            let (ew_chunks, _) = ew.as_chunks::<16>();
 
             let mut acc = _mm256_setzero_si256();
 
             for g in 0..groups4 {
-                let pixels = in_guard.load_si128(g, _token);
+                let byte_offset = left * 4 + g * 16;
+                let pixels = _mm_loadu_si128(
+                    <&[u8; 16]>::try_from(&input[byte_offset..byte_offset + 16]).unwrap(),
+                );
                 let ext = _mm256_cvtepu8_epi16(pixels);
                 let shuffled = _mm256_shuffle_epi8(ext, ymm_shuffle);
-                let w = ew_guard.load_si256(g, _token);
+                let w = _mm256_loadu_si256(&ew_chunks[g]);
                 acc = _mm256_add_epi32(acc, _mm256_madd_epi16(shuffled, w));
             }
 
@@ -623,7 +612,7 @@ fn filter_h_u8_4ch_with_edge_fallback(
             let packed8 = _mm_packus_epi16(packed16, zero);
 
             let pixel_val = _mm_cvtsi128_si32(packed8) as u32;
-            out_guard.write_u32_ne(out_x, pixel_val);
+            out_pixels[out_x].copy_from_slice(&pixel_val.to_ne_bytes());
         }
     }
 }
@@ -689,24 +678,15 @@ fn filter_h_u8_4ch_4rows(
     );
     let half = _mm_set1_epi32(1 << (I16_PRECISION - 1));
 
-    // Global guards: padding guarantees all accesses in-bounds, no clamping.
-    let guard_range = 0..max_left + groups4 * 4;
-    let ig0 = GuardedSlice::<u8, _, 16>::new(in0, |px| px * 4, guard_range.clone());
-    let ig1 = GuardedSlice::<u8, _, 16>::new(in1, |px| px * 4, guard_range.clone());
-    let ig2 = GuardedSlice::<u8, _, 16>::new(in2, |px| px * 4, guard_range.clone());
-    let ig3 = GuardedSlice::<u8, _, 16>::new(in3, |px| px * 4, guard_range);
-
+    // Weight chunks: contiguous stride-16 i16 array.
     let ew_all = weights.expanded_4ch_all();
-    let ew_guard = GuardedSlice::<i16, _, 16>::new(
-        ew_all,
-        |group_idx| group_idx * 16,
-        0..out_width * groups4,
-    );
+    let (ew_chunks, _) = ew_all.as_chunks::<16>();
 
-    let mut og0 = GuardedSliceMut::<u8, _, 4>::new(out0, |x| x * 4, 0..out_width);
-    let mut og1 = GuardedSliceMut::<u8, _, 4>::new(out1, |x| x * 4, 0..out_width);
-    let mut og2 = GuardedSliceMut::<u8, _, 4>::new(out2, |x| x * 4, 0..out_width);
-    let mut og3 = GuardedSliceMut::<u8, _, 4>::new(out3, |x| x * 4, 0..out_width);
+    // Output: contiguous stride-4 u8 pixels per row.
+    let (op0, _) = out0.as_chunks_mut::<4>();
+    let (op1, _) = out1.as_chunks_mut::<4>();
+    let (op2, _) = out2.as_chunks_mut::<4>();
+    let (op3, _) = out3.as_chunks_mut::<4>();
 
     for out_x in 0..out_width {
         let left = weights.left[out_x] as usize;
@@ -718,19 +698,27 @@ fn filter_h_u8_4ch_4rows(
         let mut acc3 = _mm256_setzero_si256();
 
         for g in 0..groups4 {
-            let w = ew_guard.load_si256(ew_base + g, _token);
-            let px = left + g * 4;
+            let w = _mm256_loadu_si256(&ew_chunks[ew_base + g]);
+            let byte_off = (left + g * 4) * 4;
 
-            let p0 = _mm256_cvtepu8_epi16(ig0.load_si128(px, _token));
+            let p0 = _mm256_cvtepu8_epi16(_mm_loadu_si128(
+                <&[u8; 16]>::try_from(&in0[byte_off..byte_off + 16]).unwrap(),
+            ));
             acc0 = _mm256_add_epi32(acc0, _mm256_madd_epi16(_mm256_shuffle_epi8(p0, ymm_shuffle), w));
 
-            let p1 = _mm256_cvtepu8_epi16(ig1.load_si128(px, _token));
+            let p1 = _mm256_cvtepu8_epi16(_mm_loadu_si128(
+                <&[u8; 16]>::try_from(&in1[byte_off..byte_off + 16]).unwrap(),
+            ));
             acc1 = _mm256_add_epi32(acc1, _mm256_madd_epi16(_mm256_shuffle_epi8(p1, ymm_shuffle), w));
 
-            let p2 = _mm256_cvtepu8_epi16(ig2.load_si128(px, _token));
+            let p2 = _mm256_cvtepu8_epi16(_mm_loadu_si128(
+                <&[u8; 16]>::try_from(&in2[byte_off..byte_off + 16]).unwrap(),
+            ));
             acc2 = _mm256_add_epi32(acc2, _mm256_madd_epi16(_mm256_shuffle_epi8(p2, ymm_shuffle), w));
 
-            let p3 = _mm256_cvtepu8_epi16(ig3.load_si128(px, _token));
+            let p3 = _mm256_cvtepu8_epi16(_mm_loadu_si128(
+                <&[u8; 16]>::try_from(&in3[byte_off..byte_off + 16]).unwrap(),
+            ));
             acc3 = _mm256_add_epi32(acc3, _mm256_madd_epi16(_mm256_shuffle_epi8(p3, ymm_shuffle), w));
         }
 
@@ -748,10 +736,10 @@ fn filter_h_u8_4ch_4rows(
         let pack23 = _mm_packs_epi32(s2, s3);
         let result = _mm_packus_epi16(pack01, pack23);
 
-        og0.write_u32_ne(out_x, _mm_cvtsi128_si32(result) as u32);
-        og1.write_u32_ne(out_x, _mm_extract_epi32::<1>(result) as u32);
-        og2.write_u32_ne(out_x, _mm_extract_epi32::<2>(result) as u32);
-        og3.write_u32_ne(out_x, _mm_extract_epi32::<3>(result) as u32);
+        op0[out_x].copy_from_slice(&(_mm_cvtsi128_si32(result) as u32).to_ne_bytes());
+        op1[out_x].copy_from_slice(&(_mm_extract_epi32::<1>(result) as u32).to_ne_bytes());
+        op2[out_x].copy_from_slice(&(_mm_extract_epi32::<2>(result) as u32).to_ne_bytes());
+        op3[out_x].copy_from_slice(&(_mm_extract_epi32::<3>(result) as u32).to_ne_bytes());
     }
 }
 
