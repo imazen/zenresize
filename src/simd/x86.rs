@@ -793,8 +793,7 @@ fn filter_h_u8_generic(
 /// Integer vertical convolution: u8 rows → u8 output via i32 accumulator.
 ///
 /// Uses AVX2 `_mm256_madd_epi16` to process pairs of rows efficiently.
-/// Loads u8 from input rows, zero-extends to i16, multiplies by i16 weights,
-/// accumulates in i32, then packs back to u8.
+/// Pre-extracts raw row pointers to eliminate per-access bounds checking.
 #[archmage::arcane]
 pub(crate) fn filter_v_u8_i16_v3(
     _token: X64V3Token,
@@ -803,66 +802,72 @@ pub(crate) fn filter_v_u8_i16_v3(
     weights: &[i16],
 ) {
     let width = output.len();
-    debug_assert_eq!(rows.len(), weights.len());
+    let num_rows = rows.len();
+    debug_assert_eq!(num_rows, weights.len());
 
     let half = _mm256_set1_epi32(1 << (I16_PRECISION - 1));
+    let out_ptr = output.as_mut_ptr();
 
-    // Process 16 bytes (16 u8 values = 4 RGBA pixels) at a time
+    // Pre-extract row pointers to avoid repeated bounds checking in inner loop.
+    // 128 taps covers Lanczos3 at up to ~10x downscale.
+    assert!(num_rows <= 128, "V kernel: too many taps ({num_rows} > 128)");
+    let mut row_ptrs = [core::ptr::null::<u8>(); 128];
+    for i in 0..num_rows {
+        row_ptrs[i] = rows[i].as_ptr();
+    }
+    let row_ptrs = &row_ptrs[..num_rows];
+
+    // Pre-compute paired weights
+    let pairs = num_rows / 2;
+    let odd = num_rows % 2 != 0;
+    let odd_weight = if odd {
+        _mm256_set1_epi32(weights[num_rows - 1] as i32 & 0xFFFF)
+    } else {
+        _mm256_setzero_si256()
+    };
+
     let chunks16 = width / 16;
 
     for chunk in 0..chunks16 {
         let base = chunk * 16;
-        let mut acc_lo = _mm256_setzero_si256(); // i32x8 for first 8 channels
-        let mut acc_hi = _mm256_setzero_si256(); // i32x8 for next 8 channels
+        let mut acc_lo = _mm256_setzero_si256();
+        let mut acc_hi = _mm256_setzero_si256();
 
-        // Process rows in pairs for madd_epi16
-        let pairs = rows.len() / 2;
         for p in 0..pairs {
             let r0 = p * 2;
             let r1 = r0 + 1;
             let w0 = weights[r0] as i32;
             let w1 = weights[r1] as i32;
-            let paired_w = _mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
+            let pw = _mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
+            unsafe {
+                let src0 = _mm_loadu_si128(row_ptrs[r0].add(base) as *const __m128i);
+                let src1 = _mm_loadu_si128(row_ptrs[r1].add(base) as *const __m128i);
 
-            // Load 16 bytes from each row
-            let src0 = unsafe { _mm_loadu_si128(rows[r0].as_ptr().add(base) as *const __m128i) };
-            let src1 = unsafe { _mm_loadu_si128(rows[r1].as_ptr().add(base) as *const __m128i) };
+                let interleaved_lo = _mm_unpacklo_epi8(src0, src1);
+                let interleaved_hi = _mm_unpackhi_epi8(src0, src1);
 
-            // Interleave bytes from row0 and row1:
-            // unpacklo: [r0[0],r1[0],r0[1],r1[1],...,r0[7],r1[7]] → first 8 channels
-            let interleaved_lo = _mm_unpacklo_epi8(src0, src1);
-            let interleaved_hi = _mm_unpackhi_epi8(src0, src1);
+                let ext_lo = _mm256_cvtepu8_epi16(interleaved_lo);
+                let ext_hi = _mm256_cvtepu8_epi16(interleaved_hi);
 
-            // Zero-extend i8 pairs to i16 pairs, then madd
-            // Low 8 channels: extend to 256-bit
-            let ext_lo = _mm256_cvtepu8_epi16(interleaved_lo);
-            let ext_hi = _mm256_cvtepu8_epi16(interleaved_hi);
-
-            // madd: multiply each i16 by paired weight, accumulate pairs → i32
-            acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, paired_w));
-            acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, paired_w));
+                acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, pw));
+                acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, pw));
+            }
         }
 
-        // Handle odd last row (if any).
-        // Use the same interleave+madd approach as paired rows, but interleave
-        // with a zero row so that madd computes pixel*w + 0*0 = pixel*w.
-        // This keeps the accumulator lane layout identical to the paired path.
-        if rows.len() % 2 != 0 {
-            let r = rows.len() - 1;
-            let w0 = weights[r] as i32;
-            let paired_w = _mm256_set1_epi32(w0 & 0xFFFF); // [w0, 0] as i16 pair
+        if odd {
+            unsafe {
+                let src = _mm_loadu_si128(row_ptrs[num_rows - 1].add(base) as *const __m128i);
+                let zero_src = _mm_setzero_si128();
 
-            let src = unsafe { _mm_loadu_si128(rows[r].as_ptr().add(base) as *const __m128i) };
-            let zero_src = _mm_setzero_si128();
+                let interleaved_lo = _mm_unpacklo_epi8(src, zero_src);
+                let interleaved_hi = _mm_unpackhi_epi8(src, zero_src);
 
-            let interleaved_lo = _mm_unpacklo_epi8(src, zero_src);
-            let interleaved_hi = _mm_unpackhi_epi8(src, zero_src);
+                let ext_lo = _mm256_cvtepu8_epi16(interleaved_lo);
+                let ext_hi = _mm256_cvtepu8_epi16(interleaved_hi);
 
-            let ext_lo = _mm256_cvtepu8_epi16(interleaved_lo);
-            let ext_hi = _mm256_cvtepu8_epi16(interleaved_hi);
-
-            acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, paired_w));
-            acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, paired_w));
+                acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, odd_weight));
+                acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, odd_weight));
+            }
         }
 
         // Round and shift
@@ -871,26 +876,22 @@ pub(crate) fn filter_v_u8_i16_v3(
         let shifted_lo = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded_lo);
         let shifted_hi = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded_hi);
 
-        // Pack i32 → i16 → u8 using 128-bit ops to avoid AVX2 lane-crossing.
-        // acc_lo = [pixel0(4×i32) | pixel1(4×i32)], acc_hi = [pixel2 | pixel3]
-        // 256-bit packs_epi32 operates within lanes, producing [P0,P2|P1,P3] —
-        // wrong order. Using 128-bit extracts + SSE packs gives correct order.
-        let lo_lo = _mm256_castsi256_si128(shifted_lo); // pixel 0
-        let lo_hi = _mm256_extracti128_si256::<1>(shifted_lo); // pixel 1
-        let hi_lo = _mm256_castsi256_si128(shifted_hi); // pixel 2
-        let hi_hi = _mm256_extracti128_si256::<1>(shifted_hi); // pixel 3
+        // Pack i32 → i16 → u8 using 128-bit ops to avoid lane-crossing
+        let lo_lo = _mm256_castsi256_si128(shifted_lo);
+        let lo_hi = _mm256_extracti128_si256::<1>(shifted_lo);
+        let hi_lo = _mm256_castsi256_si128(shifted_hi);
+        let hi_hi = _mm256_extracti128_si256::<1>(shifted_hi);
 
-        let pack01 = _mm_packs_epi32(lo_lo, lo_hi); // [P0, P1] as 8×i16
-        let pack23 = _mm_packs_epi32(hi_lo, hi_hi); // [P2, P3] as 8×i16
-        let result = _mm_packus_epi16(pack01, pack23); // [P0, P1, P2, P3] as 16×u8
+        let pack01 = _mm_packs_epi32(lo_lo, lo_hi);
+        let pack23 = _mm_packs_epi32(hi_lo, hi_hi);
+        let result = _mm_packus_epi16(pack01, pack23);
 
-        // Store 16 bytes
         unsafe {
-            _mm_storeu_si128(output.as_mut_ptr().add(base) as *mut __m128i, result);
+            _mm_storeu_si128(out_ptr.add(base) as *mut __m128i, result);
         }
     }
 
-    // Scalar tail for remaining bytes
+    // Scalar tail
     let tail_start = chunks16 * 16;
     for x in tail_start..width {
         let mut acc: i32 = 0;
