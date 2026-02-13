@@ -4,11 +4,6 @@
 //! with scalar fallback on other architectures. All functions are
 //! `#[inline(always)]` so they inline into the archmage-dispatched callers.
 
-#[cfg(not(feature = "std"))]
-use alloc::vec::Vec;
-#[cfg(feature = "std")]
-use std::vec::Vec;
-
 use wide::{f32x4, i16x8, i32x4, i32x8, u8x16};
 
 use crate::weights::{F32WeightTable, I16_PRECISION, I16WeightTable};
@@ -364,14 +359,7 @@ pub(super) fn filter_v_all_u8_i16(
         let w = weights.weights(out_y);
         let out_start = out_y * h_row_len;
 
-        // Pre-compute clamped row byte offsets
-        let row_offsets: Vec<usize> = (0..tap_count)
-            .map(|t| {
-                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                in_y * h_row_len
-            })
-            .collect();
-
+        let in_h_i32 = in_h as i32 - 1;
         let chunks16 = h_row_len / 16;
         let base16 = chunks16 * 16;
 
@@ -381,7 +369,8 @@ pub(super) fn filter_v_all_u8_i16(
             let mut acc_hi = i32x8::splat(0);
 
             for (t, &weight) in w[..tap_count].iter().enumerate() {
-                let off = row_offsets[t] + x;
+                let in_y = (left + t as i32).clamp(0, in_h_i32) as usize;
+                let off = in_y * h_row_len + x;
                 let bytes: [u8; 16] = intermediate[off..off + 16].try_into().unwrap();
                 let src = u8x16::new(bytes);
                 let lo = i16x8::from_u8x16_low(src);
@@ -404,7 +393,8 @@ pub(super) fn filter_v_all_u8_i16(
         for x in base16..h_row_len {
             let mut acc: i32 = 0;
             for (t, &weight) in w[..tap_count].iter().enumerate() {
-                acc += intermediate[row_offsets[t] + x] as i32 * weight as i32;
+                let in_y = (left + t as i32).clamp(0, in_h_i32) as usize;
+                acc += intermediate[in_y * h_row_len + x] as i32 * weight as i32;
             }
             let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
             output[out_start + x] = rounded.clamp(0, 255) as u8;
