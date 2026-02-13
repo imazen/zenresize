@@ -50,3 +50,7 @@ harness = false
 [[bench]]
 name = "profile_srgb"
 harness = false
+
+[[bench]]
+name = "sweep_bench"
+harness = false

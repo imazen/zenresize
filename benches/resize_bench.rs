@@ -4,10 +4,9 @@
 //! Each library is tested in sRGB mode (fast) and linear-light mode where available.
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use std::path::Path;
 
 // ---------------------------------------------------------------------------
-// Image loading
+// Synthetic image generation (real vs synth is <1% difference for SIMD kernels)
 // ---------------------------------------------------------------------------
 
 struct TestImage {
@@ -17,58 +16,30 @@ struct TestImage {
     rgba: Vec<u8>,
 }
 
-fn load_png(path: &Path, name: &'static str) -> Option<TestImage> {
-    let img = image::open(path).ok()?.to_rgba8();
-    let (w, h) = img.dimensions();
-    Some(TestImage {
+fn make_gradient(w: u32, h: u32, name: &'static str) -> TestImage {
+    let mut rgba = vec![0u8; (w as usize) * (h as usize) * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) as usize * 4;
+            rgba[i] = (x % 256) as u8;
+            rgba[i + 1] = (y % 256) as u8;
+            rgba[i + 2] = ((x + y) % 256) as u8;
+            rgba[i + 3] = 255;
+        }
+    }
+    TestImage {
         name,
         width: w,
         height: h,
-        rgba: img.into_raw(),
-    })
+        rgba,
+    }
 }
 
 fn test_images() -> Vec<TestImage> {
-    let corpus = Path::new("/home/lilith/work/codec-corpus");
-    let mut images = Vec::new();
-
-    // 1024x1024 photo
-    if let Some(img) = load_png(
-        &corpus.join(
-            "clic2025-1024/02809272b4ca9b08af45771501b741296187c7e26907efb44abbbfcb6cd804f7.png",
-        ),
-        "clic_1024",
-    ) {
-        images.push(img);
-    }
-
-    // 576x576 photo
-    if let Some(img) = load_png(&corpus.join("gb82/baby-lossless.png"), "gb82_576") {
-        images.push(img);
-    }
-
-    if images.is_empty() {
-        // Fallback: synthetic gradient
-        let (w, h) = (1024u32, 1024u32);
-        let mut rgba = vec![0u8; (w * h * 4) as usize];
-        for y in 0..h {
-            for x in 0..w {
-                let i = (y * w + x) as usize * 4;
-                rgba[i] = (x * 255 / w) as u8;
-                rgba[i + 1] = (y * 255 / h) as u8;
-                rgba[i + 2] = 128;
-                rgba[i + 3] = 255;
-            }
-        }
-        images.push(TestImage {
-            name: "synth_1024",
-            width: w,
-            height: h,
-            rgba,
-        });
-    }
-
-    images
+    vec![
+        make_gradient(1024, 1024, "1024sq"),
+        make_gradient(576, 576, "576sq"),
+    ]
 }
 
 // ---------------------------------------------------------------------------

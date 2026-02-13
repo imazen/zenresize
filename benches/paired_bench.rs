@@ -10,7 +10,6 @@
 //!
 //! Inspired by tango-bench's paired methodology, adapted for cross-library comparison.
 
-use std::path::Path;
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
@@ -54,36 +53,15 @@ struct TestImage {
     rgba: Vec<u8>,
 }
 
-fn load_png(path: &Path, name: &'static str) -> Option<TestImage> {
-    let img = image::open(path).ok()?.to_rgba8();
-    let (w, h) = img.dimensions();
-    Some(TestImage {
-        name,
-        width: w,
-        height: h,
-        rgba: img.into_raw(),
-    })
-}
-
 fn test_image() -> TestImage {
-    let corpus = Path::new("/home/lilith/work/codec-corpus");
-    if let Some(img) = load_png(
-        &corpus.join(
-            "clic2025-1024/02809272b4ca9b08af45771501b741296187c7e26907efb44abbbfcb6cd804f7.png",
-        ),
-        "clic_1024",
-    ) {
-        return img;
-    }
-    // Fallback: synthetic
     let (w, h) = (1024u32, 1024u32);
-    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    let mut rgba = vec![0u8; (w as usize) * (h as usize) * 4];
     for y in 0..h {
         for x in 0..w {
             let i = (y * w + x) as usize * 4;
-            rgba[i] = (x * 255 / w) as u8;
-            rgba[i + 1] = (y * 255 / h) as u8;
-            rgba[i + 2] = 128;
+            rgba[i] = (x % 256) as u8;
+            rgba[i + 1] = (y % 256) as u8;
+            rgba[i + 2] = ((x + y) % 256) as u8;
             rgba[i + 3] = 255;
         }
     }
