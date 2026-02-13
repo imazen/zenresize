@@ -163,6 +163,34 @@ pub(crate) fn filter_v_u8_i16_scalar(
     }
 }
 
+/// Batch vertical filter for all output rows, scalar fallback.
+pub(crate) fn filter_v_all_u8_i16_scalar(
+    _token: ScalarToken,
+    intermediate: &[u8],
+    output: &mut [u8],
+    h_row_len: usize,
+    in_h: usize,
+    out_h: usize,
+    weights: &crate::weights::I16WeightTable,
+) {
+    for out_y in 0..out_h {
+        let left = weights.left[out_y];
+        let tap_count = weights.tap_count(out_y);
+        let w = weights.weights(out_y);
+        let out_start = out_y * h_row_len;
+
+        for x in 0..h_row_len {
+            let mut acc: i32 = 0;
+            for t in 0..tap_count {
+                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+                acc += intermediate[in_y * h_row_len + x] as i32 * w[t] as i32;
+            }
+            let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+            output[out_start + x] = rounded.clamp(0, 255) as u8;
+        }
+    }
+}
+
 /// Premultiply alpha on RGBA u8 row: input → output, scalar fallback.
 pub(crate) fn premultiply_u8_row_scalar(_token: ScalarToken, input: &[u8], output: &mut [u8]) {
     debug_assert_eq!(input.len(), output.len());

@@ -270,27 +270,38 @@ fn resize_into_i16(
     }
 
     // === Vertical pass: u8 → i32 → u8 ===
-    let max_taps = v_weights.max_taps;
-    let mut row_ptrs: Vec<&[u8]> = Vec::with_capacity(max_taps);
+    if !has_alpha {
+        // Batch V kernel: processes all output rows in one call,
+        // avoiding per-row dispatch overhead and row_ptrs construction.
+        simd::filter_v_all_u8_i16(
+            &intermediate,
+            output,
+            h_row_len,
+            in_h,
+            out_h,
+            &v_weights,
+        );
+    } else {
+        // Per-row path needed for alpha unpremultiply after each row.
+        let max_taps = v_weights.max_taps;
+        let mut row_ptrs: Vec<&[u8]> = Vec::with_capacity(max_taps);
 
-    for out_y in 0..out_h {
-        let left = v_weights.left[out_y];
-        let tap_count = v_weights.tap_count(out_y);
-        let weights = v_weights.weights(out_y);
+        for out_y in 0..out_h {
+            let left = v_weights.left[out_y];
+            let tap_count = v_weights.tap_count(out_y);
+            let weights = v_weights.weights(out_y);
 
-        row_ptrs.clear();
-        for t in 0..tap_count {
-            let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-            let start = in_y * h_row_len;
-            row_ptrs.push(&intermediate[start..start + h_row_len]);
-        }
+            row_ptrs.clear();
+            for t in 0..tap_count {
+                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+                let start = in_y * h_row_len;
+                row_ptrs.push(&intermediate[start..start + h_row_len]);
+            }
 
-        let out_start = out_y * out_row_len;
-        let out_slice = &mut output[out_start..out_start + out_row_len];
+            let out_start = out_y * out_row_len;
+            let out_slice = &mut output[out_start..out_start + out_row_len];
 
-        simd::filter_v_u8_i16(&row_ptrs, out_slice, weights);
-
-        if has_alpha {
+            simd::filter_v_u8_i16(&row_ptrs, out_slice, weights);
             simd::unpremultiply_u8_row(out_slice);
         }
     }
@@ -455,26 +466,34 @@ impl Resizer {
             }
 
             // V pass
-            let max_taps = v_weights.max_taps;
-            let mut row_ptrs: Vec<&[u8]> = Vec::with_capacity(max_taps);
+            if !has_alpha {
+                simd::filter_v_all_u8_i16(
+                    intermediate,
+                    output,
+                    h_row_len,
+                    in_h,
+                    out_h,
+                    v_weights,
+                );
+            } else {
+                let max_taps = v_weights.max_taps;
+                let mut row_ptrs: Vec<&[u8]> = Vec::with_capacity(max_taps);
 
-            for out_y in 0..out_h {
-                let left = v_weights.left[out_y];
-                let tap_count = v_weights.tap_count(out_y);
-                let weights = v_weights.weights(out_y);
+                for out_y in 0..out_h {
+                    let left = v_weights.left[out_y];
+                    let tap_count = v_weights.tap_count(out_y);
+                    let weights = v_weights.weights(out_y);
 
-                row_ptrs.clear();
-                for t in 0..tap_count {
-                    let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                    let start = in_y * h_row_len;
-                    row_ptrs.push(&intermediate[start..start + h_row_len]);
-                }
+                    row_ptrs.clear();
+                    for t in 0..tap_count {
+                        let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+                        let start = in_y * h_row_len;
+                        row_ptrs.push(&intermediate[start..start + h_row_len]);
+                    }
 
-                let out_start = out_y * out_row_len;
-                let out_slice = &mut output[out_start..out_start + out_row_len];
-                simd::filter_v_u8_i16(&row_ptrs, out_slice, weights);
-
-                if has_alpha {
+                    let out_start = out_y * out_row_len;
+                    let out_slice = &mut output[out_start..out_start + out_row_len];
+                    simd::filter_v_u8_i16(&row_ptrs, out_slice, weights);
                     simd::unpremultiply_u8_row(out_slice);
                 }
             }

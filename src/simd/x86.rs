@@ -924,6 +924,134 @@ pub(crate) fn filter_v_u8_i16_v3(
     }
 }
 
+/// Batch vertical filter: process all output rows from the intermediate buffer.
+///
+/// This avoids per-row dispatch overhead, row pointer construction, and
+/// slice bounds checking by operating on the raw intermediate layout.
+#[archmage::arcane]
+pub(crate) fn filter_v_all_u8_i16_v3(
+    _token: X64V3Token,
+    intermediate: &[u8],
+    output: &mut [u8],
+    h_row_len: usize,
+    in_h: usize,
+    out_h: usize,
+    weights: &I16WeightTable,
+) {
+    let half = _mm256_set1_epi32(1 << (I16_PRECISION - 1));
+    let chunks16 = h_row_len / 16;
+    let int_ptr = intermediate.as_ptr();
+    let out_ptr = output.as_mut_ptr();
+    let in_h_i32 = in_h as i32;
+
+    for out_y in 0..out_h {
+        let left = weights.left[out_y];
+        let tap_count = weights.tap_count(out_y);
+        let w = weights.weights(out_y);
+        let out_base = out_y * h_row_len;
+
+        // Pre-compute paired weights and row pointers for this output row.
+        let pairs = tap_count / 2;
+        let odd = tap_count % 2 != 0;
+
+        // Stack arrays for row pointers and paired weights.
+        // 128 taps max (Lanczos3 at 10× downscale).
+        let mut row_ptrs = [core::ptr::null::<u8>(); 128];
+        let mut paired_wts = [_mm256_setzero_si256(); 64];
+
+        for t in 0..tap_count {
+            let in_y = (left + t as i32).clamp(0, in_h_i32 - 1) as usize;
+            row_ptrs[t] = unsafe { int_ptr.add(in_y * h_row_len) };
+        }
+        for p in 0..pairs {
+            let w0 = w[p * 2] as i32;
+            let w1 = w[p * 2 + 1] as i32;
+            paired_wts[p] = _mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
+        }
+        let odd_weight = if odd {
+            _mm256_set1_epi32(w[tap_count - 1] as i32 & 0xFFFF)
+        } else {
+            _mm256_setzero_si256()
+        };
+
+        let rp_base = row_ptrs.as_ptr();
+        let pw_base = paired_wts.as_ptr();
+        let odd_rp = if odd { row_ptrs[tap_count - 1] } else { core::ptr::null() };
+
+        for chunk in 0..chunks16 {
+            let base = chunk * 16;
+            let mut acc_lo = _mm256_setzero_si256();
+            let mut acc_hi = _mm256_setzero_si256();
+
+            unsafe {
+                let mut rp = rp_base;
+                let mut wp = pw_base;
+
+                for _ in 0..pairs {
+                    let pw = *wp;
+                    let src0 = _mm_loadu_si128((*rp).add(base) as *const __m128i);
+                    let src1 = _mm_loadu_si128((*rp.add(1)).add(base) as *const __m128i);
+
+                    let il_lo = _mm_unpacklo_epi8(src0, src1);
+                    let il_hi = _mm_unpackhi_epi8(src0, src1);
+
+                    let ext_lo = _mm256_cvtepu8_epi16(il_lo);
+                    let ext_hi = _mm256_cvtepu8_epi16(il_hi);
+
+                    acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, pw));
+                    acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, pw));
+
+                    rp = rp.add(2);
+                    wp = wp.add(1);
+                }
+            }
+
+            if odd {
+                unsafe {
+                    let src = _mm_loadu_si128(odd_rp.add(base) as *const __m128i);
+                    let zero_src = _mm_setzero_si128();
+                    let il_lo = _mm_unpacklo_epi8(src, zero_src);
+                    let il_hi = _mm_unpackhi_epi8(src, zero_src);
+                    let ext_lo = _mm256_cvtepu8_epi16(il_lo);
+                    let ext_hi = _mm256_cvtepu8_epi16(il_hi);
+                    acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, odd_weight));
+                    acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, odd_weight));
+                }
+            }
+
+            let rounded_lo = _mm256_add_epi32(acc_lo, half);
+            let rounded_hi = _mm256_add_epi32(acc_hi, half);
+            let shifted_lo = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded_lo);
+            let shifted_hi = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded_hi);
+
+            let lo_lo = _mm256_castsi256_si128(shifted_lo);
+            let lo_hi = _mm256_extracti128_si256::<1>(shifted_lo);
+            let hi_lo = _mm256_castsi256_si128(shifted_hi);
+            let hi_hi = _mm256_extracti128_si256::<1>(shifted_hi);
+
+            let pack01 = _mm_packs_epi32(lo_lo, lo_hi);
+            let pack23 = _mm_packs_epi32(hi_lo, hi_hi);
+            let result = _mm_packus_epi16(pack01, pack23);
+
+            unsafe {
+                _mm_storeu_si128(out_ptr.add(out_base + base) as *mut __m128i, result);
+            }
+        }
+
+        // Scalar tail
+        let tail_start = chunks16 * 16;
+        for x in tail_start..h_row_len {
+            let mut acc: i32 = 0;
+            for t in 0..tap_count {
+                let in_y = (left + t as i32).clamp(0, in_h_i32 - 1) as usize;
+                acc += intermediate[in_y * h_row_len + x] as i32 * w[t] as i32;
+            }
+            let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+            output[out_base + x] = rounded.clamp(0, 255) as u8;
+        }
+    }
+}
+
 // =============================================================================
 // Pre-converted i16 path (for benchmarking alternative approaches)
 // =============================================================================

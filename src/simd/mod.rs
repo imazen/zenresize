@@ -93,6 +93,22 @@ pub(crate) fn filter_v_u8_i16(rows: &[&[u8]], output: &mut [u8], weights: &[i16]
     archmage::incant!(filter_v_u8_i16(rows, output, weights))
 }
 
+/// Batch vertical filter: process all output rows from the intermediate buffer.
+///
+/// Avoids per-row dispatch overhead and row pointer construction.
+pub(crate) fn filter_v_all_u8_i16(
+    intermediate: &[u8],
+    output: &mut [u8],
+    h_row_len: usize,
+    in_h: usize,
+    out_h: usize,
+    weights: &crate::weights::I16WeightTable,
+) {
+    archmage::incant!(filter_v_all_u8_i16(
+        intermediate, output, h_row_len, in_h, out_h, weights
+    ))
+}
+
 /// Premultiply alpha on RGBA u8 row: input → output.
 pub(crate) fn premultiply_u8_row(input: &[u8], output: &mut [u8]) {
     archmage::incant!(premultiply_u8_row(input, output))
