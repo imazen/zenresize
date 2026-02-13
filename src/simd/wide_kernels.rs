@@ -94,27 +94,26 @@ fn filter_h_generic(input: &[f32], output: &mut [f32], weights: &F32WeightTable,
 /// Vertical f32 convolution using f32x4 FMA.
 #[inline(always)]
 pub(super) fn filter_v_row_f32(rows: &[&[f32]], output: &mut [f32], weights: &[f32]) {
-    let width = output.len();
-    let chunks4 = width / 4;
-    let base4 = chunks4 * 4;
+    let (out_chunks, out_tail) = output.as_chunks_mut::<4>();
 
-    for chunk_idx in 0..chunks4 {
-        let base = chunk_idx * 4;
+    for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
         let mut acc = f32x4::ZERO;
         for (row, &weight) in rows.iter().zip(weights.iter()) {
-            let src = f32x4::new([row[base], row[base + 1], row[base + 2], row[base + 3]]);
+            let (row_chunks, _) = row.as_chunks::<4>();
+            let src = f32x4::new(row_chunks[ci]);
             acc = src.mul_add(f32x4::splat(weight), acc);
         }
-        output[base..base + 4].copy_from_slice(&acc.to_array());
+        *out_chunk = acc.to_array();
     }
 
     // Scalar tail
-    for x in base4..width {
+    let base4 = out_chunks.len() * 4;
+    for (x, out) in out_tail.iter_mut().enumerate() {
         let mut sum = 0.0f32;
         for (row, &weight) in rows.iter().zip(weights.iter()) {
-            sum += row[x] * weight;
+            sum += row[base4 + x] * weight;
         }
-        output[x] = sum;
+        *out = sum;
     }
 }
 
@@ -123,23 +122,17 @@ pub(super) fn filter_v_row_f32(rows: &[&[f32]], output: &mut [f32], weights: &[f
 pub(super) fn u8_to_f32_row(input: &[u8], output: &mut [f32]) {
     debug_assert_eq!(input.len(), output.len());
     let scale = f32x4::splat(1.0 / 255.0);
-    let chunks4 = input.len() / 4;
-    let base4 = chunks4 * 4;
+    let (in_chunks, in_tail) = input.as_chunks::<4>();
+    let (out_chunks, out_tail) = output.as_chunks_mut::<4>();
 
-    for i in 0..chunks4 {
-        let base = i * 4;
-        let iv = i32x4::new([
-            input[base] as i32,
-            input[base + 1] as i32,
-            input[base + 2] as i32,
-            input[base + 3] as i32,
-        ]);
+    for (inp, out) in in_chunks.iter().zip(out_chunks.iter_mut()) {
+        let iv = i32x4::new([inp[0] as i32, inp[1] as i32, inp[2] as i32, inp[3] as i32]);
         let fv = f32x4::from_i32x4(iv) * scale;
-        output[base..base + 4].copy_from_slice(&fv.to_array());
+        *out = fv.to_array();
     }
 
-    for i in base4..input.len() {
-        output[i] = input[i] as f32 * (1.0 / 255.0);
+    for (i, o) in in_tail.iter().zip(out_tail.iter_mut()) {
+        *o = *i as f32 * (1.0 / 255.0);
     }
 }
 
@@ -151,30 +144,21 @@ pub(super) fn f32_to_u8_row(input: &[f32], output: &mut [u8]) {
     let half = f32x4::HALF;
     let zero = f32x4::ZERO;
     let max = f32x4::splat(255.0);
-    let chunks4 = input.len() / 4;
-    let base4 = chunks4 * 4;
+    let (in_chunks, in_tail) = input.as_chunks::<4>();
+    let (out_chunks, out_tail) = output.as_chunks_mut::<4>();
 
-    for i in 0..chunks4 {
-        let base = i * 4;
-        let fv = f32x4::new([
-            input[base],
-            input[base + 1],
-            input[base + 2],
-            input[base + 3],
-        ]);
+    for (inp, out) in in_chunks.iter().zip(out_chunks.iter_mut()) {
+        let fv = f32x4::new(*inp);
         // Match scalar: (v * 255.0 + 0.5).clamp(0.0, 255.0) as u8
         let scaled = fv.mul_add(scale, half);
         let clamped = scaled.max(zero).min(max);
         let iv = clamped.fast_trunc_int();
         let arr = iv.to_array();
-        output[base] = arr[0] as u8;
-        output[base + 1] = arr[1] as u8;
-        output[base + 2] = arr[2] as u8;
-        output[base + 3] = arr[3] as u8;
+        *out = [arr[0] as u8, arr[1] as u8, arr[2] as u8, arr[3] as u8];
     }
 
-    for i in base4..input.len() {
-        output[i] = (input[i] * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+    for (i, o) in in_tail.iter().zip(out_tail.iter_mut()) {
+        *o = (*i * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
     }
 }
 
