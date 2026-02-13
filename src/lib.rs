@@ -28,7 +28,7 @@
 //! ```
 
 #![cfg_attr(not(feature = "std"), no_std)]
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 #[cfg(not(feature = "std"))]
 extern crate alloc;
