@@ -44,9 +44,11 @@ Key SIMD patterns: f32x4 FMA for float path, i16x8.mul_widen→i32x8 for
 integer V kernel, u8x16.narrow_i16x8 for pack-back. Cross-compiled clean
 for aarch64-unknown-linux-gnu and wasm32-unknown-unknown.
 
-### archmage 0.6.1 testing helpers
-Use archmage's built-in testing helpers (not a feature flag) to disable SIMD
-dispatch in benchmarks/tests, for isolating scalar vs SIMD performance.
+### archmage 0.6.1 testing helpers — DONE
+
+Added `tests/dispatch_tiers.rs` using `archmage::testing::for_each_token_permutation`
+to verify all dispatch tiers produce consistent results (constant color, gradient,
+upscale). Run with `--test-threads=1` for accurate token disabling.
 
 ### bytemuck chunks
 Replace manual `as_chunks` patterns with bytemuck's safe transmute/cast where
