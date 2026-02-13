@@ -222,7 +222,6 @@ pub(crate) fn unpremultiply_u8_row_scalar(_token: ScalarToken, row: &mut [u8]) {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -80,7 +80,9 @@ fn bench_resize(img: &TestImage, out_w: u32, out_h: u32, iterations: usize) -> (
     let trim = times.len() / 10;
     let trimmed = &times[trim..times.len() - trim];
     let mean = trimmed.iter().sum::<f64>() / trimmed.len() as f64;
-    let stddev = (trimmed.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (trimmed.len() - 1) as f64).sqrt();
+    let stddev = (trimmed.iter().map(|x| (x - mean).powi(2)).sum::<f64>()
+        / (trimmed.len() - 1) as f64)
+        .sqrt();
     (mean, stddev)
 }
 
@@ -95,7 +97,10 @@ fn real_vs_synth_comparison() {
         "safe (default)"
     };
 
-    println!("\n=== Real vs Synthetic Image Performance ({}) ===\n", feature);
+    println!(
+        "\n=== Real vs Synthetic Image Performance ({}) ===\n",
+        feature
+    );
 
     // Test at 2048x2048 - compare synth vs real CLIC image
     {

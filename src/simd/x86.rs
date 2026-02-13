@@ -14,8 +14,8 @@ use archmage::X64V3Token;
 // Explicit imports because names overlap with core::arch intrinsics.
 #[cfg(target_arch = "x86_64")]
 use safe_unaligned_simd::x86_64::{
-    _mm256_loadu_ps, _mm256_loadu_si256, _mm256_storeu_ps, _mm_loadu_ps, _mm_loadu_si128,
-    _mm_loadu_si32, _mm_loadu_si64, _mm_storeu_ps, _mm_storeu_si128, _mm_storeu_si64,
+    _mm_loadu_ps, _mm_loadu_si32, _mm_loadu_si64, _mm_loadu_si128, _mm_storeu_ps, _mm_storeu_si64,
+    _mm_storeu_si128, _mm256_loadu_ps, _mm256_loadu_si256, _mm256_storeu_ps,
 };
 
 /// Load 16 bytes from `slice` at `offset` as `__m128i`.
@@ -30,15 +30,11 @@ fn load_si128_at(_token: X64V3Token, slice: &[u8], offset: usize) -> __m128i {
     {
         // SAFETY: Caller must ensure offset + 16 <= slice.len().
         // The H kernel functions verify this with the has_full_padding / safe_end checks.
-        unsafe {
-            core::arch::x86_64::_mm_loadu_si128(slice.as_ptr().add(offset) as *const __m128i)
-        }
+        unsafe { core::arch::x86_64::_mm_loadu_si128(slice.as_ptr().add(offset) as *const __m128i) }
     }
     #[cfg(not(feature = "unsafe_kernels"))]
     {
-        _mm_loadu_si128(
-            <&[u8; 16]>::try_from(&slice[offset..offset + 16]).unwrap(),
-        )
+        _mm_loadu_si128(<&[u8; 16]>::try_from(&slice[offset..offset + 16]).unwrap())
     }
 }
 
@@ -376,14 +372,8 @@ pub(crate) fn filter_v_row_f32_v3(
 pub(crate) fn premultiply_u8_row_v3(_token: X64V3Token, input: &[u8], output: &mut [u8]) {
     debug_assert_eq!(input.len(), output.len());
 
-    let alpha_bcast = _mm_set_epi8(
-        15, 14, 15, 14, 15, 14, 15, 14,
-        7, 6, 7, 6, 7, 6, 7, 6,
-    );
-    let alpha_blend = _mm_set_epi16(
-        -1, 0, 0, 0,
-        -1, 0, 0, 0,
-    );
+    let alpha_bcast = _mm_set_epi8(15, 14, 15, 14, 15, 14, 15, 14, 7, 6, 7, 6, 7, 6, 7, 6);
+    let alpha_blend = _mm_set_epi16(-1, 0, 0, 0, -1, 0, 0, 0);
     let bias = _mm_set1_epi16(127);
 
     let (in_chunks, _) = input.as_chunks::<8>();
@@ -524,8 +514,8 @@ fn filter_h_u8_4ch(_token: X64V3Token, input: &[u8], output: &mut [u8], weights:
     }
 
     let ymm_shuffle = _mm256_set_epi8(
-        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0,
-        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0,
+        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0, 15, 14, 7, 6, 13, 12, 5, 4, 11, 10,
+        3, 2, 9, 8, 1, 0,
     );
 
     let half = _mm_set1_epi32(1 << (I16_PRECISION - 1));
@@ -582,8 +572,8 @@ fn filter_h_u8_4ch_with_edge_fallback(
     let in_pixels = input.len() / 4;
 
     let ymm_shuffle = _mm256_set_epi8(
-        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0,
-        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0,
+        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0, 15, 14, 7, 6, 13, 12, 5, 4, 11, 10,
+        3, 2, 9, 8, 1, 0,
     );
     let half = _mm_set1_epi32(1 << (I16_PRECISION - 1));
     let zero = _mm_setzero_si128();
@@ -596,7 +586,14 @@ fn filter_h_u8_4ch_with_edge_fallback(
     // Edge pixels: scalar
     for out_x in safe_end..out_width {
         let left = weights.left[out_x] as usize;
-        filter_h_u8_4ch_edge(_token, input, &mut output[out_x * 4..], out_x, left, weights);
+        filter_h_u8_4ch_edge(
+            _token,
+            input,
+            &mut output[out_x * 4..],
+            out_x,
+            left,
+            weights,
+        );
     }
 
     // Interior pixels: SIMD
@@ -676,7 +673,12 @@ fn filter_h_u8_4ch_4rows(
 ) {
     let out_width = weights.len();
     let groups4 = weights.groups4;
-    let in_pixels = [in0.len(), in1.len(), in2.len(), in3.len()].iter().copied().min().unwrap() / 4;
+    let in_pixels = [in0.len(), in1.len(), in2.len(), in3.len()]
+        .iter()
+        .copied()
+        .min()
+        .unwrap()
+        / 4;
 
     // Check if all rows have padding for SIMD reads.
     // +3 accounts for 16-byte (4-pixel) SIMD load width.
@@ -691,8 +693,8 @@ fn filter_h_u8_4ch_4rows(
     }
 
     let ymm_shuffle = _mm256_set_epi8(
-        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0,
-        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0,
+        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0, 15, 14, 7, 6, 13, 12, 5, 4, 11, 10,
+        3, 2, 9, 8, 1, 0,
     );
     let half = _mm_set1_epi32(1 << (I16_PRECISION - 1));
 
@@ -720,22 +722,46 @@ fn filter_h_u8_4ch_4rows(
             let byte_off = (left + g * 4) * 4;
 
             let p0 = _mm256_cvtepu8_epi16(load_si128_at(_token, in0, byte_off));
-            acc0 = _mm256_add_epi32(acc0, _mm256_madd_epi16(_mm256_shuffle_epi8(p0, ymm_shuffle), w));
+            acc0 = _mm256_add_epi32(
+                acc0,
+                _mm256_madd_epi16(_mm256_shuffle_epi8(p0, ymm_shuffle), w),
+            );
 
             let p1 = _mm256_cvtepu8_epi16(load_si128_at(_token, in1, byte_off));
-            acc1 = _mm256_add_epi32(acc1, _mm256_madd_epi16(_mm256_shuffle_epi8(p1, ymm_shuffle), w));
+            acc1 = _mm256_add_epi32(
+                acc1,
+                _mm256_madd_epi16(_mm256_shuffle_epi8(p1, ymm_shuffle), w),
+            );
 
             let p2 = _mm256_cvtepu8_epi16(load_si128_at(_token, in2, byte_off));
-            acc2 = _mm256_add_epi32(acc2, _mm256_madd_epi16(_mm256_shuffle_epi8(p2, ymm_shuffle), w));
+            acc2 = _mm256_add_epi32(
+                acc2,
+                _mm256_madd_epi16(_mm256_shuffle_epi8(p2, ymm_shuffle), w),
+            );
 
             let p3 = _mm256_cvtepu8_epi16(load_si128_at(_token, in3, byte_off));
-            acc3 = _mm256_add_epi32(acc3, _mm256_madd_epi16(_mm256_shuffle_epi8(p3, ymm_shuffle), w));
+            acc3 = _mm256_add_epi32(
+                acc3,
+                _mm256_madd_epi16(_mm256_shuffle_epi8(p3, ymm_shuffle), w),
+            );
         }
 
-        let f0 = _mm_add_epi32(_mm256_castsi256_si128(acc0), _mm256_extracti128_si256::<1>(acc0));
-        let f1 = _mm_add_epi32(_mm256_castsi256_si128(acc1), _mm256_extracti128_si256::<1>(acc1));
-        let f2 = _mm_add_epi32(_mm256_castsi256_si128(acc2), _mm256_extracti128_si256::<1>(acc2));
-        let f3 = _mm_add_epi32(_mm256_castsi256_si128(acc3), _mm256_extracti128_si256::<1>(acc3));
+        let f0 = _mm_add_epi32(
+            _mm256_castsi256_si128(acc0),
+            _mm256_extracti128_si256::<1>(acc0),
+        );
+        let f1 = _mm_add_epi32(
+            _mm256_castsi256_si128(acc1),
+            _mm256_extracti128_si256::<1>(acc1),
+        );
+        let f2 = _mm_add_epi32(
+            _mm256_castsi256_si128(acc2),
+            _mm256_extracti128_si256::<1>(acc2),
+        );
+        let f3 = _mm_add_epi32(
+            _mm256_castsi256_si128(acc3),
+            _mm256_extracti128_si256::<1>(acc3),
+        );
 
         let s0 = _mm_srai_epi32::<{ I16_PRECISION }>(_mm_add_epi32(f0, half));
         let s1 = _mm_srai_epi32::<{ I16_PRECISION }>(_mm_add_epi32(f1, half));
@@ -962,8 +988,7 @@ pub(crate) fn filter_v_all_u8_i16_v3(
             _mm256_setzero_si256()
         };
 
-        let (out_chunks, out_tail) =
-            output[out_base..out_base + h_row_len].as_chunks_mut::<16>();
+        let (out_chunks, out_tail) = output[out_base..out_base + h_row_len].as_chunks_mut::<16>();
 
         for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
             let mut acc_lo = _mm256_setzero_si256();
@@ -1025,4 +1050,3 @@ pub(crate) fn filter_v_all_u8_i16_v3(
         }
     }
 }
-

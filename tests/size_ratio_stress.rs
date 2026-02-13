@@ -83,7 +83,10 @@ fn stress_sizes_and_ratios() {
         "{:<8} {:>10} {:>6} {:>10} {:>10} {:>10}",
         "Size", "Input", "Ratio", "Output", "sRGB ms", "Linear ms"
     );
-    println!("{:-<8} {:->10} {:->6} {:->10} {:->10} {:->10}", "", "", "", "", "", "");
+    println!(
+        "{:-<8} {:->10} {:->6} {:->10} {:->10} {:->10}",
+        "", "", "", "", "", ""
+    );
 
     for &(w, h, name) in sizes {
         let rgba = make_gradient(w, h);
@@ -105,7 +108,9 @@ fn stress_sizes_and_ratios() {
             assert_eq!(
                 result_srgb.len(),
                 (out_w as usize) * (out_h as usize) * 4,
-                "sRGB output size mismatch for {}@{}", name, ratio_name
+                "sRGB output size mismatch for {}@{}",
+                name,
+                ratio_name
             );
 
             // Only run linear on smaller cases (it's ~10x slower)
@@ -114,7 +119,9 @@ fn stress_sizes_and_ratios() {
                 assert_eq!(
                     result_linear.len(),
                     (out_w as usize) * (out_h as usize) * 4,
-                    "Linear output size mismatch for {}@{}", name, ratio_name
+                    "Linear output size mismatch for {}@{}",
+                    name,
+                    ratio_name
                 );
                 format!("{:.1}", ms)
             } else {
@@ -148,13 +155,13 @@ fn stress_odd_dimensions() {
         (13, 17, 5, 7),
         (127, 127, 63, 63),
         (255, 255, 128, 128),
-        (997, 997, 499, 499),    // prime dimensions
-        (1023, 1023, 512, 512),  // just under power of 2
-        (1025, 1025, 513, 513),  // just over power of 2
-        (3, 3, 1000, 1000),      // extreme upscale
-        (1000, 1000, 3, 3),      // extreme downscale
-        (4096, 1, 2048, 1),      // single-row wide
-        (1, 4096, 1, 2048),      // single-column tall
+        (997, 997, 499, 499),     // prime dimensions
+        (1023, 1023, 512, 512),   // just under power of 2
+        (1025, 1025, 513, 513),   // just over power of 2
+        (3, 3, 1000, 1000),       // extreme upscale
+        (1000, 1000, 3, 3),       // extreme downscale
+        (4096, 1, 2048, 1),       // single-row wide
+        (1, 4096, 1, 2048),       // single-column tall
         (3840, 2160, 1920, 1080), // 4K to 1080p
         (3840, 2160, 1280, 720),  // 4K to 720p
         (3840, 2160, 640, 360),   // 4K to 360p
@@ -175,7 +182,10 @@ fn stress_odd_dimensions() {
             result.len(),
             (out_w as usize) * (out_h as usize) * 4,
             "Output size mismatch for {}x{} -> {}x{}",
-            in_w, in_h, out_w, out_h
+            in_w,
+            in_h,
+            out_w,
+            out_h
         );
         println!("  OK: {}x{} -> {}x{}", in_w, in_h, out_w, out_h);
     }

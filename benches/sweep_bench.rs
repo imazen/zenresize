@@ -49,11 +49,7 @@ fn bench_srgb(rgba: &[u8], w: u32, h: u32, out_w: u32, out_h: u32, iters: usize)
     let trimmed = &times[trim..times.len() - trim];
     let mean = trimmed.iter().sum::<f64>() / trimmed.len() as f64;
     let stddev = if trimmed.len() > 1 {
-        (trimmed
-            .iter()
-            .map(|x| (x - mean).powi(2))
-            .sum::<f64>()
-            / (trimmed.len() - 1) as f64)
+        (trimmed.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (trimmed.len() - 1) as f64)
             .sqrt()
     } else {
         0.0

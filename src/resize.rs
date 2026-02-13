@@ -31,7 +31,9 @@ pub fn resize(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
         let mut v = Vec::with_capacity(len);
         #[allow(unsafe_code, clippy::uninit_vec)]
         // SAFETY: resize_into writes every byte in output via the V pass.
-        unsafe { v.set_len(len) };
+        unsafe {
+            v.set_len(len)
+        };
         v
     };
     resize_into(config, input, &mut output);
@@ -197,7 +199,9 @@ fn resize_into_i16(
         #[allow(unsafe_code, clippy::uninit_vec)]
         // SAFETY: H pass writes every element in intermediate[0..len] before V pass reads.
         // The 4-row batch covers (in_h / 4) * 4 rows, remainder loop covers the rest.
-        unsafe { v.set_len(len) };
+        unsafe {
+            v.set_len(len)
+        };
         v
     };
 
@@ -228,10 +232,14 @@ fn resize_into_i16(
             let y0 = batch * 4;
             // Extend each row slice to include padding from the buffer.
             // rows 0-2 always have a next row. Row 3 may be the last row.
-            let r0 = &input[y0 * in_stride..(y0 * in_stride + in_row_len + h_padding).min(input.len())];
-            let r1 = &input[(y0 + 1) * in_stride..((y0 + 1) * in_stride + in_row_len + h_padding).min(input.len())];
-            let r2 = &input[(y0 + 2) * in_stride..((y0 + 2) * in_stride + in_row_len + h_padding).min(input.len())];
-            let r3 = &input[(y0 + 3) * in_stride..((y0 + 3) * in_stride + in_row_len + h_padding).min(input.len())];
+            let r0 =
+                &input[y0 * in_stride..(y0 * in_stride + in_row_len + h_padding).min(input.len())];
+            let r1 = &input[(y0 + 1) * in_stride
+                ..((y0 + 1) * in_stride + in_row_len + h_padding).min(input.len())];
+            let r2 = &input[(y0 + 2) * in_stride
+                ..((y0 + 2) * in_stride + in_row_len + h_padding).min(input.len())];
+            let r3 = &input[(y0 + 3) * in_stride
+                ..((y0 + 3) * in_stride + in_row_len + h_padding).min(input.len())];
 
             let out_base = y0 * h_row_len;
             // Split intermediate into 4 disjoint mutable slices
@@ -284,14 +292,7 @@ fn resize_into_i16(
     // === Vertical pass: u8 → i32 → u8 ===
     // Batch V kernel: processes all output rows in one call,
     // avoiding per-row dispatch overhead and row_ptrs construction.
-    simd::filter_v_all_u8_i16(
-        &intermediate,
-        output,
-        h_row_len,
-        in_h,
-        out_h,
-        &v_weights,
-    );
+    simd::filter_v_all_u8_i16(&intermediate, output, h_row_len, in_h, out_h, &v_weights);
 
     // Unpremultiply alpha after V pass (separated from V for batch efficiency).
     if has_alpha {
@@ -342,7 +343,9 @@ impl Resizer {
                 let mut v = Vec::with_capacity(len);
                 #[allow(unsafe_code, clippy::uninit_vec)]
                 // SAFETY: H pass writes every element before V pass reads.
-                unsafe { v.set_len(len) };
+                unsafe {
+                    v.set_len(len)
+                };
                 v
             };
             let h_padding = h_weights.groups4 * 16;
@@ -390,7 +393,9 @@ impl Resizer {
             let mut v = Vec::with_capacity(len);
             #[allow(unsafe_code, clippy::uninit_vec)]
             // SAFETY: resize_into writes every byte via the V pass.
-            unsafe { v.set_len(len) };
+            unsafe {
+                v.set_len(len)
+            };
             v
         };
         self.resize_into(input, &mut output);
@@ -410,9 +415,7 @@ impl Resizer {
         let out_h = config.out_height as usize;
         let h_row_len = out_w * channels;
 
-        if let (Some(h_weights), Some(v_weights)) =
-            (&self.h_weights_i16, &self.v_weights_i16)
-        {
+        if let (Some(h_weights), Some(v_weights)) = (&self.h_weights_i16, &self.v_weights_i16) {
             // i16 fast path
             let intermediate = &mut self.intermediate_u8;
 
@@ -472,21 +475,12 @@ impl Resizer {
             }
 
             // V pass — always use batch kernel (intermediate is contiguous)
-            simd::filter_v_all_u8_i16(
-                intermediate,
-                output,
-                h_row_len,
-                in_h,
-                out_h,
-                v_weights,
-            );
+            simd::filter_v_all_u8_i16(intermediate, output, h_row_len, in_h, out_h, v_weights);
 
             if has_alpha {
                 for out_y in 0..out_h {
                     let out_start = out_y * out_row_len;
-                    simd::unpremultiply_u8_row(
-                        &mut output[out_start..out_start + out_row_len],
-                    );
+                    simd::unpremultiply_u8_row(&mut output[out_start..out_start + out_row_len]);
                 }
             }
         } else if let (Some(h_weights), Some(v_weights)) =
