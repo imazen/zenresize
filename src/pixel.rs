@@ -11,14 +11,12 @@
 #[non_exhaustive]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PixelFormat {
-    /// sRGB gamma-encoded u8 pixels.
+    /// sRGB gamma-encoded u8 pixels (the common case).
+    ///
+    /// Channel order doesn't matter — RGBA, BGRA, ARGB all work identically.
     Srgb8 { channels: u8, has_alpha: bool },
-    /// Linear light u8 pixels (rare, for pre-linearized data).
-    Linear8 { channels: u8, has_alpha: bool },
-    /// Linear light f32 pixels.
+    /// Linear light f32 pixels (HDR, scientific, pipeline use).
     LinearF32 { channels: u8, has_alpha: bool },
-    /// sRGB gamma-encoded f32 pixels (for fast sRGB-space resize).
-    SrgbF32 { channels: u8, has_alpha: bool },
 }
 
 impl PixelFormat {
@@ -26,10 +24,7 @@ impl PixelFormat {
     #[inline]
     pub fn channels(&self) -> u8 {
         match self {
-            Self::Srgb8 { channels, .. }
-            | Self::Linear8 { channels, .. }
-            | Self::LinearF32 { channels, .. }
-            | Self::SrgbF32 { channels, .. } => *channels,
+            Self::Srgb8 { channels, .. } | Self::LinearF32 { channels, .. } => *channels,
         }
     }
 
@@ -37,10 +32,7 @@ impl PixelFormat {
     #[inline]
     pub fn has_alpha(&self) -> bool {
         match self {
-            Self::Srgb8 { has_alpha, .. }
-            | Self::Linear8 { has_alpha, .. }
-            | Self::LinearF32 { has_alpha, .. }
-            | Self::SrgbF32 { has_alpha, .. } => *has_alpha,
+            Self::Srgb8 { has_alpha, .. } | Self::LinearF32 { has_alpha, .. } => *has_alpha,
         }
     }
 
@@ -53,25 +45,25 @@ impl PixelFormat {
     /// Whether this is a u8-based format.
     #[inline]
     pub fn is_u8(&self) -> bool {
-        matches!(self, Self::Srgb8 { .. } | Self::Linear8 { .. })
+        matches!(self, Self::Srgb8 { .. })
     }
 
     /// Whether this is an f32-based format.
     #[inline]
     pub fn is_f32(&self) -> bool {
-        matches!(self, Self::LinearF32 { .. } | Self::SrgbF32 { .. })
+        matches!(self, Self::LinearF32 { .. })
     }
 
     /// Whether this format uses sRGB gamma encoding.
     #[inline]
     pub fn is_srgb(&self) -> bool {
-        matches!(self, Self::Srgb8 { .. } | Self::SrgbF32 { .. })
+        matches!(self, Self::Srgb8 { .. })
     }
 
     /// Whether this format uses linear light values.
     #[inline]
     pub fn is_linear(&self) -> bool {
-        matches!(self, Self::Linear8 { .. } | Self::LinearF32 { .. })
+        matches!(self, Self::LinearF32 { .. })
     }
 }
 
