@@ -121,9 +121,7 @@ fn main() {
             resize::Type::Lanczos3,
         )
         .unwrap();
-        resizer
-            .resize(rgba.as_rgba(), dst.as_rgba_mut())
-            .unwrap();
+        resizer.resize(rgba.as_rgba(), dst.as_rgba_mut()).unwrap();
         dst
     };
 
@@ -159,7 +157,13 @@ fn main() {
 }
 
 fn print_f32_stats(label: &str, a: &[f32], b: &[f32]) {
-    assert_eq!(a.len(), b.len(), "length mismatch: {} vs {}", a.len(), b.len());
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "length mismatch: {} vs {}",
+        a.len(),
+        b.len()
+    );
     let mut max_diff: f32 = 0.0;
     let mut sum_diff: f64 = 0.0;
     let mut sum_sq_diff: f64 = 0.0;
@@ -275,5 +279,7 @@ fn print_f32_range(label: &str, data: &[f32]) {
         }
     }
 
-    println!("  {label}: [{min:.6}, {max:.6}], NaN: {nan_count}, Inf: {inf_count}, <0: {neg_count}, >1: {gt1_count}");
+    println!(
+        "  {label}: [{min:.6}, {max:.6}], NaN: {nan_count}, Inf: {inf_count}, <0: {neg_count}, >1: {gt1_count}"
+    );
 }

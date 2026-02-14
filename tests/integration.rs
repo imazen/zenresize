@@ -723,8 +723,7 @@ fn no_catastrophic_errors_across_all_combinations() {
                 let out_row_len = out_size as usize * 4;
                 let mut idx = 0;
                 while let Some(row) = resizer.next_output_row() {
-                    stream_output[idx * out_row_len..(idx + 1) * out_row_len]
-                        .copy_from_slice(&row);
+                    stream_output[idx * out_row_len..(idx + 1) * out_row_len].copy_from_slice(&row);
                     idx += 1;
                 }
 

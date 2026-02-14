@@ -224,8 +224,5 @@ fn main() {
         "f32/i16 filter ratio:       {:>7.1}x",
         (linear - fwd - inv) / srgb
     );
-    println!(
-        "f32 e2e / i16 ratio:        {:>7.1}x",
-        f32_e2e / srgb
-    );
+    println!("f32 e2e / i16 ratio:        {:>7.1}x", f32_e2e / srgb);
 }
