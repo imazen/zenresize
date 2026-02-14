@@ -69,7 +69,10 @@ impl StreamingResize {
 
         let h_cache = (0..cache_size).map(|_| vec![0.0f32; row_len]).collect();
 
-        let temp_input_f32 = vec![0.0f32; config.in_width as usize * channels];
+        // Pad with max_taps extra zero elements so SIMD H-pass reads
+        // beyond the valid input range hit zeros. Zero-padded weights make these inert.
+        let temp_input_f32 =
+            vec![0.0f32; config.in_width as usize * channels + h_weights.max_taps * channels];
         let temp_output_f32 = vec![0.0f32; row_len];
 
         Self {
@@ -110,16 +113,16 @@ impl StreamingResize {
         if self.config.needs_linearization() {
             color::srgb_u8_to_linear_f32(
                 pixel_data,
-                &mut self.temp_input_f32,
+                &mut self.temp_input_f32[..pixel_len],
                 self.channels,
                 self.has_alpha,
             );
         } else {
-            simd::u8_to_f32_row(pixel_data, &mut self.temp_input_f32);
+            simd::u8_to_f32_row(pixel_data, &mut self.temp_input_f32[..pixel_len]);
         }
 
         if self.has_alpha && self.channels == 4 {
-            simd::premultiply_alpha_row(&mut self.temp_input_f32);
+            simd::premultiply_alpha_row(&mut self.temp_input_f32[..pixel_len]);
         }
 
         self.push_row_internal()
@@ -148,7 +151,7 @@ impl StreamingResize {
         self.temp_input_f32[..pixel_len].copy_from_slice(&row[..pixel_len]);
 
         if self.has_alpha && self.channels == 4 {
-            simd::premultiply_alpha_row(&mut self.temp_input_f32);
+            simd::premultiply_alpha_row(&mut self.temp_input_f32[..pixel_len]);
         }
 
         self.push_row_internal()

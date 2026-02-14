@@ -163,10 +163,10 @@ pub(crate) fn filter_h_row_f32_v3(
 fn filter_h_4ch(_token: X64V3Token, input: &[f32], output: &mut [f32], weights: &F32WeightTable) {
     let out_width = weights.len();
     let max_taps = weights.max_taps;
-    let in_pixels = input.len() / 4;
-    let max_pixel = in_pixels - 1;
 
-    // View input/output as per-pixel [f32; 4] chunks for bounds-proven access.
+    // View input/output as per-pixel [f32; 4] chunks.
+    // Input must include max_taps pixels of zero padding beyond the last pixel
+    // so reads at `left + max_taps - 1` are always in bounds.
     let in_pixels_arr: &[[f32; 4]] = input.as_chunks().0;
     let (out_pixels, _) = output.as_chunks_mut::<4>();
 
@@ -184,16 +184,17 @@ fn filter_h_4ch(_token: X64V3Token, input: &[f32], output: &mut [f32], weights: 
 
         for c in 0..chunks4 {
             let t = c * 4;
-            let w0 = _mm_set1_ps(w[t]);
-            let w1 = _mm_set1_ps(w[t + 1]);
-            let w2 = _mm_set1_ps(w[t + 2]);
-            let w3 = _mm_set1_ps(w[t + 3]);
+            let w0 = _mm_set1_ps(*idx(w, t));
+            let w1 = _mm_set1_ps(*idx(w, t + 1));
+            let w2 = _mm_set1_ps(*idx(w, t + 2));
+            let w3 = _mm_set1_ps(*idx(w, t + 3));
 
-            // Clamp to last valid pixel; zero-padded weights make clamped reads inert.
-            let p0 = _mm_loadu_ps(&in_pixels_arr[(left + t).min(max_pixel)]);
-            let p1 = _mm_loadu_ps(&in_pixels_arr[(left + t + 1).min(max_pixel)]);
-            let p2 = _mm_loadu_ps(&in_pixels_arr[(left + t + 2).min(max_pixel)]);
-            let p3 = _mm_loadu_ps(&in_pixels_arr[(left + t + 3).min(max_pixel)]);
+            // Padding guarantees left + max_taps - 1 < in_pixels_arr.len().
+            // Zero-padded weights make reads into padding inert.
+            let p0 = _mm_loadu_ps(idx(in_pixels_arr, left + t));
+            let p1 = _mm_loadu_ps(idx(in_pixels_arr, left + t + 1));
+            let p2 = _mm_loadu_ps(idx(in_pixels_arr, left + t + 2));
+            let p3 = _mm_loadu_ps(idx(in_pixels_arr, left + t + 3));
 
             acc0 = _mm_fmadd_ps(p0, w0, acc0);
             acc1 = _mm_fmadd_ps(p1, w1, acc1);
@@ -204,8 +205,8 @@ fn filter_h_4ch(_token: X64V3Token, input: &[f32], output: &mut [f32], weights: 
         let t_start = chunks4 * 4;
         for t in 0..remainder {
             let tt = t_start + t;
-            let w_val = _mm_set1_ps(w[tt]);
-            let pixel = _mm_loadu_ps(&in_pixels_arr[(left + tt).min(max_pixel)]);
+            let w_val = _mm_set1_ps(*idx(w, tt));
+            let pixel = _mm_loadu_ps(idx(in_pixels_arr, left + tt));
             acc0 = _mm_fmadd_ps(pixel, w_val, acc0);
         }
 
@@ -213,7 +214,7 @@ fn filter_h_4ch(_token: X64V3Token, input: &[f32], output: &mut [f32], weights: 
         let sum23 = _mm_add_ps(acc2, acc3);
         let acc = _mm_add_ps(sum01, sum23);
 
-        _mm_storeu_ps(&mut out_pixels[out_x], acc);
+        _mm_storeu_ps(idx_mut(out_pixels, out_x), acc);
     }
 }
 

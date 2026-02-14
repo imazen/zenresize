@@ -69,6 +69,10 @@ harness = false
 name = "precision"
 harness = false
 
+[[bench]]
+name = "profile_f32"
+harness = false
+
 [profile.test]
 opt-level = 2
 

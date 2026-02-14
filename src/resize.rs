@@ -761,7 +761,10 @@ pub fn resize_f32_into(config: &ResizeConfig, input: &[f32], output: &mut [f32])
 
     let h_row_len = out_w * channels;
     let mut intermediate = vec![0.0f32; h_row_len * in_h];
-    let mut temp_row = vec![0.0f32; in_w * channels];
+    // Pad temp_row with max_taps extra zero elements so SIMD H-pass reads
+    // beyond the valid input range hit zeros instead of uninitialized memory.
+    // Zero-padded weights make these reads inert (0.0 * weight = 0.0).
+    let mut temp_row = vec![0.0f32; in_w * channels + h_weights.max_taps * channels];
 
     // === Horizontal pass ===
     for y in 0..in_h {
@@ -774,7 +777,7 @@ pub fn resize_f32_into(config: &ResizeConfig, input: &[f32], output: &mut [f32])
 
         let out_start = y * h_row_len;
         simd::filter_h_row_f32(
-            &temp_row[..in_row_len],
+            &temp_row,
             &mut intermediate[out_start..out_start + h_row_len],
             &h_weights,
             channels,
