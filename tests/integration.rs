@@ -151,7 +151,7 @@ fn streaming_matches_fullframe_linear() {
 // =============================================================================
 
 /// The linear i16 path (4ch, no alpha, linearize) should produce output
-/// within ±2 of the f32 linear path (streaming, which always uses f32).
+/// within ±1 of the f32 linear path (streaming, which always uses f32).
 #[test]
 fn linear_i16_matches_f32_downscale() {
     let config = ResizeConfig::builder(64, 64, 32, 32)
@@ -191,8 +191,8 @@ fn linear_i16_matches_f32_downscale() {
         .max()
         .unwrap_or(0);
     assert!(
-        max_diff <= 2,
-        "linear i16 vs f32 max diff {} exceeds tolerance 2",
+        max_diff <= 1,
+        "linear i16 vs f32 max diff {} exceeds tolerance 1",
         max_diff
     );
 }
