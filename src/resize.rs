@@ -593,9 +593,7 @@ impl Resizer {
                 if has_alpha {
                     for out_y in 0..out_h {
                         let out_start = out_y * out_row_len;
-                        simd::unpremultiply_u8_row(
-                            &mut output[out_start..out_start + out_row_len],
-                        );
+                        simd::unpremultiply_u8_row(&mut output[out_start..out_start + out_row_len]);
                     }
                 }
             }

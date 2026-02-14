@@ -106,6 +106,18 @@ fn run_zenresize_linear(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     zenresize::resize(&config, &img.rgba)
 }
 
+fn run_zenresize_linear_i16(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
+    let config = zenresize::ResizeConfig::builder(img.width, img.height, out_w, out_h)
+        .filter(zenresize::Filter::Lanczos)
+        .format(zenresize::PixelFormat::Srgb8 {
+            channels: 4,
+            has_alpha: false,
+        })
+        .linear()
+        .build();
+    zenresize::resize(&config, &img.rgba)
+}
+
 fn run_picscale_srgb(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     use pic_scale::*;
     let mut scaler = Scaler::new(ResamplingFunction::Lanczos3);
@@ -180,13 +192,15 @@ fn run_picscale_safe_f32(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     use pic_scale_safe::*;
     let src_size = ImageSize::new(img.width as usize, img.height as usize);
     let dst_size = ImageSize::new(out_w as usize, out_h as usize);
-    let result_f32 =
-        resize_rgba_f32(&img.rgba_f32, src_size, dst_size, ResamplingFunction::Lanczos3).unwrap();
+    let result_f32 = resize_rgba_f32(
+        &img.rgba_f32,
+        src_size,
+        dst_size,
+        ResamplingFunction::Lanczos3,
+    )
+    .unwrap();
     // Return f32 bytes as u8 slice (black_box prevents elision)
-    let bytes: Vec<u8> = result_f32
-        .iter()
-        .flat_map(|v| v.to_ne_bytes())
-        .collect();
+    let bytes: Vec<u8> = result_f32.iter().flat_map(|v| v.to_ne_bytes()).collect();
     bytes
 }
 
@@ -199,10 +213,7 @@ fn run_zenresize_f32(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
         })
         .build();
     let result_f32 = zenresize::resize_f32(&config, &img.rgba_f32);
-    let bytes: Vec<u8> = result_f32
-        .iter()
-        .flat_map(|v| v.to_ne_bytes())
-        .collect();
+    let bytes: Vec<u8> = result_f32.iter().flat_map(|v| v.to_ne_bytes()).collect();
     bytes
 }
 
@@ -212,10 +223,7 @@ fn run_fir_f32(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     use fir::{FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer};
     // Safety: f32 and u8 are both Pod types, this is just a reinterpret cast
     let f32_bytes: &[u8] = unsafe {
-        std::slice::from_raw_parts(
-            img.rgba_f32.as_ptr() as *const u8,
-            img.rgba_f32.len() * 4,
-        )
+        std::slice::from_raw_parts(img.rgba_f32.as_ptr() as *const u8, img.rgba_f32.len() * 4)
     };
     let src = ImageRef::new(img.width, img.height, f32_bytes, PixelType::F32x4).unwrap();
     let mut dst = Image::new(out_w, out_h, PixelType::F32x4);
@@ -355,6 +363,10 @@ fn main() {
             func: run_zenresize_linear,
         },
         Contender {
+            name: "zenresize_linear_i16",
+            func: run_zenresize_linear_i16,
+        },
+        Contender {
             name: Box::leak(format!("pic_scale_{ps_label}_srgb").into_boxed_str()),
             func: run_picscale_srgb,
         },
@@ -457,7 +469,7 @@ fn main() {
     );
     println!("{:-<24} {:-^12} {:-^12} {:-^14}", "", "", "", "");
 
-    let baseline_ps = &contenders[2]; // pic_scale_srgb
+    let baseline_ps = &contenders[3]; // pic_scale_srgb
     for c in &contenders {
         if std::ptr::eq(c, baseline_ps) {
             continue;
