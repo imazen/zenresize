@@ -143,7 +143,19 @@ fn streaming_matches_fullframe_linear() {
         idx += 1;
     }
 
-    assert_eq!(full_output, stream_output);
+    // Full-frame may use i16 linear path; streaming always uses f32.
+    // Allow ±2 for quantization differences.
+    let max_diff: u8 = full_output
+        .iter()
+        .zip(stream_output.iter())
+        .map(|(&a, &b)| (a as i16 - b as i16).unsigned_abs() as u8)
+        .max()
+        .unwrap_or(0);
+    assert!(
+        max_diff <= 2,
+        "streaming vs full-frame linear max diff {} exceeds tolerance 2",
+        max_diff
+    );
 }
 
 // =============================================================================
@@ -507,6 +519,249 @@ fn push_rows_matches_individual() {
         out1, out2,
         "push_rows batch should match individual push_row"
     );
+}
+
+// =============================================================================
+// Linear i16 vs f32 parity
+// =============================================================================
+
+/// The linear i16 path (4ch, no alpha, linearize) should produce output
+/// within ±1 of the f32 linear path (streaming, which always uses f32).
+#[test]
+fn linear_i16_matches_f32_downscale() {
+    let config = ResizeConfig::builder(64, 64, 32, 32)
+        .filter(Filter::Lanczos)
+        .format(PixelFormat::Srgb8 {
+            channels: 4,
+            has_alpha: false,
+        })
+        .linear()
+        .build();
+
+    let input = gradient_image(64, 64);
+
+    // Full-frame: uses i16 linear path (linearize + 4ch + !has_alpha)
+    let i16_output = resize(&config, &input);
+
+    // Streaming: always uses f32 path
+    let mut resizer = StreamingResize::new(&config);
+    let row_len = 64 * 4;
+    for y in 0..64 {
+        resizer.push_row(&input[y * row_len..(y + 1) * row_len]);
+    }
+    resizer.finish();
+
+    let mut f32_output = vec![0u8; 32 * 32 * 4];
+    let out_row_len = 32 * 4;
+    let mut idx = 0;
+    while let Some(row) = resizer.next_output_row() {
+        f32_output[idx * out_row_len..(idx + 1) * out_row_len].copy_from_slice(&row);
+        idx += 1;
+    }
+
+    let max_diff: u8 = i16_output
+        .iter()
+        .zip(f32_output.iter())
+        .map(|(&a, &b)| (a as i16 - b as i16).unsigned_abs() as u8)
+        .max()
+        .unwrap_or(0);
+    assert!(
+        max_diff <= 1,
+        "linear i16 vs f32 max diff {} exceeds tolerance 1",
+        max_diff
+    );
+}
+
+/// Parity test with upscale to catch different edge cases.
+#[test]
+fn linear_i16_matches_f32_upscale() {
+    let config = ResizeConfig::builder(16, 16, 48, 48)
+        .filter(Filter::Lanczos)
+        .format(PixelFormat::Srgb8 {
+            channels: 4,
+            has_alpha: false,
+        })
+        .linear()
+        .build();
+
+    let input = gradient_image(16, 16);
+
+    let i16_output = resize(&config, &input);
+
+    let mut resizer = StreamingResize::new(&config);
+    let row_len = 16 * 4;
+    for y in 0..16 {
+        resizer.push_row(&input[y * row_len..(y + 1) * row_len]);
+    }
+    resizer.finish();
+
+    let mut f32_output = vec![0u8; 48 * 48 * 4];
+    let out_row_len = 48 * 4;
+    let mut idx = 0;
+    while let Some(row) = resizer.next_output_row() {
+        f32_output[idx * out_row_len..(idx + 1) * out_row_len].copy_from_slice(&row);
+        idx += 1;
+    }
+
+    let max_diff: u8 = i16_output
+        .iter()
+        .zip(f32_output.iter())
+        .map(|(&a, &b)| (a as i16 - b as i16).unsigned_abs() as u8)
+        .max()
+        .unwrap_or(0);
+    assert!(
+        max_diff <= 2,
+        "linear i16 vs f32 upscale max diff {} exceeds tolerance 2",
+        max_diff
+    );
+}
+
+/// Resizer struct path 1 should match the one-shot resize_into_i16_linear.
+#[test]
+fn resizer_matches_oneshot_linear_no_alpha() {
+    let config = ResizeConfig::builder(32, 32, 16, 16)
+        .filter(Filter::Lanczos)
+        .format(PixelFormat::Srgb8 {
+            channels: 4,
+            has_alpha: false,
+        })
+        .linear()
+        .build();
+
+    let input = gradient_image(32, 32);
+    let oneshot = resize(&config, &input);
+    let mut resizer = zenresize::resize::Resizer::new(&config);
+    let cached = resizer.resize(&input);
+    assert_eq!(oneshot, cached, "Resizer path 1 should match one-shot path");
+}
+
+// =============================================================================
+// Comprehensive regression: all filter × scale × path combinations
+// =============================================================================
+
+/// Compare fullframe (i16 path) vs streaming (f32 path) across all filters,
+/// multiple scales, and path configurations. Catches weight normalization bugs.
+#[test]
+fn no_catastrophic_errors_across_all_combinations() {
+    let scales: &[(u32, u32, &str)] = &[
+        (200, 100, "2x_down"),
+        (200, 50, "4x_down"),
+        (200, 25, "8x_down"),
+        (50, 100, "2x_up"),
+        (50, 200, "4x_up"),
+        (50, 400, "8x_up"),
+    ];
+
+    // Path configs: (format, color_space_fn, label)
+    let path_configs: Vec<(PixelFormat, bool, &str)> = vec![
+        (
+            PixelFormat::Srgb8 {
+                channels: 4,
+                has_alpha: false,
+            },
+            false,
+            "srgb-noalpha",
+        ),
+        (
+            PixelFormat::Srgb8 {
+                channels: 4,
+                has_alpha: true,
+            },
+            false,
+            "srgb-alpha",
+        ),
+        (
+            PixelFormat::Srgb8 {
+                channels: 4,
+                has_alpha: false,
+            },
+            true,
+            "linear-noalpha",
+        ),
+        (
+            PixelFormat::Srgb8 {
+                channels: 4,
+                has_alpha: true,
+            },
+            true,
+            "linear-alpha",
+        ),
+    ];
+
+    let mut failures: Vec<String> = Vec::new();
+
+    for &filter in Filter::all() {
+        for &(in_size, out_size, scale_name) in scales {
+            for &(format, linearize, path_name) in &path_configs {
+                let config = {
+                    let mut b = ResizeConfig::builder(in_size, in_size, out_size, out_size)
+                        .filter(filter)
+                        .format(format);
+                    if linearize {
+                        b = b.linear();
+                    } else {
+                        b = b.srgb();
+                    }
+                    b.build()
+                };
+
+                let input = gradient_image(in_size, in_size);
+
+                // Full-frame
+                let full_output = resize(&config, &input);
+
+                // Streaming (always f32 weights with f64 normalization)
+                let mut resizer = StreamingResize::new(&config);
+                let row_len = in_size as usize * 4;
+                for y in 0..in_size as usize {
+                    resizer.push_row(&input[y * row_len..(y + 1) * row_len]);
+                }
+                resizer.finish();
+
+                let out_pixels = out_size as usize * out_size as usize * 4;
+                let mut stream_output = vec![0u8; out_pixels];
+                let out_row_len = out_size as usize * 4;
+                let mut idx = 0;
+                while let Some(row) = resizer.next_output_row() {
+                    stream_output[idx * out_row_len..(idx + 1) * out_row_len]
+                        .copy_from_slice(&row);
+                    idx += 1;
+                }
+
+                assert_eq!(
+                    full_output.len(),
+                    stream_output.len(),
+                    "size mismatch: {:?} {} {}",
+                    filter,
+                    scale_name,
+                    path_name
+                );
+
+                let max_diff: u8 = full_output
+                    .iter()
+                    .zip(stream_output.iter())
+                    .map(|(&a, &b)| (a as i16 - b as i16).unsigned_abs() as u8)
+                    .max()
+                    .unwrap_or(0);
+
+                // Threshold: ±2 for i16 vs f32 quantization differences
+                if max_diff > 2 {
+                    failures.push(format!(
+                        "  {:20?} {:8} {:16} max_diff={}",
+                        filter, scale_name, path_name, max_diff,
+                    ));
+                }
+            }
+        }
+    }
+
+    if !failures.is_empty() {
+        panic!(
+            "Catastrophic errors found in {} combinations:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
 }
 
 // =============================================================================

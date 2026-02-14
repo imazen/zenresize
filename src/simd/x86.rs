@@ -567,10 +567,12 @@ fn filter_h_u8_4ch_with_edge_fallback(
     let half = _mm_set1_epi32(1 << (I16_PRECISION - 1));
     let zero = _mm_setzero_si128();
 
+    // Find the contiguous range of output pixels where SIMD reads are in-bounds.
+    // Scan forward to find first failure — for monotonic left values, this gives
+    // the exact boundary. For any non-monotonic edge cases, it's conservative.
     let safe_end = (0..out_width)
-        .rev()
-        .find(|&x| (weights.left[x] as usize) + groups4 * 4 <= in_pixels)
-        .map_or(0, |x| x + 1);
+        .position(|x| (weights.left[x] as usize) + groups4 * 4 > in_pixels)
+        .unwrap_or(out_width);
 
     // Edge pixels: scalar
     for out_x in safe_end..out_width {
