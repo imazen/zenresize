@@ -83,6 +83,26 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
         return;
     }
 
+    // Integer fast path for linear-light resize (sRGB input, linear processing).
+    // Uses 12-bit linear values (0-4095) stored as i16, reusing the same
+    // I16WeightTable and madd_epi16 SIMD infrastructure. ~4x faster than f32.
+    // Currently only for 4ch without alpha premul/unpremul.
+    if linearize && channels == 4 && !has_alpha {
+        resize_into_i16_linear(
+            config,
+            input,
+            output,
+            in_stride,
+            in_row_len,
+            out_row_len,
+            channels,
+            in_h,
+            out_w,
+            out_h,
+        );
+        return;
+    }
+
     let filter = InterpolationDetails::create(config.filter);
     let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
     let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
@@ -91,18 +111,21 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
 
     // Intermediate buffer for horizontally-filtered rows (f32).
     let mut intermediate = vec![0.0f32; h_row_len * in_h];
-    let mut temp_row = vec![0.0f32; in_w * channels];
+    // Pad temp_row with max_taps extra zero elements so SIMD H-pass reads
+    // beyond the valid input range hit zeros instead of uninitialized memory.
+    // This prevents NaN poisoning: 0.0 * NaN = NaN, but 0.0 * 0.0 = 0.0.
+    let mut temp_row = vec![0.0f32; in_w * channels + h_weights.max_taps * channels];
 
     // === Horizontal pass ===
     for y in 0..in_h {
         let in_start = y * in_stride;
         let in_row = &input[in_start..in_start + in_row_len];
 
-        // u8 → f32
+        // u8 → f32 (writes only the first in_w*channels elements; padding stays zero)
         if linearize {
-            color::srgb_u8_to_linear_f32(in_row, &mut temp_row, channels, has_alpha);
+            color::srgb_u8_to_linear_f32(in_row, &mut temp_row[..in_row_len], channels, has_alpha);
         } else {
-            simd::u8_to_f32_row(in_row, &mut temp_row);
+            simd::u8_to_f32_row(in_row, &mut temp_row[..in_row_len]);
         }
 
         // Premultiply alpha
@@ -284,6 +307,85 @@ fn resize_into_i16(
     }
 }
 
+/// Integer (i16) fast path for linear-light resize.
+///
+/// Uses 12-bit linear values (0-4095) stored as i16, with LUT-based
+/// sRGB↔linear conversion. Reuses the same I16WeightTable and madd_epi16
+/// SIMD infrastructure as the sRGB i16 path.
+///
+/// Data flow: u8 sRGB → LUT → i16 linear → H-pass → i16 intermediate
+///            → V-pass → i16 output → LUT → u8 sRGB
+#[allow(clippy::too_many_arguments)]
+fn resize_into_i16_linear(
+    config: &ResizeConfig,
+    input: &[u8],
+    output: &mut [u8],
+    in_stride: usize,
+    in_row_len: usize,
+    _out_row_len: usize,
+    channels: usize,
+    in_h: usize,
+    out_w: usize,
+    out_h: usize,
+) {
+    let filter = InterpolationDetails::create(config.filter);
+    let h_weights = I16WeightTable::new(config.in_width, config.out_width, &filter);
+    let v_weights = I16WeightTable::new(config.in_height, config.out_height, &filter);
+
+    let h_row_len = out_w * channels;
+
+    // i16 intermediate: 2x smaller than f32, holds linear i12 values.
+    let mut intermediate = vec![0i16; h_row_len * in_h];
+
+    // Reusable buffer for linearized input row + SIMD padding.
+    // The H-pass reads groups of 16 i16 (32 bytes), so we need padding
+    // to prevent out-of-bounds reads on the last group.
+    let h_padding = h_weights.groups4 * 16;
+    let mut linearized_row = vec![0i16; in_row_len + h_padding];
+
+    // === Horizontal pass: u8 sRGB → i16 linear → filter → i16 intermediate ===
+    for y in 0..in_h {
+        let in_start = y * in_stride;
+        let in_row = &input[in_start..in_start + in_row_len];
+
+        // LUT: sRGB u8 → 12-bit linear i16
+        color::srgb_u8_to_linear_i12_row(in_row, &mut linearized_row[..in_row_len]);
+        // Zero SIMD padding region
+        for v in &mut linearized_row[in_row_len..] {
+            *v = 0;
+        }
+
+        let out_start = y * h_row_len;
+        simd::filter_h_i16_i16(
+            &linearized_row,
+            &mut intermediate[out_start..out_start + h_row_len],
+            &h_weights,
+            channels,
+        );
+    }
+
+    // === Vertical pass: i16 intermediate → i16 output ===
+    let mut v_output = vec![0i16; h_row_len * out_h];
+    simd::filter_v_all_i16_i16(
+        &intermediate,
+        &mut v_output,
+        h_row_len,
+        in_h,
+        out_h,
+        &v_weights,
+    );
+
+    // === Output: i16 linear → u8 sRGB via LUT ===
+    for out_y in 0..out_h {
+        let v_start = out_y * h_row_len;
+        let out_start = out_y * h_row_len;
+        color::linear_i12_to_srgb_u8_row(
+            &v_output[v_start..v_start + h_row_len],
+            &mut output[out_start..out_start + h_row_len],
+        );
+    }
+}
+
 /// Reusable resizer with pre-computed weight tables.
 ///
 /// When resizing many images with the same dimensions and filter,
@@ -297,9 +399,14 @@ pub struct Resizer {
     v_weights_f32: Option<F32WeightTable>,
     intermediate_u8: Vec<u8>,
     intermediate_f32: Vec<f32>,
+    intermediate_i16: Vec<i16>,
+    linearized_row: Vec<i16>,
+    v_output_i16: Vec<i16>,
     premul_buf: Vec<u8>,
     temp_row_f32: Vec<f32>,
     temp_output_f32: Vec<f32>,
+    /// Which path to use: 0 = sRGB i16, 1 = linear i16, 2 = f32
+    path: u8,
 }
 
 impl Resizer {
@@ -317,6 +424,7 @@ impl Resizer {
         let in_row_len = config.input_row_len();
 
         if !linearize && channels == 4 {
+            // Path 0: sRGB i16 fast path
             let h_weights = I16WeightTable::new(config.in_width, config.out_width, &filter);
             let v_weights = I16WeightTable::new(config.in_height, config.out_height, &filter);
             let intermediate = vec![0u8; h_row_len * in_h];
@@ -334,14 +442,42 @@ impl Resizer {
                 v_weights_f32: None,
                 intermediate_u8: intermediate,
                 intermediate_f32: Vec::new(),
+                intermediate_i16: Vec::new(),
+                linearized_row: Vec::new(),
+                v_output_i16: Vec::new(),
                 premul_buf,
                 temp_row_f32: Vec::new(),
                 temp_output_f32: Vec::new(),
+                path: 0,
+            }
+        } else if linearize && channels == 4 && !has_alpha {
+            // Path 1: linear-light i16 fast path
+            let h_weights = I16WeightTable::new(config.in_width, config.out_width, &filter);
+            let v_weights = I16WeightTable::new(config.in_height, config.out_height, &filter);
+            let h_padding = h_weights.groups4 * 16;
+            let out_h = config.out_height as usize;
+            Resizer {
+                config: config.clone(),
+                h_weights_i16: Some(h_weights),
+                v_weights_i16: Some(v_weights),
+                h_weights_f32: None,
+                v_weights_f32: None,
+                intermediate_u8: Vec::new(),
+                intermediate_f32: Vec::new(),
+                intermediate_i16: vec![0i16; h_row_len * in_h],
+                linearized_row: vec![0i16; in_row_len + h_padding],
+                v_output_i16: vec![0i16; h_row_len * out_h],
+                premul_buf: Vec::new(),
+                temp_row_f32: Vec::new(),
+                temp_output_f32: Vec::new(),
+                path: 1,
             }
         } else {
+            // Path 2: f32 path
             let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
             let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
             let in_w = config.in_width as usize;
+            let h_max_taps = h_weights.max_taps;
             Resizer {
                 config: config.clone(),
                 h_weights_i16: None,
@@ -350,9 +486,13 @@ impl Resizer {
                 v_weights_f32: Some(v_weights),
                 intermediate_u8: Vec::new(),
                 intermediate_f32: vec![0.0f32; h_row_len * in_h],
+                intermediate_i16: Vec::new(),
+                linearized_row: Vec::new(),
+                v_output_i16: Vec::new(),
                 premul_buf: Vec::new(),
-                temp_row_f32: vec![0.0f32; in_w * channels],
+                temp_row_f32: vec![0.0f32; in_w * channels + h_max_taps * channels],
                 temp_output_f32: vec![0.0f32; h_row_len],
+                path: 2,
             }
         }
     }
@@ -379,149 +519,206 @@ impl Resizer {
         let out_h = config.out_height as usize;
         let h_row_len = out_w * channels;
 
-        if let (Some(h_weights), Some(v_weights)) = (&self.h_weights_i16, &self.v_weights_i16) {
-            // i16 fast path
-            let intermediate = &mut self.intermediate_u8;
+        match self.path {
+            0 => {
+                // Path 0: sRGB i16 fast path
+                let h_weights = self.h_weights_i16.as_ref().unwrap();
+                let v_weights = self.v_weights_i16.as_ref().unwrap();
+                let intermediate = &mut self.intermediate_u8;
 
-            if channels == 4 && !has_alpha {
-                let h_padding = h_weights.groups4 * 16;
-                let batch_count = in_h / 4;
-                let remainder = in_h % 4;
+                if channels == 4 && !has_alpha {
+                    let h_padding = h_weights.groups4 * 16;
+                    let batch_count = in_h / 4;
+                    let remainder = in_h % 4;
 
-                for batch in 0..batch_count {
-                    let y0 = batch * 4;
-                    // Extend each row slice to include SIMD padding from adjacent
-                    // rows. Zero-padded weights ensure padding data doesn't affect
-                    // results, but enables the fast global-guard kernel path.
-                    let r0 = &input[y0 * in_stride
-                        ..(y0 * in_stride + in_row_len + h_padding).min(input.len())];
-                    let r1 = &input[(y0 + 1) * in_stride
-                        ..((y0 + 1) * in_stride + in_row_len + h_padding).min(input.len())];
-                    let r2 = &input[(y0 + 2) * in_stride
-                        ..((y0 + 2) * in_stride + in_row_len + h_padding).min(input.len())];
-                    let r3 = &input[(y0 + 3) * in_stride
-                        ..((y0 + 3) * in_stride + in_row_len + h_padding).min(input.len())];
+                    for batch in 0..batch_count {
+                        let y0 = batch * 4;
+                        let r0 = &input[y0 * in_stride
+                            ..(y0 * in_stride + in_row_len + h_padding).min(input.len())];
+                        let r1 = &input[(y0 + 1) * in_stride
+                            ..((y0 + 1) * in_stride + in_row_len + h_padding).min(input.len())];
+                        let r2 = &input[(y0 + 2) * in_stride
+                            ..((y0 + 2) * in_stride + in_row_len + h_padding).min(input.len())];
+                        let r3 = &input[(y0 + 3) * in_stride
+                            ..((y0 + 3) * in_stride + in_row_len + h_padding).min(input.len())];
 
-                    let out_base = y0 * h_row_len;
-                    let (o0, rest) = intermediate[out_base..].split_at_mut(h_row_len);
-                    let (o1, rest) = rest.split_at_mut(h_row_len);
-                    let (o2, o3_and_rest) = rest.split_at_mut(h_row_len);
-                    let o3 = &mut o3_and_rest[..h_row_len];
+                        let out_base = y0 * h_row_len;
+                        let (o0, rest) = intermediate[out_base..].split_at_mut(h_row_len);
+                        let (o1, rest) = rest.split_at_mut(h_row_len);
+                        let (o2, o3_and_rest) = rest.split_at_mut(h_row_len);
+                        let o3 = &mut o3_and_rest[..h_row_len];
 
-                    simd::filter_h_u8_i16_4rows(r0, r1, r2, r3, o0, o1, o2, o3, h_weights);
+                        simd::filter_h_u8_i16_4rows(r0, r1, r2, r3, o0, o1, o2, o3, h_weights);
+                    }
+
+                    for i in 0..remainder {
+                        let y = batch_count * 4 + i;
+                        let in_start = y * in_stride;
+                        let in_end = (in_start + in_row_len + h_padding).min(input.len());
+                        let in_row = &input[in_start..in_end];
+                        let out_start = y * h_row_len;
+
+                        simd::filter_h_u8_i16(
+                            in_row,
+                            &mut intermediate[out_start..out_start + h_row_len],
+                            h_weights,
+                            channels,
+                        );
+                    }
+                } else {
+                    for y in 0..in_h {
+                        let in_start = y * in_stride;
+                        let in_row = &input[in_start..in_start + in_row_len];
+                        let out_start = y * h_row_len;
+
+                        let src = if has_alpha {
+                            simd::premultiply_u8_row(in_row, &mut self.premul_buf[..in_row_len]);
+                            &self.premul_buf[..] // includes zero-initialized SIMD padding
+                        } else {
+                            in_row
+                        };
+
+                        simd::filter_h_u8_i16(
+                            src,
+                            &mut intermediate[out_start..out_start + h_row_len],
+                            h_weights,
+                            channels,
+                        );
+                    }
                 }
 
-                for i in 0..remainder {
-                    let y = batch_count * 4 + i;
-                    let in_start = y * in_stride;
-                    let in_end = (in_start + in_row_len + h_padding).min(input.len());
-                    let in_row = &input[in_start..in_end];
-                    let out_start = y * h_row_len;
+                // V pass
+                simd::filter_v_all_u8_i16(intermediate, output, h_row_len, in_h, out_h, v_weights);
 
-                    simd::filter_h_u8_i16(
-                        in_row,
-                        &mut intermediate[out_start..out_start + h_row_len],
-                        h_weights,
-                        channels,
-                    );
+                if has_alpha {
+                    for out_y in 0..out_h {
+                        let out_start = out_y * out_row_len;
+                        simd::unpremultiply_u8_row(
+                            &mut output[out_start..out_start + out_row_len],
+                        );
+                    }
                 }
-            } else {
+            }
+            1 => {
+                // Path 1: linear-light i16 fast path
+                let h_weights = self.h_weights_i16.as_ref().unwrap();
+                let v_weights = self.v_weights_i16.as_ref().unwrap();
+
+                // H-pass: per-row sRGB→linear LUT + i16 filter
                 for y in 0..in_h {
                     let in_start = y * in_stride;
                     let in_row = &input[in_start..in_start + in_row_len];
+
+                    color::srgb_u8_to_linear_i12_row(
+                        in_row,
+                        &mut self.linearized_row[..in_row_len],
+                    );
+                    // Zero SIMD padding region
+                    for v in &mut self.linearized_row[in_row_len..] {
+                        *v = 0;
+                    }
+
                     let out_start = y * h_row_len;
+                    simd::filter_h_i16_i16(
+                        &self.linearized_row,
+                        &mut self.intermediate_i16[out_start..out_start + h_row_len],
+                        h_weights,
+                        channels,
+                    );
+                }
 
-                    let src = if has_alpha {
-                        simd::premultiply_u8_row(in_row, &mut self.premul_buf[..in_row_len]);
-                        &self.premul_buf[..] // includes zero-initialized SIMD padding
+                // V-pass: batch kernel
+                simd::filter_v_all_i16_i16(
+                    &self.intermediate_i16,
+                    &mut self.v_output_i16,
+                    h_row_len,
+                    in_h,
+                    out_h,
+                    v_weights,
+                );
+
+                // Output: per-row linear→sRGB LUT
+                for out_y in 0..out_h {
+                    let v_start = out_y * h_row_len;
+                    let out_start = out_y * h_row_len;
+                    color::linear_i12_to_srgb_u8_row(
+                        &self.v_output_i16[v_start..v_start + h_row_len],
+                        &mut output[out_start..out_start + h_row_len],
+                    );
+                }
+            }
+            _ => {
+                // Path 2: f32 path (linear color space with alpha, or non-4ch formats)
+                let h_weights = self.h_weights_f32.as_ref().unwrap();
+                let v_weights = self.v_weights_f32.as_ref().unwrap();
+                let linearize = config.needs_linearization();
+                let intermediate = &mut self.intermediate_f32;
+                let temp_row = &mut self.temp_row_f32;
+
+                // === Horizontal pass ===
+                for y in 0..in_h {
+                    let in_start = y * in_stride;
+                    let in_row = &input[in_start..in_start + in_row_len];
+
+                    if linearize {
+                        color::srgb_u8_to_linear_f32(
+                            in_row,
+                            &mut temp_row[..in_row_len],
+                            channels,
+                            has_alpha,
+                        );
                     } else {
-                        in_row
-                    };
+                        simd::u8_to_f32_row(in_row, &mut temp_row[..in_row_len]);
+                    }
 
-                    simd::filter_h_u8_i16(
-                        src,
+                    if has_alpha && channels == 4 {
+                        simd::premultiply_alpha_row(&mut temp_row[..in_row_len]);
+                    }
+
+                    let out_start = y * h_row_len;
+                    simd::filter_h_row_f32(
+                        temp_row,
                         &mut intermediate[out_start..out_start + h_row_len],
                         h_weights,
                         channels,
                     );
                 }
-            }
 
-            // V pass — always use batch kernel (intermediate is contiguous)
-            simd::filter_v_all_u8_i16(intermediate, output, h_row_len, in_h, out_h, v_weights);
+                // === Vertical pass ===
+                let max_taps = v_weights.max_taps;
+                let mut row_ptrs: Vec<&[f32]> = Vec::with_capacity(max_taps);
+                let temp_output = &mut self.temp_output_f32;
 
-            if has_alpha {
                 for out_y in 0..out_h {
+                    let left = v_weights.left[out_y];
+                    let tap_count = v_weights.tap_count(out_y);
+                    let weights = v_weights.weights(out_y);
+
+                    row_ptrs.clear();
+                    for t in 0..tap_count {
+                        let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+                        let start = in_y * h_row_len;
+                        row_ptrs.push(&intermediate[start..start + h_row_len]);
+                    }
+
+                    simd::filter_v_row_f32(&row_ptrs, &mut temp_output[..h_row_len], weights);
+
+                    if has_alpha && channels == 4 {
+                        simd::unpremultiply_alpha_row(&mut temp_output[..h_row_len]);
+                    }
+
                     let out_start = out_y * out_row_len;
-                    simd::unpremultiply_u8_row(&mut output[out_start..out_start + out_row_len]);
-                }
-            }
-        } else if let (Some(h_weights), Some(v_weights)) =
-            (&self.h_weights_f32, &self.v_weights_f32)
-        {
-            // f32 path (linear color space or non-4ch formats)
-            let linearize = config.needs_linearization();
-            let intermediate = &mut self.intermediate_f32;
-            let temp_row = &mut self.temp_row_f32;
-
-            // === Horizontal pass ===
-            for y in 0..in_h {
-                let in_start = y * in_stride;
-                let in_row = &input[in_start..in_start + in_row_len];
-
-                if linearize {
-                    color::srgb_u8_to_linear_f32(in_row, temp_row, channels, has_alpha);
-                } else {
-                    simd::u8_to_f32_row(in_row, temp_row);
-                }
-
-                if has_alpha && channels == 4 {
-                    simd::premultiply_alpha_row(temp_row);
-                }
-
-                let out_start = y * h_row_len;
-                simd::filter_h_row_f32(
-                    temp_row,
-                    &mut intermediate[out_start..out_start + h_row_len],
-                    h_weights,
-                    channels,
-                );
-            }
-
-            // === Vertical pass ===
-            let max_taps = v_weights.max_taps;
-            let mut row_ptrs: Vec<&[f32]> = Vec::with_capacity(max_taps);
-            let temp_output = &mut self.temp_output_f32;
-
-            for out_y in 0..out_h {
-                let left = v_weights.left[out_y];
-                let tap_count = v_weights.tap_count(out_y);
-                let weights = v_weights.weights(out_y);
-
-                row_ptrs.clear();
-                for t in 0..tap_count {
-                    let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                    let start = in_y * h_row_len;
-                    row_ptrs.push(&intermediate[start..start + h_row_len]);
-                }
-
-                simd::filter_v_row_f32(&row_ptrs, &mut temp_output[..h_row_len], weights);
-
-                if has_alpha && channels == 4 {
-                    simd::unpremultiply_alpha_row(&mut temp_output[..h_row_len]);
-                }
-
-                let out_start = out_y * out_row_len;
-                let out_slice = &mut output[out_start..out_start + out_row_len];
-                if linearize {
-                    color::linear_f32_to_srgb_u8(
-                        &temp_output[..h_row_len],
-                        out_slice,
-                        channels,
-                        has_alpha,
-                    );
-                } else {
-                    simd::f32_to_u8_row(&temp_output[..h_row_len], out_slice);
+                    let out_slice = &mut output[out_start..out_start + out_row_len];
+                    if linearize {
+                        color::linear_f32_to_srgb_u8(
+                            &temp_output[..h_row_len],
+                            out_slice,
+                            channels,
+                            has_alpha,
+                        );
+                    } else {
+                        simd::f32_to_u8_row(&temp_output[..h_row_len], out_slice);
+                    }
                 }
             }
         }

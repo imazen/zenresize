@@ -99,6 +99,30 @@ pub(crate) fn unpremultiply_u8_row_wasm128(_token: Wasm128Token, row: &mut [u8])
 }
 
 #[archmage::arcane]
+pub(crate) fn filter_h_i16_i16_wasm128(
+    _token: Wasm128Token,
+    input: &[i16],
+    output: &mut [i16],
+    weights: &I16WeightTable,
+    channels: usize,
+) {
+    super::wide_kernels::filter_h_i16_i16(input, output, weights, channels)
+}
+
+#[archmage::arcane]
+pub(crate) fn filter_v_all_i16_i16_wasm128(
+    _token: Wasm128Token,
+    intermediate: &[i16],
+    output: &mut [i16],
+    h_row_len: usize,
+    in_h: usize,
+    out_h: usize,
+    weights: &crate::weights::I16WeightTable,
+) {
+    super::wide_kernels::filter_v_all_i16_i16(intermediate, output, h_row_len, in_h, out_h, weights)
+}
+
+#[archmage::arcane]
 pub(crate) fn srgb_u8_to_linear_f32_wasm128(
     _token: Wasm128Token,
     input: &[u8],

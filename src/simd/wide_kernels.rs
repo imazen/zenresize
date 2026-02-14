@@ -388,6 +388,145 @@ pub(super) fn filter_v_all_u8_i16(
 }
 
 // ============================================================================
+// Integer i16→i16 path (linear-light i12 values 0-4095)
+// ============================================================================
+
+/// Integer horizontal convolution: i16 input → i16 output, via wide SIMD.
+/// For linear-light i12 path (values 0-4095).
+#[inline(always)]
+pub(super) fn filter_h_i16_i16(
+    input: &[i16],
+    output: &mut [i16],
+    weights: &I16WeightTable,
+    channels: usize,
+) {
+    match channels {
+        4 => filter_h_i16_i16_4ch(input, output, weights),
+        _ => filter_h_i16_i16_generic(input, output, weights, channels),
+    }
+}
+
+/// 4-channel i16 H kernel using i32x4.
+#[inline(always)]
+fn filter_h_i16_i16_4ch(input: &[i16], output: &mut [i16], weights: &I16WeightTable) {
+    let half = i32x4::splat(1 << (I16_PRECISION - 1));
+    let zero = i32x4::splat(0);
+    let max_val = i32x4::splat(4095);
+
+    for out_x in 0..weights.len() {
+        let left = weights.left[out_x] as usize;
+        let w = weights.weights(out_x);
+        let mut acc = i32x4::splat(0);
+
+        for (t, &weight) in w.iter().enumerate() {
+            let off = (left + t) * 4;
+            let pixel = i32x4::new([
+                input[off] as i32,
+                input[off + 1] as i32,
+                input[off + 2] as i32,
+                input[off + 3] as i32,
+            ]);
+            acc += pixel * i32x4::splat(weight as i32);
+        }
+
+        let rounded = (acc + half) >> I16_PRECISION;
+        let clamped = rounded.max(zero).min(max_val);
+        let arr = clamped.to_array();
+        let out_base = out_x * 4;
+        output[out_base] = arr[0] as i16;
+        output[out_base + 1] = arr[1] as i16;
+        output[out_base + 2] = arr[2] as i16;
+        output[out_base + 3] = arr[3] as i16;
+    }
+}
+
+/// Generic-channel i16 H kernel (scalar).
+#[inline(always)]
+fn filter_h_i16_i16_generic(
+    input: &[i16],
+    output: &mut [i16],
+    weights: &I16WeightTable,
+    channels: usize,
+) {
+    for out_x in 0..weights.len() {
+        let left = weights.left[out_x] as usize;
+        let w = weights.weights(out_x);
+        let out_base = out_x * channels;
+
+        for c in 0..channels {
+            let mut acc: i32 = 0;
+            for (t, &weight) in w.iter().enumerate() {
+                acc += input[(left + t) * channels + c] as i32 * weight as i32;
+            }
+            let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+            output[out_base + c] = rounded.clamp(0, 4095) as i16;
+        }
+    }
+}
+
+/// Batch vertical filter: i16 intermediate → i16 output via i32 accumulator.
+/// For linear-light i12 path (values 0-4095).
+#[inline(always)]
+pub(super) fn filter_v_all_i16_i16(
+    intermediate: &[i16],
+    output: &mut [i16],
+    h_row_len: usize,
+    in_h: usize,
+    out_h: usize,
+    weights: &I16WeightTable,
+) {
+    for out_y in 0..out_h {
+        let left = weights.left[out_y];
+        let tap_count = weights.tap_count(out_y);
+        let w = weights.weights(out_y);
+        let out_start = out_y * h_row_len;
+
+        let in_h_i32 = in_h as i32 - 1;
+
+        // Process 4 i16 at a time using i32x4
+        let chunks4 = h_row_len / 4;
+        let base4 = chunks4 * 4;
+
+        for chunk_idx in 0..chunks4 {
+            let x = chunk_idx * 4;
+            let mut acc = i32x4::splat(0);
+
+            for (t, &weight) in w[..tap_count].iter().enumerate() {
+                let in_y = (left + t as i32).clamp(0, in_h_i32) as usize;
+                let off = in_y * h_row_len + x;
+                let src = i32x4::new([
+                    intermediate[off] as i32,
+                    intermediate[off + 1] as i32,
+                    intermediate[off + 2] as i32,
+                    intermediate[off + 3] as i32,
+                ]);
+                acc += src * i32x4::splat(weight as i32);
+            }
+
+            let half = i32x4::splat(1 << (I16_PRECISION - 1));
+            let shifted = (acc + half) >> I16_PRECISION;
+            let clamped = shifted.max(i32x4::splat(0)).min(i32x4::splat(4095));
+            let arr = clamped.to_array();
+            output[out_start + x] = arr[0] as i16;
+            output[out_start + x + 1] = arr[1] as i16;
+            output[out_start + x + 2] = arr[2] as i16;
+            output[out_start + x + 3] = arr[3] as i16;
+        }
+
+        // Scalar tail
+        for x in base4..h_row_len {
+            let mut acc: i32 = 0;
+            for (t, &weight) in w[..tap_count].iter().enumerate() {
+                let in_y = (left + t as i32).clamp(0, in_h_i32) as usize;
+                acc += intermediate[in_y * h_row_len + x] as i32 * weight as i32;
+            }
+            let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+            output[out_start + x] = rounded.clamp(0, 4095) as i16;
+        }
+    }
+}
+
+// ============================================================================
 // Alpha / u8 utilities
 // ============================================================================
 

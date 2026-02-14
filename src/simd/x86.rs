@@ -980,3 +980,324 @@ pub(crate) fn linear_f32_to_srgb_u8_v3(
 ) {
     crate::color::linear_f32_to_srgb_u8_impl(input, output, channels, has_alpha);
 }
+
+// =============================================================================
+// Linear-light i16→i16 convolution kernels (i12 values 0-4095)
+// =============================================================================
+
+/// Integer horizontal convolution: i16 input → i16 output via i32 accumulator.
+///
+/// Adapted from `filter_h_u8_i16_v3` — the key difference is loading i16 data
+/// directly (no `cvtepu8_epi16` needed). The shuffle + madd_epi16 are identical.
+#[archmage::arcane]
+pub(crate) fn filter_h_i16_i16_v3(
+    _token: X64V3Token,
+    input: &[i16],
+    output: &mut [i16],
+    weights: &I16WeightTable,
+    channels: usize,
+) {
+    match channels {
+        4 => filter_h_i16_4ch(_token, input, output, weights),
+        _ => {
+            // Scalar fallback for non-4ch
+            let out_width = weights.len();
+            for out_x in 0..out_width {
+                let left = weights.left[out_x] as usize;
+                let w = weights.weights(out_x);
+                let out_base = out_x * channels;
+                for c in 0..channels {
+                    let mut acc: i32 = 0;
+                    for (t, &weight) in w.iter().enumerate() {
+                        acc += input[(left + t) * channels + c] as i32 * weight as i32;
+                    }
+                    let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+                    output[out_base + c] = rounded.clamp(0, 4095) as i16;
+                }
+            }
+        }
+    }
+}
+
+/// Integer horizontal filter for 4-channel i16 data (linear-light i12 path).
+///
+/// Input: i16 values (0-4095) laid out as [R,G,B,A, R,G,B,A, ...]
+/// Output: i16 values (0-4095) clamped after convolution.
+///
+/// Since i16 data is already in i16 format, we load directly with
+/// `_mm256_loadu_si256` — no `cvtepu8_epi16` needed. Each 4 RGBA pixels
+/// (16 i16 values) fit in one ymm register.
+///
+/// Uses `as_chunks` for safe bounds-hoisted access.
+#[archmage::rite]
+fn filter_h_i16_4ch(
+    _token: X64V3Token,
+    input: &[i16],
+    output: &mut [i16],
+    weights: &I16WeightTable,
+) {
+    let out_width = weights.len();
+    let groups4 = weights.groups4;
+    let in_pixels = input.len() / 4;
+
+    // Need at least 4 pixels for the 32-byte (4 RGBA pixel) i16 loads
+    if in_pixels < 4 {
+        // Scalar fallback for tiny inputs
+        for out_x in 0..out_width {
+            let left = weights.left[out_x] as usize;
+            let w = weights.weights(out_x);
+            let out_base = out_x * 4;
+            for c in 0..4 {
+                let mut acc: i32 = 0;
+                for (t, &weight) in w.iter().enumerate() {
+                    acc += input[(left + t) * 4 + c] as i32 * weight as i32;
+                }
+                let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+                output[out_base + c] = rounded.clamp(0, 4095) as i16;
+            }
+        }
+        return;
+    }
+
+    // Same shuffle as u8 path: within each 128-bit lane, rearrange
+    // [R0,G0,B0,A0,R1,G1,B1,A1] → [R0,R1,G0,G1,B0,B1,A0,A1]
+    let ymm_shuffle = _mm256_set_epi8(
+        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0, 15, 14, 7, 6, 13, 12, 5, 4, 11,
+        10, 3, 2, 9, 8, 1, 0,
+    );
+
+    let xmm_shuffle = _mm_set_epi8(15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0);
+    let half = _mm_set1_epi32(1 << (I16_PRECISION - 1));
+    let zero = _mm_setzero_si128();
+    let max_val = _mm_set1_epi16(4095);
+
+    // Weight chunks: contiguous stride-16 i16 array.
+    let ew_all = weights.expanded_4ch_all();
+    let (ew_chunks, _) = ew_all.as_chunks::<16>();
+
+    // Output as 4-i16 pixels (8 bytes each = 4 values)
+    let (out_pixels, _) = output.as_chunks_mut::<4>();
+
+    // Check if input has enough elements for global-guard path.
+    // Each group loads 4 RGBA pixels (16 i16 values).
+    let max_left = weights.left.iter().map(|&l| l as usize).max().unwrap_or(0);
+    let has_full_padding = max_left * 4 + groups4 * 16 <= input.len();
+
+    let rem_taps = weights.max_taps % 4;
+
+    if has_full_padding {
+        for out_x in 0..out_width {
+            let left = weights.left[out_x] as usize;
+            let in_base = left * 4; // in i16 elements
+
+            // Pre-slice input window: 16 i16 per group
+            let input_window = &input[in_base..in_base + groups4 * 16];
+            let (in_chunks, _) = input_window.as_chunks::<16>();
+            let ew_base = out_x * groups4;
+            let ew_window = &ew_chunks[ew_base..ew_base + groups4];
+
+            let mut acc = _mm256_setzero_si256();
+
+            for (chunk, ew) in in_chunks.iter().zip(ew_window.iter()) {
+                // Load 16 i16 directly (4 RGBA pixels)
+                let pixels = _mm256_loadu_si256(chunk);
+                let shuffled = _mm256_shuffle_epi8(pixels, ymm_shuffle);
+                let w = _mm256_loadu_si256(ew);
+                acc = _mm256_add_epi32(acc, _mm256_madd_epi16(shuffled, w));
+            }
+
+            let lo = _mm256_castsi256_si128(acc);
+            let hi = _mm256_extracti128_si256::<1>(acc);
+            let final_acc = _mm_add_epi32(lo, hi);
+
+            let rounded = _mm_add_epi32(final_acc, half);
+            let shifted = _mm_srai_epi32::<{ I16_PRECISION }>(rounded);
+
+            // Pack i32 → i16 and clamp to 0-4095
+            let packed16 = _mm_packs_epi32(shifted, zero);
+            let clamped = _mm_min_epi16(_mm_max_epi16(packed16, zero), max_val);
+
+            // Store 4 × i16 (8 bytes)
+            _mm_storeu_si64(&mut out_pixels[out_x], clamped);
+        }
+    } else {
+        // Per-pixel edge check path
+        for out_x in 0..out_width {
+            let left = weights.left[out_x] as usize;
+            let in_base = left * 4;
+
+            // Check if this pixel has enough data for SIMD
+            if in_base + groups4 * 16 <= input.len() {
+                let input_window = &input[in_base..in_base + groups4 * 16];
+                let (in_chunks, _) = input_window.as_chunks::<16>();
+
+                let ew = weights.weights_expanded_4ch(out_x);
+                let (ew_c, _) = ew.as_chunks::<16>();
+
+                let mut acc = _mm256_setzero_si256();
+                for (chunk, ewc) in in_chunks.iter().zip(ew_c.iter()) {
+                    let pixels = _mm256_loadu_si256(chunk);
+                    let shuffled = _mm256_shuffle_epi8(pixels, ymm_shuffle);
+                    let w = _mm256_loadu_si256(ewc);
+                    acc = _mm256_add_epi32(acc, _mm256_madd_epi16(shuffled, w));
+                }
+
+                let lo = _mm256_castsi256_si128(acc);
+                let hi = _mm256_extracti128_si256::<1>(acc);
+                let mut final_acc = _mm_add_epi32(lo, hi);
+
+                // Handle remaining 2 taps
+                if rem_taps >= 2 {
+                    let t = (groups4 - 1) * 4 + 4; // first tap after full groups
+                    let tap_off = in_base + t * 4;
+                    if tap_off + 8 <= input.len() {
+                        let chunk: &[i16; 8] = input[tap_off..tap_off + 8].try_into().unwrap();
+                        let pixels = _mm_loadu_si128(chunk);
+                        let shuffled = _mm_shuffle_epi8(pixels, xmm_shuffle);
+                        let wp = weights.weights_padded(out_x);
+                        let w_val = (wp[t] as i32 & 0xFFFF) | ((wp[t + 1] as i32) << 16);
+                        let w = _mm_set1_epi32(w_val);
+                        final_acc = _mm_add_epi32(final_acc, _mm_madd_epi16(shuffled, w));
+                    }
+                }
+
+                let rounded = _mm_add_epi32(final_acc, half);
+                let shifted = _mm_srai_epi32::<{ I16_PRECISION }>(rounded);
+                let packed16 = _mm_packs_epi32(shifted, zero);
+                let clamped = _mm_min_epi16(_mm_max_epi16(packed16, zero), max_val);
+                _mm_storeu_si64(&mut out_pixels[out_x], clamped);
+            } else {
+                // Scalar fallback for edge pixels
+                let w = weights.weights(out_x);
+                for c in 0..4 {
+                    let mut acc: i32 = 0;
+                    for (t, &weight) in w.iter().enumerate() {
+                        acc += input[(left + t) * 4 + c] as i32 * weight as i32;
+                    }
+                    let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+                    out_pixels[out_x][c] = rounded.clamp(0, 4095) as i16;
+                }
+            }
+        }
+    }
+}
+
+/// Batch vertical filter: i16 intermediate → i16 output via i32 accumulator.
+///
+/// Adapted from `filter_v_all_u8_i16_v3` — instead of loading u8 and extending
+/// to i16, we load i16 directly. Paired row interleaving uses `unpacklo_epi16`
+/// instead of `unpacklo_epi8` + `cvtepu8_epi16`.
+///
+/// Processes 8 i16 values (16 bytes) per chunk.
+/// Uses `as_chunks` for safe bounds-hoisted access.
+#[archmage::arcane]
+pub(crate) fn filter_v_all_i16_i16_v3(
+    _token: X64V3Token,
+    intermediate: &[i16],
+    output: &mut [i16],
+    h_row_len: usize,
+    in_h: usize,
+    out_h: usize,
+    weights: &I16WeightTable,
+) {
+    let half = _mm256_set1_epi32(1 << (I16_PRECISION - 1));
+    let chunks8 = h_row_len / 8;
+    let in_h_i32 = in_h as i32;
+    let max_val = _mm_set1_epi16(4095);
+    let zero_xmm = _mm_setzero_si128();
+
+    // Pre-chunk all intermediate rows for direct indexing.
+    let mut int_row_chunks: Vec<&[[i16; 8]]> = Vec::with_capacity(in_h);
+    for y in 0..in_h {
+        let row = &intermediate[y * h_row_len..y * h_row_len + h_row_len];
+        int_row_chunks.push(row.as_chunks::<8>().0);
+    }
+
+    let max_taps = weights.max_taps;
+    let mut row_indices = vec![0usize; max_taps];
+    let mut paired_wts = vec![_mm256_setzero_si256(); max_taps.div_ceil(2)];
+    let empty_chunks: &[[i16; 8]] = &[];
+    let mut tap_rows = vec![empty_chunks; max_taps];
+
+    for out_y in 0..out_h {
+        let left = weights.left[out_y];
+        let tap_count = weights.tap_count(out_y);
+        let w = weights.weights(out_y);
+        let out_base = out_y * h_row_len;
+
+        let pairs = tap_count / 2;
+        let odd = !tap_count.is_multiple_of(2);
+
+        for t in 0..tap_count {
+            row_indices[t] = (left + t as i32).clamp(0, in_h_i32 - 1) as usize;
+        }
+        for p in 0..pairs {
+            let w0 = w[p * 2] as i32;
+            let w1 = w[p * 2 + 1] as i32;
+            paired_wts[p] = _mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
+        }
+        let odd_weight = if odd {
+            _mm256_set1_epi32(w[tap_count - 1] as i32 & 0xFFFF)
+        } else {
+            _mm256_setzero_si256()
+        };
+
+        let (out_chunks, out_tail) = output[out_base..out_base + h_row_len].as_chunks_mut::<8>();
+
+        // Pre-fetch row chunk slices for this output row's taps.
+        for (t, &ri) in row_indices[..tap_count].iter().enumerate() {
+            tap_rows[t] = &int_row_chunks[ri][..chunks8];
+        }
+
+        for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
+            let mut acc_lo = _mm256_setzero_si256();
+
+            for (pw, ri_pair) in paired_wts[..pairs].iter().zip(tap_rows.chunks_exact(2)) {
+                // Load 8 i16 from each of two rows (16 bytes each)
+                let src0 = _mm_loadu_si128(&ri_pair[0][ci]);
+                let src1 = _mm_loadu_si128(&ri_pair[1][ci]);
+
+                // Interleave i16 pairs: [a0,b0, a1,b1, a2,b2, a3,b3]
+                let il_lo = _mm_unpacklo_epi16(src0, src1);
+                let il_hi = _mm_unpackhi_epi16(src0, src1);
+
+                // Combine into ymm for madd_epi16
+                let combined = _mm256_set_m128i(il_hi, il_lo);
+                acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(combined, *pw));
+            }
+
+            if odd {
+                let src = _mm_loadu_si128(&tap_rows[tap_count - 1][ci]);
+                let zero_src = _mm_setzero_si128();
+                let il_lo = _mm_unpacklo_epi16(src, zero_src);
+                let il_hi = _mm_unpackhi_epi16(src, zero_src);
+                let combined = _mm256_set_m128i(il_hi, il_lo);
+                acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(combined, odd_weight));
+            }
+
+            // Round and shift
+            let rounded = _mm256_add_epi32(acc_lo, half);
+            let shifted = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded);
+
+            // Pack i32 → i16 using 128-bit extraction, clamp to 0-4095
+            let lo_128 = _mm256_castsi256_si128(shifted);
+            let hi_128 = _mm256_extracti128_si256::<1>(shifted);
+            let packed = _mm_packs_epi32(lo_128, hi_128);
+            let clamped = _mm_min_epi16(_mm_max_epi16(packed, zero_xmm), max_val);
+
+            _mm_storeu_si128(out_chunk, clamped);
+        }
+
+        // Scalar tail
+        let tail_start = chunks8 * 8;
+        for (x, out_val) in out_tail.iter_mut().enumerate() {
+            let mut acc: i32 = 0;
+            for t in 0..tap_count {
+                let in_y = row_indices[t];
+                acc += intermediate[in_y * h_row_len + tail_start + x] as i32 * w[t] as i32;
+            }
+            let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+            *out_val = rounded.clamp(0, 4095) as i16;
+        }
+    }
+}

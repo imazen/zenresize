@@ -172,6 +172,66 @@ pub(crate) fn filter_v_all_u8_i16_scalar(
     }
 }
 
+// ============================================================================
+// Integer i16→i16 path (linear-light i12 values 0-4095)
+// ============================================================================
+
+/// Integer horizontal convolution: i16 input → i16 output, scalar fallback.
+/// For linear-light i12 path (values 0-4095).
+pub(crate) fn filter_h_i16_i16_scalar(
+    _token: ScalarToken,
+    input: &[i16],
+    output: &mut [i16],
+    weights: &I16WeightTable,
+    channels: usize,
+) {
+    let out_width = weights.len();
+
+    for out_x in 0..out_width {
+        let left = weights.left[out_x] as usize;
+        let w = weights.weights(out_x);
+        let out_base = out_x * channels;
+
+        for c in 0..channels {
+            let mut acc: i32 = 0;
+            for (t, &weight) in w.iter().enumerate() {
+                acc += input[(left + t) * channels + c] as i32 * weight as i32;
+            }
+            let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+            output[out_base + c] = rounded.clamp(0, 4095) as i16;
+        }
+    }
+}
+
+/// Batch vertical filter for all output rows (i16 intermediate → i16 output), scalar fallback.
+/// For linear-light i12 path (values 0-4095).
+pub(crate) fn filter_v_all_i16_i16_scalar(
+    _token: ScalarToken,
+    intermediate: &[i16],
+    output: &mut [i16],
+    h_row_len: usize,
+    in_h: usize,
+    out_h: usize,
+    weights: &crate::weights::I16WeightTable,
+) {
+    for out_y in 0..out_h {
+        let left = weights.left[out_y];
+        let tap_count = weights.tap_count(out_y);
+        let w = weights.weights(out_y);
+        let out_start = out_y * h_row_len;
+
+        for x in 0..h_row_len {
+            let mut acc: i32 = 0;
+            for (t, &weight) in w.iter().enumerate().take(tap_count) {
+                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+                acc += intermediate[in_y * h_row_len + x] as i32 * weight as i32;
+            }
+            let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+            output[out_start + x] = rounded.clamp(0, 4095) as i16;
+        }
+    }
+}
+
 /// Premultiply alpha on RGBA u8 row: input → output, scalar fallback.
 pub(crate) fn premultiply_u8_row_scalar(_token: ScalarToken, input: &[u8], output: &mut [u8]) {
     debug_assert_eq!(input.len(), output.len());
