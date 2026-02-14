@@ -45,7 +45,7 @@ mod simd;
 // Re-exports
 pub use filter::{Filter, InterpolationDetails};
 pub use pixel::{ColorSpace, PixelFormat, ResizeConfig, ResizeConfigBuilder};
-pub use resize::{resize, resize_f32, resize_f32_into, resize_into, Resizer};
+pub use resize::{Resizer, resize, resize_f32, resize_f32_into, resize_into};
 pub use streaming::StreamingResize;
 pub use weights::{F32WeightTable, I16WeightTable};
 

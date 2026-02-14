@@ -147,6 +147,120 @@ fn streaming_matches_fullframe_linear() {
 }
 
 // =============================================================================
+// Linear i16 vs f32 parity
+// =============================================================================
+
+/// The linear i16 path (4ch, no alpha, linearize) should produce output
+/// within ±2 of the f32 linear path (streaming, which always uses f32).
+#[test]
+fn linear_i16_matches_f32_downscale() {
+    let config = ResizeConfig::builder(64, 64, 32, 32)
+        .filter(Filter::Lanczos)
+        .format(PixelFormat::Srgb8 {
+            channels: 4,
+            has_alpha: false,
+        })
+        .linear()
+        .build();
+
+    let input = gradient_image(64, 64);
+
+    // Full-frame: uses i16 linear path (linearize + 4ch + !has_alpha)
+    let i16_output = resize(&config, &input);
+
+    // Streaming: always uses f32 path
+    let mut resizer = StreamingResize::new(&config);
+    let row_len = 64 * 4;
+    for y in 0..64 {
+        resizer.push_row(&input[y * row_len..(y + 1) * row_len]);
+    }
+    resizer.finish();
+
+    let mut f32_output = vec![0u8; 32 * 32 * 4];
+    let out_row_len = 32 * 4;
+    let mut idx = 0;
+    while let Some(row) = resizer.next_output_row() {
+        f32_output[idx * out_row_len..(idx + 1) * out_row_len].copy_from_slice(&row);
+        idx += 1;
+    }
+
+    let max_diff: u8 = i16_output
+        .iter()
+        .zip(f32_output.iter())
+        .map(|(&a, &b)| (a as i16 - b as i16).unsigned_abs() as u8)
+        .max()
+        .unwrap_or(0);
+    assert!(
+        max_diff <= 2,
+        "linear i16 vs f32 max diff {} exceeds tolerance 2",
+        max_diff
+    );
+}
+
+/// Parity test with upscale to catch different edge cases.
+#[test]
+fn linear_i16_matches_f32_upscale() {
+    let config = ResizeConfig::builder(16, 16, 48, 48)
+        .filter(Filter::Lanczos)
+        .format(PixelFormat::Srgb8 {
+            channels: 4,
+            has_alpha: false,
+        })
+        .linear()
+        .build();
+
+    let input = gradient_image(16, 16);
+
+    let i16_output = resize(&config, &input);
+
+    let mut resizer = StreamingResize::new(&config);
+    let row_len = 16 * 4;
+    for y in 0..16 {
+        resizer.push_row(&input[y * row_len..(y + 1) * row_len]);
+    }
+    resizer.finish();
+
+    let mut f32_output = vec![0u8; 48 * 48 * 4];
+    let out_row_len = 48 * 4;
+    let mut idx = 0;
+    while let Some(row) = resizer.next_output_row() {
+        f32_output[idx * out_row_len..(idx + 1) * out_row_len].copy_from_slice(&row);
+        idx += 1;
+    }
+
+    let max_diff: u8 = i16_output
+        .iter()
+        .zip(f32_output.iter())
+        .map(|(&a, &b)| (a as i16 - b as i16).unsigned_abs() as u8)
+        .max()
+        .unwrap_or(0);
+    assert!(
+        max_diff <= 2,
+        "linear i16 vs f32 upscale max diff {} exceeds tolerance 2",
+        max_diff
+    );
+}
+
+/// Resizer struct path 1 should match the one-shot resize_into_i16_linear.
+#[test]
+fn resizer_matches_oneshot_linear_no_alpha() {
+    let config = ResizeConfig::builder(32, 32, 16, 16)
+        .filter(Filter::Lanczos)
+        .format(PixelFormat::Srgb8 {
+            channels: 4,
+            has_alpha: false,
+        })
+        .linear()
+        .build();
+
+    let input = gradient_image(32, 32);
+    let oneshot = resize(&config, &input);
+    let mut resizer = zenresize::resize::Resizer::new(&config);
+    let cached = resizer.resize(&input);
+    assert_eq!(oneshot, cached, "Resizer path 1 should match one-shot path");
+}
+
+// =============================================================================
 // All filter types produce valid output
 // =============================================================================
 

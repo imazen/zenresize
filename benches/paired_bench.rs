@@ -123,6 +123,18 @@ fn run_zenresize_linear(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     zenresize::resize(&config, &img.rgba)
 }
 
+fn run_zenresize_linear_i16(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
+    let config = zenresize::ResizeConfig::builder(img.width, img.height, out_w, out_h)
+        .filter(zenresize::Filter::Lanczos)
+        .format(zenresize::PixelFormat::Srgb8 {
+            channels: 4,
+            has_alpha: false,
+        })
+        .linear()
+        .build();
+    zenresize::resize(&config, &img.rgba)
+}
+
 fn run_picscale_srgb(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     use pic_scale::*;
     let mut scaler = Scaler::new(ResamplingFunction::Lanczos3);
@@ -298,6 +310,10 @@ fn main() {
             func: run_zenresize_linear,
         },
         Contender {
+            name: "zenresize_linear_i16",
+            func: run_zenresize_linear_i16,
+        },
+        Contender {
             name: "pic_scale_srgb",
             func: run_picscale_srgb,
         },
@@ -380,7 +396,10 @@ fn main() {
     );
     println!("{:-<24} {:-^12} {:-^12} {:-^14}", "", "", "", "");
 
-    let baseline_ps = &contenders[2]; // pic_scale_srgb
+    let baseline_ps = contenders
+        .iter()
+        .find(|c| c.name == "pic_scale_srgb")
+        .unwrap();
     for c in &contenders {
         if std::ptr::eq(c, baseline_ps) {
             continue;

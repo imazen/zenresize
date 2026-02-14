@@ -105,7 +105,43 @@ pub(crate) fn filter_v_all_u8_i16(
     weights: &crate::weights::I16WeightTable,
 ) {
     archmage::incant!(filter_v_all_u8_i16(
-        intermediate, output, h_row_len, in_h, out_h, weights
+        intermediate,
+        output,
+        h_row_len,
+        in_h,
+        out_h,
+        weights
+    ))
+}
+
+/// Integer horizontal filter: i16 input → i16 output via i16 weights.
+/// For linear-light i12 path (values 0-4095).
+pub(crate) fn filter_h_i16_i16(
+    input: &[i16],
+    output: &mut [i16],
+    weights: &I16WeightTable,
+    channels: usize,
+) {
+    archmage::incant!(filter_h_i16_i16(input, output, weights, channels))
+}
+
+/// Batch vertical filter: i16 intermediate → i16 output.
+/// For linear-light i12 path (values 0-4095).
+pub(crate) fn filter_v_all_i16_i16(
+    intermediate: &[i16],
+    output: &mut [i16],
+    h_row_len: usize,
+    in_h: usize,
+    out_h: usize,
+    weights: &crate::weights::I16WeightTable,
+) {
+    archmage::incant!(filter_v_all_i16_i16(
+        intermediate,
+        output,
+        h_row_len,
+        in_h,
+        out_h,
+        weights
     ))
 }
 
@@ -118,4 +154,3 @@ pub(crate) fn premultiply_u8_row(input: &[u8], output: &mut [u8]) {
 pub(crate) fn unpremultiply_u8_row(row: &mut [u8]) {
     archmage::incant!(unpremultiply_u8_row(row))
 }
-
