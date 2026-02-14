@@ -630,6 +630,140 @@ fn push_rows_matches_individual() {
 // and convolution kernels just multiply N floats. BGRA data passes through
 // unchanged — use {channels: 4, has_alpha: true}, same as RGBA.
 
+// =============================================================================
+// Comprehensive regression: all filter × scale × path combinations
+// =============================================================================
+
+/// Compare fullframe (i16 path) vs streaming (f32 path) across all filters,
+/// multiple scales, and path configurations. Catches weight normalization bugs.
+#[test]
+fn no_catastrophic_errors_across_all_combinations() {
+    let scales: &[(u32, u32, &str)] = &[
+        (200, 100, "2x_down"),
+        (200, 50, "4x_down"),
+        (200, 25, "8x_down"),
+        (50, 100, "2x_up"),
+        (50, 200, "4x_up"),
+        (50, 400, "8x_up"),
+    ];
+
+    // Path configs: (format, color_space_fn, label)
+    // sRGB 4ch no-alpha → i16 fast path
+    // linear 4ch no-alpha → i16 linear path
+    // sRGB 4ch with-alpha → i16 fast path (with premul)
+    let path_configs: Vec<(PixelFormat, bool, &str)> = vec![
+        (
+            PixelFormat::Srgb8 {
+                channels: 4,
+                has_alpha: false,
+            },
+            false,
+            "srgb-noalpha",
+        ),
+        (
+            PixelFormat::Srgb8 {
+                channels: 4,
+                has_alpha: true,
+            },
+            false,
+            "srgb-alpha",
+        ),
+        (
+            PixelFormat::Srgb8 {
+                channels: 4,
+                has_alpha: false,
+            },
+            true,
+            "linear-noalpha",
+        ),
+        (
+            PixelFormat::Srgb8 {
+                channels: 4,
+                has_alpha: true,
+            },
+            true,
+            "linear-alpha",
+        ),
+    ];
+
+    let mut failures: Vec<String> = Vec::new();
+
+    for &filter in Filter::all() {
+        for &(in_size, out_size, scale_name) in scales {
+            for &(format, linearize, path_name) in &path_configs {
+                let config = {
+                    let mut b = ResizeConfig::builder(in_size, in_size, out_size, out_size)
+                        .filter(filter)
+                        .format(format);
+                    if linearize {
+                        b = b.linear();
+                    } else {
+                        b = b.srgb();
+                    }
+                    b.build()
+                };
+
+                let input = gradient_image(in_size, in_size);
+
+                // Full-frame
+                let full_output = resize(&config, &input);
+
+                // Streaming (always f32 weights with f64 normalization)
+                let mut resizer = StreamingResize::new(&config);
+                let row_len = in_size as usize * 4;
+                for y in 0..in_size as usize {
+                    resizer.push_row(&input[y * row_len..(y + 1) * row_len]);
+                }
+                resizer.finish();
+
+                let out_pixels = out_size as usize * out_size as usize * 4;
+                let mut stream_output = vec![0u8; out_pixels];
+                let out_row_len = out_size as usize * 4;
+                let mut idx = 0;
+                while let Some(row) = resizer.next_output_row() {
+                    stream_output[idx * out_row_len..(idx + 1) * out_row_len].copy_from_slice(&row);
+                    idx += 1;
+                }
+
+                assert_eq!(
+                    full_output.len(),
+                    stream_output.len(),
+                    "size mismatch: {:?} {} {}",
+                    filter,
+                    scale_name,
+                    path_name
+                );
+
+                let max_diff: u8 = full_output
+                    .iter()
+                    .zip(stream_output.iter())
+                    .map(|(&a, &b)| (a as i16 - b as i16).unsigned_abs() as u8)
+                    .max()
+                    .unwrap_or(0);
+
+                // Threshold: ±2 for i16 vs f32 quantization differences
+                if max_diff > 2 {
+                    failures.push(format!(
+                        "  {:20} {:8} {:16} max_diff={}",
+                        filter.name(),
+                        scale_name,
+                        path_name,
+                        max_diff,
+                    ));
+                }
+            }
+        }
+    }
+
+    if !failures.is_empty() {
+        panic!(
+            "Catastrophic errors found in {} combinations:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
+}
+
 #[test]
 fn bgra_preserves_channel_order() {
     // BGRA input should come out as BGRA — no swizzle, no reordering.

@@ -119,23 +119,26 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
 
     // Intermediate buffer for horizontally-filtered rows (f32).
     let mut intermediate = vec![0.0f32; h_row_len * in_h];
-    let mut temp_row = vec![0.0f32; in_w * channels];
+    // Pad temp_row with max_taps extra zero elements so SIMD H-pass reads
+    // beyond the valid input range hit zeros instead of uninitialized memory.
+    // This prevents NaN poisoning: 0.0 * NaN = NaN, but 0.0 * 0.0 = 0.0.
+    let mut temp_row = vec![0.0f32; in_w * channels + h_weights.max_taps * channels];
 
     // === Horizontal pass ===
     for y in 0..in_h {
         let in_start = y * in_stride;
         let in_row = &input[in_start..in_start + in_row_len];
 
-        // u8 → f32
+        // u8 → f32 (writes only the first in_w*channels elements; padding stays zero)
         if linearize {
-            color::srgb_u8_to_linear_f32(in_row, &mut temp_row, channels, has_alpha);
+            color::srgb_u8_to_linear_f32(in_row, &mut temp_row[..in_row_len], channels, has_alpha);
         } else {
-            simd::u8_to_f32_row(in_row, &mut temp_row);
+            simd::u8_to_f32_row(in_row, &mut temp_row[..in_row_len]);
         }
 
         // Premultiply alpha
         if has_alpha && channels == 4 {
-            simd::premultiply_alpha_row(&mut temp_row);
+            simd::premultiply_alpha_row(&mut temp_row[..in_row_len]);
         }
 
         // Horizontal filter → intermediate buffer
@@ -502,6 +505,7 @@ impl Resizer {
             let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
             let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
             let in_w = config.in_width as usize;
+            let h_max_taps = h_weights.max_taps;
             Resizer {
                 config: config.clone(),
                 h_weights_i16: None,
@@ -514,7 +518,7 @@ impl Resizer {
                 linearized_row: Vec::new(),
                 v_output_i16: Vec::new(),
                 premul_buf: Vec::new(),
-                temp_row_f32: vec![0.0f32; in_w * channels],
+                temp_row_f32: vec![0.0f32; in_w * channels + h_max_taps * channels],
                 temp_output_f32: vec![0.0f32; h_row_len],
                 path: 2,
             }
@@ -708,13 +712,18 @@ impl Resizer {
                     let in_row = &input[in_start..in_start + in_row_len];
 
                     if linearize {
-                        color::srgb_u8_to_linear_f32(in_row, temp_row, channels, has_alpha);
+                        color::srgb_u8_to_linear_f32(
+                            in_row,
+                            &mut temp_row[..in_row_len],
+                            channels,
+                            has_alpha,
+                        );
                     } else {
-                        simd::u8_to_f32_row(in_row, temp_row);
+                        simd::u8_to_f32_row(in_row, &mut temp_row[..in_row_len]);
                     }
 
                     if has_alpha && channels == 4 {
-                        simd::premultiply_alpha_row(temp_row);
+                        simd::premultiply_alpha_row(&mut temp_row[..in_row_len]);
                     }
 
                     let out_start = y * h_row_len;
@@ -804,12 +813,17 @@ pub fn resize_f32_into(config: &ResizeConfig, input: &[f32], output: &mut [f32])
 
     let h_row_len = out_w * channels;
     let mut intermediate = vec![0.0f32; h_row_len * in_h];
-    let mut temp_row = vec![0.0f32; in_w * channels];
+    // Pad temp_row for SIMD H-pass OOB safety (see resize_into)
+    let mut temp_row = vec![0.0f32; in_w * channels + h_weights.max_taps * channels];
 
     // === Horizontal pass ===
     for y in 0..in_h {
         let in_start = y * in_stride;
         temp_row[..in_row_len].copy_from_slice(&input[in_start..in_start + in_row_len]);
+        // Zero padding after valid data (prevent stale data from prior row)
+        for v in &mut temp_row[in_row_len..] {
+            *v = 0.0;
+        }
 
         if has_alpha && channels == 4 {
             simd::premultiply_alpha_row(&mut temp_row[..in_row_len]);
@@ -817,7 +831,7 @@ pub fn resize_f32_into(config: &ResizeConfig, input: &[f32], output: &mut [f32])
 
         let out_start = y * h_row_len;
         simd::filter_h_row_f32(
-            &temp_row[..in_row_len],
+            &temp_row,
             &mut intermediate[out_start..out_start + h_row_len],
             &h_weights,
             channels,
