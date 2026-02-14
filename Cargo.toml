@@ -19,7 +19,7 @@ imgref = ["dep:imgref", "dep:rgb"]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512"))'] }
 
 [dependencies]
-archmage = { version = "0.6", path = "../archmage", default-features = false, features = ["macros"] }
+archmage = { version = "0.7", path = "../archmage", default-features = false, features = ["macros"] }
 linear-srgb = { version = "0.4", path = "../linear-srgb", default-features = false }
 imgref = { version = "1.12", optional = true }
 rgb = { version = "0.8", optional = true, default-features = false }
