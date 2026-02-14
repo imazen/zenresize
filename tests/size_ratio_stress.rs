@@ -28,7 +28,7 @@ fn resize_srgb(rgba: &[u8], w: u32, h: u32, out_w: u32, out_h: u32) -> (Vec<u8>,
         .srgb()
         .build();
     let start = Instant::now();
-    let result = zenresize::resize(&config, rgba);
+    let result = zenresize::Resizer::new(&config).resize(rgba);
     let elapsed = start.elapsed().as_secs_f64() * 1000.0;
     (result, elapsed)
 }
@@ -40,7 +40,7 @@ fn resize_linear(rgba: &[u8], w: u32, h: u32, out_w: u32, out_h: u32) -> (Vec<u8
         .linear()
         .build();
     let start = Instant::now();
-    let result = zenresize::resize(&config, rgba);
+    let result = zenresize::Resizer::new(&config).resize(rgba);
     let elapsed = start.elapsed().as_secs_f64() * 1000.0;
     (result, elapsed)
 }
@@ -168,7 +168,7 @@ fn stress_odd_dimensions() {
             .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgba))
             .srgb()
             .build();
-        let result = zenresize::resize(&config, &rgba);
+        let result = zenresize::Resizer::new(&config).resize(&rgba);
         assert_eq!(
             result.len(),
             (out_w as usize) * (out_h as usize) * 4,

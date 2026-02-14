@@ -62,13 +62,13 @@ fn bench_resize(img: &TestImage, out_w: u32, out_h: u32, iterations: usize) -> (
 
     // Warmup
     for _ in 0..3 {
-        std::hint::black_box(zenresize::resize(&config, &img.rgba));
+        std::hint::black_box(zenresize::Resizer::new(&config).resize(&img.rgba));
     }
 
     let mut times = Vec::with_capacity(iterations);
     for _ in 0..iterations {
         let start = Instant::now();
-        let result = zenresize::resize(&config, &img.rgba);
+        let result = zenresize::Resizer::new(&config).resize(&img.rgba);
         times.push(start.elapsed().as_secs_f64() * 1000.0);
         std::hint::black_box(&result);
     }

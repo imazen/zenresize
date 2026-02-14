@@ -306,7 +306,7 @@ impl StreamingResize {
 mod tests {
     use super::*;
     use crate::filter::Filter;
-    use crate::pixel::{ColorSpace, PixelFormat, PixelLayout};
+    use crate::pixel::{PixelFormat, PixelLayout};
 
     fn make_config(in_w: u32, in_h: u32, out_w: u32, out_h: u32) -> ResizeConfig {
         ResizeConfig::builder(in_w, in_h, out_w, out_h)
@@ -414,7 +414,7 @@ mod tests {
         let config = ResizeConfig::builder(100, 100, 50, 50).build();
 
         assert_eq!(config.filter, Filter::default());
-        assert_eq!(config.color_space, ColorSpace::Linear);
+        assert!(config.linear);
         assert_eq!(config.sharpen, 0.0);
         assert_eq!(config.in_stride, 0);
         assert_eq!(config.out_stride, 0);

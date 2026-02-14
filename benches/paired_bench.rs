@@ -88,7 +88,7 @@ fn run_zenresize_srgb(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
         .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgbx))
         .srgb()
         .build();
-    zenresize::resize(&config, &img.rgba)
+    zenresize::Resizer::new(&config).resize(&img.rgba)
 }
 
 fn run_zenresize_linear(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
@@ -97,7 +97,7 @@ fn run_zenresize_linear(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
         .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgba))
         .linear()
         .build();
-    zenresize::resize(&config, &img.rgba)
+    zenresize::Resizer::new(&config).resize(&img.rgba)
 }
 
 fn run_zenresize_linear_i16(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
@@ -106,7 +106,7 @@ fn run_zenresize_linear_i16(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> 
         .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgbx))
         .linear()
         .build();
-    zenresize::resize(&config, &img.rgba)
+    zenresize::Resizer::new(&config).resize(&img.rgba)
 }
 
 fn run_picscale_srgb(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
@@ -202,7 +202,7 @@ fn run_zenresize_f32(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
             zenresize::PixelLayout::Rgbx,
         ))
         .build();
-    let result_f32 = zenresize::resize_f32(&config, &img.rgba_f32);
+    let result_f32 = zenresize::Resizer::new(&config).resize_f32(&img.rgba_f32);
     let bytes: Vec<u8> = result_f32.iter().flat_map(|v| v.to_ne_bytes()).collect();
     bytes
 }

@@ -7,7 +7,7 @@
 //! for accurate results (token disabling is process-wide).
 
 use archmage::testing::{CompileTimePolicy, for_each_token_permutation};
-use zenresize::{Filter, PixelFormat, PixelLayout, ResizeConfig, resize};
+use zenresize::{Filter, PixelFormat, PixelLayout, ResizeConfig, Resizer};
 
 fn config_srgb(in_w: u32, in_h: u32, out_w: u32, out_h: u32) -> ResizeConfig {
     ResizeConfig::builder(in_w, in_h, out_w, out_h)
@@ -31,10 +31,10 @@ fn dispatch_all_tiers_constant_color() {
     let cfg = config_srgb(in_w, in_h, out_w, out_h);
 
     // Reference result with all tiers enabled
-    let reference = resize(&cfg, &input);
+    let reference = Resizer::new(&cfg).resize(&input);
 
     let report = for_each_token_permutation(CompileTimePolicy::Warn, |perm| {
-        let result = resize(&cfg, &input);
+        let result = Resizer::new(&cfg).resize(&input);
         assert_eq!(
             result.len(),
             reference.len(),
@@ -73,10 +73,10 @@ fn dispatch_all_tiers_gradient() {
     }
 
     let cfg = config_srgb(in_w, in_h, out_w, out_h);
-    let reference = resize(&cfg, &input);
+    let reference = Resizer::new(&cfg).resize(&input);
 
     let report = for_each_token_permutation(CompileTimePolicy::Warn, |perm| {
-        let result = resize(&cfg, &input);
+        let result = Resizer::new(&cfg).resize(&input);
         for (i, (&a, &b)) in reference.iter().zip(result.iter()).enumerate() {
             assert!(
                 (a as i16 - b as i16).unsigned_abs() <= 1,
@@ -110,10 +110,10 @@ fn dispatch_all_tiers_upscale() {
     }
 
     let cfg = config_srgb(in_w, in_h, out_w, out_h);
-    let reference = resize(&cfg, &input);
+    let reference = Resizer::new(&cfg).resize(&input);
 
     let report = for_each_token_permutation(CompileTimePolicy::Warn, |perm| {
-        let result = resize(&cfg, &input);
+        let result = Resizer::new(&cfg).resize(&input);
         for (i, (&a, &b)) in reference.iter().zip(result.iter()).enumerate() {
             assert!(
                 (a as i16 - b as i16).unsigned_abs() <= 1,

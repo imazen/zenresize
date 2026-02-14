@@ -4,7 +4,7 @@
 //! edge cases, stride handling, and format combinations.
 
 use zenresize::{
-    Filter, PixelFormat, PixelLayout, ResizeConfig, StreamingResize, resize, resize_f32,
+    Filter, PixelFormat, PixelLayout, ResizeConfig, Resizer, StreamingResize,
 };
 
 fn config_srgb(in_w: u32, in_h: u32, out_w: u32, out_h: u32) -> ResizeConfig {
@@ -45,7 +45,7 @@ fn streaming_matches_fullframe_downscale() {
     let input = gradient_image(40, 40);
 
     // Full-frame
-    let full_output = resize(&config, &input);
+    let full_output = Resizer::new(&config).resize(&input);
 
     // Streaming
     let mut resizer = StreamingResize::new(&config);
@@ -83,7 +83,7 @@ fn streaming_matches_fullframe_upscale() {
     let config = config_srgb(10, 10, 30, 30);
     let input = gradient_image(10, 10);
 
-    let full_output = resize(&config, &input);
+    let full_output = Resizer::new(&config).resize(&input);
 
     let mut resizer = StreamingResize::new(&config);
     let row_len = 10 * 4;
@@ -119,7 +119,7 @@ fn streaming_matches_fullframe_linear() {
     let config = config_linear(30, 30, 15, 15);
     let input = gradient_image(30, 30);
 
-    let full_output = resize(&config, &input);
+    let full_output = Resizer::new(&config).resize(&input);
 
     let mut resizer = StreamingResize::new(&config);
     let row_len = 30 * 4;
@@ -199,7 +199,7 @@ fn all_filters_produce_valid_output() {
             .srgb()
             .build();
 
-        let output = resize(&config, &input);
+        let output = Resizer::new(&config).resize(&input);
         assert_eq!(
             output.len(),
             16 * 16 * 4,
@@ -226,7 +226,7 @@ fn all_filters_produce_valid_output() {
 fn resize_1x1_to_1x1() {
     let config = config_srgb(1, 1, 1, 1);
     let input = vec![128, 64, 32, 255];
-    let output = resize(&config, &input);
+    let output = Resizer::new(&config).resize(&input);
     assert_eq!(output.len(), 4);
     // Single pixel should be approximately preserved
     assert!((output[0] as i16 - 128).unsigned_abs() <= 2);
@@ -239,7 +239,7 @@ fn resize_1x1_to_1x1() {
 fn resize_1xn() {
     let config = config_srgb(1, 10, 1, 5);
     let input = vec![128u8; 1 * 10 * 4];
-    let output = resize(&config, &input);
+    let output = Resizer::new(&config).resize(&input);
     assert_eq!(output.len(), 1 * 5 * 4);
 }
 
@@ -247,7 +247,7 @@ fn resize_1xn() {
 fn resize_nx1() {
     let config = config_srgb(10, 1, 5, 1);
     let input = vec![128u8; 10 * 1 * 4];
-    let output = resize(&config, &input);
+    let output = Resizer::new(&config).resize(&input);
     assert_eq!(output.len(), 5 * 1 * 4);
 }
 
@@ -255,7 +255,7 @@ fn resize_nx1() {
 fn resize_same_size() {
     let config = config_srgb(20, 20, 20, 20);
     let input = gradient_image(20, 20);
-    let output = resize(&config, &input);
+    let output = Resizer::new(&config).resize(&input);
     assert_eq!(output.len(), input.len());
 
     // Same-size resize should be very close to identity
@@ -276,7 +276,7 @@ fn resize_same_size() {
 fn resize_non_square() {
     let config = config_srgb(100, 50, 30, 75);
     let input = gradient_image(100, 50);
-    let output = resize(&config, &input);
+    let output = Resizer::new(&config).resize(&input);
     assert_eq!(output.len(), 30 * 75 * 4);
 }
 
@@ -284,7 +284,7 @@ fn resize_non_square() {
 fn resize_large_downscale() {
     let config = config_srgb(200, 200, 10, 10);
     let input = vec![128u8; 200 * 200 * 4];
-    let output = resize(&config, &input);
+    let output = Resizer::new(&config).resize(&input);
     assert_eq!(output.len(), 10 * 10 * 4);
 
     // Constant input → output should be close to constant
@@ -301,7 +301,7 @@ fn resize_large_downscale() {
 fn resize_large_upscale() {
     let config = config_srgb(5, 5, 100, 100);
     let input = vec![100u8; 5 * 5 * 4];
-    let output = resize(&config, &input);
+    let output = Resizer::new(&config).resize(&input);
     assert_eq!(output.len(), 100 * 100 * 4);
 }
 
@@ -317,7 +317,7 @@ fn resize_rgb_3ch() {
         .build();
 
     let input = vec![128u8; 20 * 20 * 3];
-    let output = resize(&config, &input);
+    let output = Resizer::new(&config).resize(&input);
     assert_eq!(output.len(), 10 * 10 * 3);
 }
 
@@ -329,7 +329,7 @@ fn resize_gray_1ch() {
         .build();
 
     let input = vec![128u8; 20 * 20];
-    let output = resize(&config, &input);
+    let output = Resizer::new(&config).resize(&input);
     assert_eq!(output.len(), 10 * 10);
 }
 
@@ -348,7 +348,7 @@ fn resize_rgbx_no_premul() {
         px[2] = 32;
         px[3] = 0; // padding
     }
-    let output = resize(&config, &input);
+    let output = Resizer::new(&config).resize(&input);
     assert_eq!(output.len(), 10 * 10 * 4);
 }
 
@@ -367,7 +367,7 @@ fn resize_premultiplied_alpha() {
         px[2] = 16;
         px[3] = 128; // alpha
     }
-    let output = resize(&config, &input);
+    let output = Resizer::new(&config).resize(&input);
     assert_eq!(output.len(), 10 * 10 * 4);
 
     // Constant input → output should be close to constant
@@ -389,7 +389,7 @@ fn resize_f32_constant() {
         .build();
 
     let input = vec![0.5f32; 20 * 20 * 4];
-    let output = resize_f32(&config, &input);
+    let output = Resizer::new(&config).resize_f32(&input);
     assert_eq!(output.len(), 10 * 10 * 4);
 
     for &v in &output {
@@ -414,7 +414,7 @@ fn resize_f32_gradient() {
         }
     }
 
-    let output = resize_f32(&config, &input);
+    let output = Resizer::new(&config).resize_f32(&input);
     assert_eq!(output.len(), 15 * 15 * 4);
 
     // All values should be in [0, 1] range (approximately)
@@ -434,8 +434,8 @@ fn linear_and_srgb_produce_different_results() {
     let config_lin = config_linear(30, 30, 15, 15);
     let config_s = config_srgb(30, 30, 15, 15);
 
-    let out_lin = resize(&config_lin, &input);
-    let out_srgb = resize(&config_s, &input);
+    let out_lin = Resizer::new(&config_lin).resize(&input);
+    let out_srgb = Resizer::new(&config_s).resize(&input);
 
     // They should produce different results (linear is gamma-correct)
     assert_ne!(
@@ -457,7 +457,7 @@ fn strided_input_matches_tight() {
     // Tight input
     let tight_input = gradient_image(w, h);
     let config_tight = config_srgb(w, h, 10, 10);
-    let out_tight = resize(&config_tight, &tight_input);
+    let out_tight = Resizer::new(&config_tight).resize(&tight_input);
 
     // Strided input (16 bytes of padding per row)
     let padding = 16;
@@ -476,7 +476,7 @@ fn strided_input_matches_tight() {
         .in_stride(padded_stride)
         .build();
 
-    let out_strided = resize(&config_strided, &strided_input);
+    let out_strided = Resizer::new(&config_strided).resize(&strided_input);
     assert_eq!(
         out_tight, out_strided,
         "strided input should match tight input"
@@ -538,7 +538,7 @@ fn linear_i16_matches_f32_downscale() {
     let input = gradient_image(64, 64);
 
     // Full-frame: uses i16 linear path (linearize + 4ch + !has_alpha)
-    let i16_output = resize(&config, &input);
+    let i16_output = Resizer::new(&config).resize(&input);
 
     // Streaming: always uses f32 path
     let mut resizer = StreamingResize::new(&config);
@@ -580,7 +580,7 @@ fn linear_i16_matches_f32_upscale() {
 
     let input = gradient_image(16, 16);
 
-    let i16_output = resize(&config, &input);
+    let i16_output = Resizer::new(&config).resize(&input);
 
     let mut resizer = StreamingResize::new(&config);
     let row_len = 16 * 4;
@@ -608,22 +608,6 @@ fn linear_i16_matches_f32_upscale() {
         "linear i16 vs f32 upscale max diff {} exceeds tolerance 2",
         max_diff
     );
-}
-
-/// Resizer struct path 1 should match the one-shot resize_into_i16_linear.
-#[test]
-fn resizer_matches_oneshot_linear_no_alpha() {
-    let config = ResizeConfig::builder(32, 32, 16, 16)
-        .filter(Filter::Lanczos)
-        .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
-        .linear()
-        .build();
-
-    let input = gradient_image(32, 32);
-    let oneshot = resize(&config, &input);
-    let mut resizer = zenresize::Resizer::new(&config);
-    let cached = resizer.resize(&input);
-    assert_eq!(oneshot, cached, "Resizer path 1 should match one-shot path");
 }
 
 // =============================================================================
@@ -675,7 +659,7 @@ fn no_catastrophic_errors_across_all_combinations() {
                 let input = gradient_image(in_size, in_size);
 
                 // Full-frame
-                let full_output = resize(&config, &input);
+                let full_output = Resizer::new(&config).resize(&input);
 
                 // Streaming (always f32 weights with f64 normalization)
                 let mut resizer = StreamingResize::new(&config);
@@ -756,7 +740,7 @@ fn bgra_preserves_channel_order() {
         .srgb()
         .build();
 
-    let output = resize(&config, &bgra_input);
+    let output = Resizer::new(&config).resize(&bgra_input);
     assert_eq!(output.len(), 10 * 10 * 4);
 
     // Output preserves BGRA order
@@ -787,7 +771,7 @@ fn bgrx_as_4ch_no_alpha() {
         .srgb()
         .build();
 
-    let output = resize(&config, &bgrx_input);
+    let output = Resizer::new(&config).resize(&bgrx_input);
     assert_eq!(output.len(), 10 * 10 * 4);
 
     // Channel order preserved, X stays ~0 (it was 0 in constant input)
@@ -819,7 +803,7 @@ fn bgra_linear_preserves_order() {
         .linear() // linear-light processing
         .build();
 
-    let output = resize(&config, &bgra_input);
+    let output = Resizer::new(&config).resize(&bgra_input);
 
     for px in output.chunks_exact(4) {
         assert!((px[0] as i16 - 200).unsigned_abs() <= 3, "B: {}", px[0]);

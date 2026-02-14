@@ -12,7 +12,7 @@
 //! # Quick Start
 //!
 //! ```
-//! use zenresize::{resize, ResizeConfig, Filter, PixelFormat, PixelLayout};
+//! use zenresize::{Resizer, ResizeConfig, Filter, PixelFormat, PixelLayout};
 //!
 //! // Create a 4×4 RGBA test image
 //! let input_pixels = vec![128u8; 4 * 4 * 4];
@@ -20,10 +20,9 @@
 //! let config = ResizeConfig::builder(4, 4, 2, 2)
 //!     .filter(Filter::Lanczos)
 //!     .format(PixelFormat::Srgb8(PixelLayout::Rgba))
-//!     .linear()
 //!     .build();
 //!
-//! let output = resize(&config, &input_pixels);
+//! let output = Resizer::new(&config).resize(&input_pixels);
 //! assert_eq!(output.len(), 2 * 2 * 4);
 //! ```
 
@@ -45,8 +44,8 @@ mod simd;
 
 // Re-exports: minimal public API
 pub use filter::Filter;
-pub use pixel::{ColorSpace, PixelFormat, PixelLayout, ResizeConfig, ResizeConfigBuilder};
-pub use resize::{Resizer, resize, resize_f32, resize_f32_into, resize_into};
+pub use pixel::{PixelFormat, PixelLayout, ResizeConfig, ResizeConfigBuilder};
+pub use resize::Resizer;
 pub use streaming::StreamingResize;
 
 #[cfg(feature = "imgref")]

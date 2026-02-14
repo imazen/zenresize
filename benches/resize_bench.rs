@@ -52,7 +52,7 @@ fn bench_zenresize_srgb(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
         .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgba))
         .srgb()
         .build();
-    zenresize::resize(&config, &img.rgba)
+    zenresize::Resizer::new(&config).resize(&img.rgba)
 }
 
 fn bench_zenresize_linear(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
@@ -61,7 +61,7 @@ fn bench_zenresize_linear(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
         .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgba))
         .linear()
         .build();
-    zenresize::resize(&config, &img.rgba)
+    zenresize::Resizer::new(&config).resize(&img.rgba)
 }
 
 // ---------------------------------------------------------------------------

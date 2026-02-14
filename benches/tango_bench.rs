@@ -60,7 +60,7 @@ fn zen_benchmarks() -> impl IntoBenchmarks {
                     .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgbx))
                     .srgb()
                     .build();
-                black_box(zenresize::resize(&config, &img.rgba))
+                black_box(zenresize::Resizer::new(&config).resize(&img.rgba))
             })
         }),
         // sRGB downscale 50%, 576→288
@@ -72,7 +72,7 @@ fn zen_benchmarks() -> impl IntoBenchmarks {
                     .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgbx))
                     .srgb()
                     .build();
-                black_box(zenresize::resize(&config, &img.rgba))
+                black_box(zenresize::Resizer::new(&config).resize(&img.rgba))
             })
         }),
         // Linear downscale 50% (alpha-premultiply path)
@@ -84,7 +84,7 @@ fn zen_benchmarks() -> impl IntoBenchmarks {
                     .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgba))
                     .linear()
                     .build();
-                black_box(zenresize::resize(&config, &img.rgba))
+                black_box(zenresize::Resizer::new(&config).resize(&img.rgba))
             })
         }),
         // sRGB upscale 200%, 256→512
@@ -96,7 +96,7 @@ fn zen_benchmarks() -> impl IntoBenchmarks {
                     .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgbx))
                     .srgb()
                     .build();
-                black_box(zenresize::resize(&config, &img.rgba))
+                black_box(zenresize::Resizer::new(&config).resize(&img.rgba))
             })
         }),
         // Cached-weights Resizer path

@@ -31,7 +31,7 @@ fn main() {
             zenresize::PixelLayout::Rgbx,
         ))
         .build();
-    let zen_f32 = zenresize::resize_f32(&config_f32, &f32_rgba);
+    let zen_f32 = zenresize::Resizer::new(&config_f32).resize_f32(&f32_rgba);
 
     // === zenresize linear u8→u8 ===
     let config_linear = zenresize::ResizeConfig::builder(w, h, out_w, out_h)
@@ -39,7 +39,7 @@ fn main() {
         .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgbx))
         .linear()
         .build();
-    let zen_linear_u8 = zenresize::resize(&config_linear, &rgba);
+    let zen_linear_u8 = zenresize::Resizer::new(&config_linear).resize(&rgba);
 
     // === zenresize sRGB u8→u8 ===
     let config_srgb = zenresize::ResizeConfig::builder(w, h, out_w, out_h)
@@ -47,7 +47,7 @@ fn main() {
         .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgbx))
         .srgb()
         .build();
-    let zen_srgb_u8 = zenresize::resize(&config_srgb, &rgba);
+    let zen_srgb_u8 = zenresize::Resizer::new(&config_srgb).resize(&rgba);
 
     // === Competitors ===
     // pic-scale-safe f32

@@ -133,17 +133,6 @@ impl PixelFormat {
     }
 }
 
-/// Color space for resize computation.
-#[non_exhaustive]
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
-pub enum ColorSpace {
-    /// Resize in linear light (correct, handles gamma properly).
-    #[default]
-    Linear,
-    /// Resize in sRGB space (fast, slight quality loss on gradients).
-    Srgb,
-}
-
 /// Resize configuration built with [`ResizeConfigBuilder`].
 ///
 /// Use [`ResizeConfig::builder()`] to create one.
@@ -166,8 +155,14 @@ pub struct ResizeConfig {
     pub output_format: PixelFormat,
     /// Sharpening amount (0.0 = none).
     pub sharpen: f32,
-    /// Color space for resize computation.
-    pub color_space: ColorSpace,
+    /// Whether to resize in linear light (true) or sRGB gamma space (false).
+    ///
+    /// Linear light (default) converts sRGB u8 to linear f32 before resampling.
+    /// Produces correct results on gradients and avoids darkening halos.
+    ///
+    /// sRGB mode resamples directly in gamma space. Faster (i16 integer path
+    /// for 4-channel u8), but slightly incorrect on gradients.
+    pub linear: bool,
     /// Input row stride in elements (0 = tightly packed, i.e., width * channels).
     pub in_stride: usize,
     /// Output row stride in elements (0 = tightly packed).
@@ -229,11 +224,11 @@ impl ResizeConfig {
 
     /// Whether linear-light processing is needed.
     ///
-    /// True when the color space is [`Linear`](ColorSpace::Linear) and the input
-    /// is sRGB. Premultiplied alpha layouts skip linearization (linearizing
+    /// True when `linear` is set and the input is sRGB u8.
+    /// Premultiplied alpha layouts skip linearization (linearizing
     /// premultiplied sRGB data is mathematically incorrect).
     pub fn needs_linearization(&self) -> bool {
-        self.color_space == ColorSpace::Linear
+        self.linear
             && self.input_format.is_srgb()
             && !self.input_format.layout().is_premultiplied()
     }
@@ -260,7 +255,7 @@ pub struct ResizeConfigBuilder {
     input_format: PixelFormat,
     output_format: Option<PixelFormat>,
     sharpen: f32,
-    color_space: ColorSpace,
+    linear: bool,
     in_stride: usize,
     out_stride: usize,
 }
@@ -276,7 +271,7 @@ impl ResizeConfigBuilder {
             input_format: PixelFormat::Srgb8(PixelLayout::Rgba),
             output_format: None,
             sharpen: 0.0,
-            color_space: ColorSpace::Linear,
+            linear: true,
             in_stride: 0,
             out_stride: 0,
         }
@@ -315,13 +310,13 @@ impl ResizeConfigBuilder {
 
     /// Resize in linear light (correct, default).
     pub fn linear(mut self) -> Self {
-        self.color_space = ColorSpace::Linear;
+        self.linear = true;
         self
     }
 
     /// Resize in sRGB space (fast, slight quality loss).
     pub fn srgb(mut self) -> Self {
-        self.color_space = ColorSpace::Srgb;
+        self.linear = false;
         self
     }
 
@@ -349,7 +344,7 @@ impl ResizeConfigBuilder {
             input_format: self.input_format,
             output_format,
             sharpen: self.sharpen,
-            color_space: self.color_space,
+            linear: self.linear,
             in_stride: self.in_stride,
             out_stride: self.out_stride,
         }

@@ -39,12 +39,12 @@ fn main() {
         .build();
 
     for _ in 0..warmup {
-        let _ = zenresize::resize(&config_linear, &rgba);
+        let _ = zenresize::Resizer::new(&config_linear).resize(&rgba);
     }
     let mut times_linear = Vec::with_capacity(rounds);
     for _ in 0..rounds {
         let start = Instant::now();
-        let result = zenresize::resize(&config_linear, &rgba);
+        let result = zenresize::Resizer::new(&config_linear).resize(&rgba);
         times_linear.push(start.elapsed().as_secs_f64() * 1000.0);
         std::hint::black_box(&result);
     }
@@ -57,12 +57,12 @@ fn main() {
         .build();
 
     for _ in 0..warmup {
-        let _ = zenresize::resize(&config_srgb, &rgba);
+        let _ = zenresize::Resizer::new(&config_srgb).resize(&rgba);
     }
     let mut times_srgb = Vec::with_capacity(rounds);
     for _ in 0..rounds {
         let start = Instant::now();
-        let result = zenresize::resize(&config_srgb, &rgba);
+        let result = zenresize::Resizer::new(&config_srgb).resize(&rgba);
         times_srgb.push(start.elapsed().as_secs_f64() * 1000.0);
         std::hint::black_box(&result);
     }
@@ -83,12 +83,12 @@ fn main() {
         .collect();
 
     for _ in 0..warmup {
-        let _ = zenresize::resize(&config_f32_no_linear, &rgba3);
+        let _ = zenresize::Resizer::new(&config_f32_no_linear).resize(&rgba3);
     }
     let mut times_f32_nolin = Vec::with_capacity(rounds);
     for _ in 0..rounds {
         let start = Instant::now();
-        let result = zenresize::resize(&config_f32_no_linear, &rgba3);
+        let result = zenresize::Resizer::new(&config_f32_no_linear).resize(&rgba3);
         times_f32_nolin.push(start.elapsed().as_secs_f64() * 1000.0);
         std::hint::black_box(&result);
     }
@@ -141,12 +141,12 @@ fn main() {
         .build();
 
     for _ in 0..warmup {
-        let _ = zenresize::resize_f32(&config_f32, &f32_rgba);
+        let _ = zenresize::Resizer::new(&config_f32).resize_f32(&f32_rgba);
     }
     let mut times_f32_e2e = Vec::with_capacity(rounds);
     for _ in 0..rounds {
         let start = Instant::now();
-        let result = zenresize::resize_f32(&config_f32, &f32_rgba);
+        let result = zenresize::Resizer::new(&config_f32).resize_f32(&f32_rgba);
         times_f32_e2e.push(start.elapsed().as_secs_f64() * 1000.0);
         std::hint::black_box(&result);
     }
@@ -160,12 +160,12 @@ fn main() {
         .build();
 
     for _ in 0..warmup {
-        let _ = zenresize::resize_f32(&config_f32_noalpha, &f32_rgba);
+        let _ = zenresize::Resizer::new(&config_f32_noalpha).resize_f32(&f32_rgba);
     }
     let mut times_f32_noalpha = Vec::with_capacity(rounds);
     for _ in 0..rounds {
         let start = Instant::now();
-        let result = zenresize::resize_f32(&config_f32_noalpha, &f32_rgba);
+        let result = zenresize::Resizer::new(&config_f32_noalpha).resize_f32(&f32_rgba);
         times_f32_noalpha.push(start.elapsed().as_secs_f64() * 1000.0);
         std::hint::black_box(&result);
     }

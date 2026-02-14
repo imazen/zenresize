@@ -12,7 +12,7 @@ fn main() {
         .build();
 
     for _ in 0..10 {
-        let result = zenresize::resize_f32(&config, &rgba_f32);
+        let result = zenresize::Resizer::new(&config).resize_f32(&rgba_f32);
         std::hint::black_box(&result);
     }
 }

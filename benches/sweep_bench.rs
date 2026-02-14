@@ -30,13 +30,13 @@ fn bench_srgb(rgba: &[u8], w: u32, h: u32, out_w: u32, out_h: u32, iters: usize)
 
     // Warmup
     for _ in 0..3 {
-        std::hint::black_box(zenresize::resize(&config, rgba));
+        std::hint::black_box(zenresize::Resizer::new(&config).resize(rgba));
     }
 
     let mut times = Vec::with_capacity(iters);
     for _ in 0..iters {
         let start = Instant::now();
-        let result = zenresize::resize(&config, rgba);
+        let result = zenresize::Resizer::new(&config).resize(rgba);
         times.push(start.elapsed().as_secs_f64() * 1000.0);
         std::hint::black_box(&result);
     }
