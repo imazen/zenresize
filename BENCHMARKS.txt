@@ -1,0 +1,44 @@
+    Finished `bench` profile [optimized] target(s) in 0.05s
+     Running benches/paired_bench.rs (target/release/deps/paired_bench-9538bbf57f1a842f)
+Paired Interleaved Resize Benchmark
+====================================
+Image: clic_1024 (1024x1024, 1.05 MP)
+Output: 512x512 (50% downscale)
+Rounds: 50 (interleaved A/B/B/A pattern)
+
+Absolute times (mean of 50 rounds):
+Library                   Time (ms)       MP/s
+------------------------ ---------- ----------
+zenresize_srgb              1.14 ±0.02        916
+zenresize_linear           17.98 ±0.07         58
+zenresize_linear_i16        3.28 ±0.02        319
+pic_scale_srgb              1.17 ±0.01        897
+pic_scale_linear            5.89 ±0.08        178
+fir_srgb                    1.41 ±0.01        741
+fir_linear                  7.14 ±0.07        147
+resize_crate_srgb           3.74 ±0.19        280
+
+Paired comparisons (each row vs zenresize_srgb):
+Library                     Diff (ms)       95% CI   vs zenresize
+------------------------ ------------ ------------ --------------
+zenresize_linear           +16.291 ms     0.053 ms  14.77x slower
+zenresize_linear_i16        +2.112 ms     0.018 ms   2.84x slower
+pic_scale_srgb              +0.207 ms     0.009 ms   1.19x slower
+pic_scale_linear            +4.573 ms     0.088 ms   4.81x slower
+fir_srgb                    +0.483 ms     0.007 ms   1.44x slower
+fir_linear                  +5.668 ms     0.053 ms   5.77x slower
+resize_crate_srgb           +2.393 ms     0.170 ms   2.93x slower
+
+Paired comparisons (each row vs pic_scale_srgb):
+Library                     Diff (ms)       95% CI   vs pic-scale
+------------------------ ------------ ------------ --------------
+zenresize_srgb              -0.165 ms     0.008 ms   1.15x faster
+zenresize_linear           +16.216 ms     0.077 ms  12.61x slower
+zenresize_linear_i16        +1.942 ms     0.017 ms   2.49x slower
+pic_scale_linear            +4.699 ms     0.106 ms   4.25x slower
+fir_srgb                    +0.312 ms     0.010 ms   1.25x slower
+fir_linear                  +5.447 ms     0.084 ms   4.83x slower
+resize_crate_srgb           +2.216 ms     0.166 ms   2.57x slower
+
+Resizer (cached weights) vs one-shot:
+zenresize_resizer           0.88 ±0.02       1188 MP/s
