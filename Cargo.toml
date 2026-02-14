@@ -45,3 +45,9 @@ harness = false
 [[bench]]
 name = "profile_srgb"
 harness = false
+
+[profile.test]
+opt-level = 2
+
+[profile.dev]
+opt-level = 1
