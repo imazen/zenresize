@@ -9,6 +9,7 @@ High-quality image resampling with 31 filters, streaming API, and SIMD accelerat
 - Row-at-a-time streaming API for pipeline integration
 - `Resizer` struct for amortizing weight computation across repeated resizes
 - Alpha premultiply/unpremultiply built into the pipeline
+- Premultiplied alpha passthrough for compositing pipelines
 - Channel-order-agnostic: RGBA, BGRA, ARGB, BGRX all work without swizzling
 - u8 and f32 pixel format support
 - `no_std` + `alloc` compatible (std optional)
@@ -17,13 +18,13 @@ High-quality image resampling with 31 filters, streaming API, and SIMD accelerat
 ## Quick Start
 
 ```rust
-use zenresize::{resize, ResizeConfig, Filter, PixelFormat};
+use zenresize::{resize, ResizeConfig, Filter, PixelFormat, PixelLayout};
 
 let input = vec![128u8; 1024 * 768 * 4]; // RGBA pixels
 
 let config = ResizeConfig::builder(1024, 768, 512, 384)
     .filter(Filter::Lanczos)
-    .format(PixelFormat::Srgb8 { channels: 4, has_alpha: true })
+    .format(PixelFormat::Srgb8(PixelLayout::Rgba))
     .linear() // resize in linear light (default, recommended)
     .build();
 
@@ -39,11 +40,11 @@ For single resize operations where you don't need to reuse weight tables.
 
 ```rust
 use zenresize::{resize, resize_into, resize_f32, resize_f32_into};
-use zenresize::{ResizeConfig, Filter, PixelFormat};
+use zenresize::{ResizeConfig, Filter, PixelFormat, PixelLayout};
 
 let config = ResizeConfig::builder(100, 100, 50, 50)
     .filter(Filter::Lanczos)
-    .format(PixelFormat::Srgb8 { channels: 4, has_alpha: true })
+    .format(PixelFormat::Srgb8(PixelLayout::Rgba))
     .build();
 
 // Allocating: returns a new Vec<u8>
@@ -55,7 +56,7 @@ resize_into(&config, &input_u8, &mut buf);
 
 // f32 variants for linear-light pipelines
 let config_f32 = ResizeConfig::builder(100, 100, 50, 50)
-    .format(PixelFormat::LinearF32 { channels: 4, has_alpha: true })
+    .format(PixelFormat::LinearF32(PixelLayout::Rgba))
     .build();
 let output_f32 = resize_f32(&config_f32, &input_f32);
 ```
@@ -69,7 +70,7 @@ use zenresize::Resizer;
 
 let config = ResizeConfig::builder(1024, 1024, 512, 512)
     .filter(Filter::Lanczos)
-    .format(PixelFormat::Srgb8 { channels: 4, has_alpha: true })
+    .format(PixelFormat::Srgb8(PixelLayout::Rgba))
     .srgb()
     .build();
 
@@ -91,7 +92,7 @@ use zenresize::StreamingResize;
 
 let config = ResizeConfig::builder(1000, 800, 500, 400)
     .filter(Filter::Lanczos)
-    .format(PixelFormat::Srgb8 { channels: 4, has_alpha: true })
+    .format(PixelFormat::Srgb8(PixelLayout::Rgba))
     .linear()
     .build();
 
@@ -133,28 +134,30 @@ let config = ResizeConfig::builder(in_w, in_h, out_w, out_h)
     .build();
 ```
 
-### Pixel Formats
+### Pixel Layouts and Formats
 
 ```rust
-use zenresize::PixelFormat;
+use zenresize::{PixelFormat, PixelLayout};
 
-// sRGB gamma-encoded u8 (most common)
-PixelFormat::Srgb8 { channels: 4, has_alpha: true }   // RGBA
-PixelFormat::Srgb8 { channels: 4, has_alpha: false }   // RGBX (padding channel)
-PixelFormat::Srgb8 { channels: 3, has_alpha: false }   // RGB
-PixelFormat::Srgb8 { channels: 1, has_alpha: false }   // Grayscale
+// Layouts describe channel count and alpha semantics
+PixelLayout::Gray           // 1 channel (grayscale)
+PixelLayout::Rgb            // 3 channels (RGB/BGR)
+PixelLayout::Rgbx           // 4 channels, padding (RGBX/BGRX)
+PixelLayout::Rgba           // 4 channels, straight alpha (premul/unpremul handled)
+PixelLayout::RgbaPremul     // 4 channels, premultiplied alpha (no conversion)
 
-// Linear light f32 (for pipelines already in linear space)
-PixelFormat::LinearF32 { channels: 4, has_alpha: true }
-
-// sRGB f32 (for fast sRGB-space resize with f32 data)
-PixelFormat::SrgbF32 { channels: 4, has_alpha: false }
-
-// Linear light u8 (rare, for pre-linearized u8 data)
-PixelFormat::Linear8 { channels: 4, has_alpha: true }
+// Formats combine a data type with a layout
+PixelFormat::Srgb8(PixelLayout::Rgba)       // sRGB u8, straight alpha
+PixelFormat::Srgb8(PixelLayout::Rgbx)       // sRGB u8, no alpha
+PixelFormat::Srgb8(PixelLayout::Rgb)        // sRGB u8, 3-channel
+PixelFormat::Srgb8(PixelLayout::Gray)       // sRGB u8, grayscale
+PixelFormat::LinearF32(PixelLayout::Rgba)   // linear f32, straight alpha
+PixelFormat::Srgb8(PixelLayout::RgbaPremul) // sRGB u8, premultiplied alpha
 ```
 
-The pipeline is channel-order-agnostic. BGRA, ARGB, ABGR all work identically — the sRGB transfer function is the same for R, G, and B, and the convolution kernels operate on N floats per pixel. Pass BGRA data as `Srgb8 { channels: 4, has_alpha: true }`, same as RGBA.
+The pipeline is channel-order-agnostic. BGRA, ARGB, ABGR all work identically — the sRGB transfer function is the same for R, G, and B, and the convolution kernels operate on N floats per pixel. Pass BGRA data as `Srgb8(PixelLayout::Rgba)`, same as RGBA.
+
+For compositing pipelines where data is already premultiplied, use `RgbaPremul` to skip the premultiply/unpremultiply steps.
 
 ### Color Space
 
@@ -189,10 +192,10 @@ Sharp variants use a slightly reduced blur factor for tighter kernels. Fast vari
 With the `imgref` feature, you get typed wrappers for the `imgref` + `rgb` crates:
 
 ```rust
-use zenresize::{resize_4ch, resize_3ch, resize_gray8};
+use zenresize::{resize_4ch, resize_3ch, resize_gray8, PixelLayout};
 
 // Works with rgb::RGBA, rgb::BGRA, or any 4-byte pixel type implementing ComponentSlice
-let output: ImgVec<RGBA8> = resize_4ch(img.as_ref(), 512, 384, true, &config);
+let output: ImgVec<RGBA8> = resize_4ch(img.as_ref(), 512, 384, PixelLayout::Rgba, &config);
 
 let output_rgb: ImgVec<RGB8> = resize_3ch(img_rgb.as_ref(), 512, 384, &config);
 let output_gray: ImgVec<u8> = resize_gray8(img_gray.as_ref(), 512, 384, &config);

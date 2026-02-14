@@ -54,8 +54,9 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
     assert!(input.len() >= in_expected, "input too short");
     assert_eq!(output.len(), out_expected, "output length mismatch");
 
-    let channels = config.input_format.channels() as usize;
-    let has_alpha = config.input_format.has_alpha();
+    let layout = config.input_format.layout();
+    let channels = layout.channels() as usize;
+    let needs_premul = layout.needs_premultiply();
     let in_w = config.in_width as usize;
     let in_h = config.in_height as usize;
     let out_w = config.out_width as usize;
@@ -79,7 +80,7 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
             in_h,
             out_w,
             out_h,
-            has_alpha,
+            needs_premul,
         );
         return;
     }
@@ -88,7 +89,7 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
     // Uses 12-bit linear values (0-4095) stored as i16, reusing the same
     // I16WeightTable and madd_epi16 SIMD infrastructure. ~4x faster than f32.
     // Currently only for 4ch without alpha premul/unpremul.
-    if linearize && channels == 4 && !has_alpha {
+    if linearize && channels == 4 && !needs_premul {
         resize_into_i16_linear(
             config,
             input,
@@ -124,13 +125,18 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
 
         // u8 → f32 (writes only the first in_w*channels elements; padding stays zero)
         if linearize {
-            color::srgb_u8_to_linear_f32(in_row, &mut temp_row[..in_row_len], channels, has_alpha);
+            color::srgb_u8_to_linear_f32(
+                in_row,
+                &mut temp_row[..in_row_len],
+                channels,
+                layout.alpha_is_last_channel(),
+            );
         } else {
             simd::u8_to_f32_row(in_row, &mut temp_row[..in_row_len]);
         }
 
-        // Premultiply alpha
-        if has_alpha && channels == 4 {
+        // Premultiply alpha (straight alpha only)
+        if needs_premul {
             simd::premultiply_alpha_row(&mut temp_row);
         }
 
@@ -163,8 +169,8 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
 
         simd::filter_v_row_f32(&row_ptrs, &mut temp_output[..h_row_len], weights);
 
-        // Unpremultiply alpha
-        if has_alpha && channels == 4 {
+        // Unpremultiply alpha (straight alpha only)
+        if needs_premul {
             simd::unpremultiply_alpha_row(&mut temp_output[..h_row_len]);
         }
 
@@ -172,7 +178,12 @@ pub fn resize_into(config: &ResizeConfig, input: &[u8], output: &mut [u8]) {
         let out_start = out_y * out_row_len;
         let out_slice = &mut output[out_start..out_start + out_row_len];
         if linearize {
-            color::linear_f32_to_srgb_u8(&temp_output[..h_row_len], out_slice, channels, has_alpha);
+            color::linear_f32_to_srgb_u8(
+                &temp_output[..h_row_len],
+                out_slice,
+                channels,
+                layout.alpha_is_last_channel(),
+            );
         } else {
             simd::f32_to_u8_row(&temp_output[..h_row_len], out_slice);
         }
@@ -199,7 +210,7 @@ fn resize_into_i16(
     in_h: usize,
     out_w: usize,
     out_h: usize,
-    has_alpha: bool,
+    needs_premul: bool,
 ) {
     let filter = InterpolationDetails::create(config.filter);
     let h_weights = I16WeightTable::new(config.in_width, config.out_width, &filter);
@@ -215,7 +226,7 @@ fn resize_into_i16(
     // global-guard path. Padding bytes are zero-initialized; the H kernel's
     // zero-padded weights ensure they don't affect results.
     let h_padding = h_weights.groups4 * 16; // extra bytes for SIMD overread
-    let mut premul_buf = if has_alpha {
+    let mut premul_buf = if needs_premul {
         vec![0u8; in_row_len + h_padding]
     } else {
         Vec::new()
@@ -228,7 +239,7 @@ fn resize_into_i16(
     // from adjacent rows in the contiguous buffer. This allows the H kernel to use
     // a single global guard (no per-pixel edge checks), since zero-padded weights
     // ensure the padding data doesn't affect results.
-    if channels == 4 && !has_alpha {
+    if channels == 4 && !needs_premul {
         // Process 4 rows at a time
         let batch_count = in_h / 4;
         let remainder = in_h % 4;
@@ -278,7 +289,7 @@ fn resize_into_i16(
             let in_row = &input[in_start..in_start + in_row_len];
             let out_start = y * h_row_len;
 
-            let src = if has_alpha {
+            let src = if needs_premul {
                 simd::premultiply_u8_row(in_row, &mut premul_buf[..in_row_len]);
                 &premul_buf[..] // includes zero-initialized SIMD padding
             } else {
@@ -300,7 +311,7 @@ fn resize_into_i16(
     simd::filter_v_all_u8_i16(&intermediate, output, h_row_len, in_h, out_h, &v_weights);
 
     // Unpremultiply alpha after V pass (separated from V for batch efficiency).
-    if has_alpha {
+    if needs_premul {
         for out_y in 0..out_h {
             let out_start = out_y * out_row_len;
             simd::unpremultiply_u8_row(&mut output[out_start..out_start + out_row_len]);
@@ -416,9 +427,10 @@ impl Resizer {
     pub fn new(config: &ResizeConfig) -> Self {
         config.validate().expect("invalid resize config");
         let filter = InterpolationDetails::create(config.filter);
-        let channels = config.input_format.channels() as usize;
+        let layout = config.input_format.layout();
+        let channels = layout.channels() as usize;
+        let needs_premul = layout.needs_premultiply();
         let linearize = config.needs_linearization();
-        let has_alpha = config.input_format.has_alpha();
         let in_h = config.in_height as usize;
         let out_w = config.out_width as usize;
         let h_row_len = out_w * channels;
@@ -430,7 +442,7 @@ impl Resizer {
             let v_weights = I16WeightTable::new(config.in_height, config.out_height, &filter);
             let intermediate = vec![0u8; h_row_len * in_h];
             let h_padding = h_weights.groups4 * 16;
-            let premul_buf = if has_alpha {
+            let premul_buf = if needs_premul {
                 vec![0u8; in_row_len + h_padding]
             } else {
                 Vec::new()
@@ -451,8 +463,8 @@ impl Resizer {
                 temp_output_f32: Vec::new(),
                 path: 0,
             }
-        } else if linearize && channels == 4 && !has_alpha {
-            // Path 1: linear-light i16 fast path
+        } else if linearize && channels == 4 && !needs_premul {
+            // Path 1: linear-light i16 fast path (Rgbx or RgbaPremul)
             let h_weights = I16WeightTable::new(config.in_width, config.out_width, &filter);
             let v_weights = I16WeightTable::new(config.in_height, config.out_height, &filter);
             let h_padding = h_weights.groups4 * 16;
@@ -513,8 +525,9 @@ impl Resizer {
         let in_stride = config.effective_in_stride();
         let in_row_len = config.input_row_len();
         let out_row_len = config.output_row_len();
-        let channels = config.input_format.channels() as usize;
-        let has_alpha = config.input_format.has_alpha();
+        let layout = config.input_format.layout();
+        let channels = layout.channels() as usize;
+        let needs_premul = layout.needs_premultiply();
         let in_h = config.in_height as usize;
         let out_w = config.out_width as usize;
         let out_h = config.out_height as usize;
@@ -527,7 +540,7 @@ impl Resizer {
                 let v_weights = self.v_weights_i16.as_ref().unwrap();
                 let intermediate = &mut self.intermediate_u8;
 
-                if channels == 4 && !has_alpha {
+                if channels == 4 && !needs_premul {
                     let h_padding = h_weights.groups4 * 16;
                     let batch_count = in_h / 4;
                     let remainder = in_h % 4;
@@ -572,7 +585,7 @@ impl Resizer {
                         let in_row = &input[in_start..in_start + in_row_len];
                         let out_start = y * h_row_len;
 
-                        let src = if has_alpha {
+                        let src = if needs_premul {
                             simd::premultiply_u8_row(in_row, &mut self.premul_buf[..in_row_len]);
                             &self.premul_buf[..] // includes zero-initialized SIMD padding
                         } else {
@@ -591,7 +604,7 @@ impl Resizer {
                 // V pass
                 simd::filter_v_all_u8_i16(intermediate, output, h_row_len, in_h, out_h, v_weights);
 
-                if has_alpha {
+                if needs_premul {
                     for out_y in 0..out_h {
                         let out_start = out_y * out_row_len;
                         simd::unpremultiply_u8_row(&mut output[out_start..out_start + out_row_len]);
@@ -664,13 +677,13 @@ impl Resizer {
                             in_row,
                             &mut temp_row[..in_row_len],
                             channels,
-                            has_alpha,
+                            layout.alpha_is_last_channel(),
                         );
                     } else {
                         simd::u8_to_f32_row(in_row, &mut temp_row[..in_row_len]);
                     }
 
-                    if has_alpha && channels == 4 {
+                    if needs_premul {
                         simd::premultiply_alpha_row(&mut temp_row[..in_row_len]);
                     }
 
@@ -702,7 +715,7 @@ impl Resizer {
 
                     simd::filter_v_row_f32(&row_ptrs, &mut temp_output[..h_row_len], weights);
 
-                    if has_alpha && channels == 4 {
+                    if needs_premul {
                         simd::unpremultiply_alpha_row(&mut temp_output[..h_row_len]);
                     }
 
@@ -713,7 +726,7 @@ impl Resizer {
                             &temp_output[..h_row_len],
                             out_slice,
                             channels,
-                            has_alpha,
+                            layout.alpha_is_last_channel(),
                         );
                     } else {
                         simd::f32_to_u8_row(&temp_output[..h_row_len], out_slice);
@@ -748,8 +761,9 @@ pub fn resize_f32_into(config: &ResizeConfig, input: &[f32], output: &mut [f32])
     assert!(input.len() >= in_expected, "input too short");
     assert_eq!(output.len(), out_expected, "output length mismatch");
 
-    let channels = config.input_format.channels() as usize;
-    let has_alpha = config.input_format.has_alpha();
+    let layout = config.input_format.layout();
+    let channels = layout.channels() as usize;
+    let needs_premul = layout.needs_premultiply();
     let in_w = config.in_width as usize;
     let in_h = config.in_height as usize;
     let out_w = config.out_width as usize;
@@ -771,7 +785,7 @@ pub fn resize_f32_into(config: &ResizeConfig, input: &[f32], output: &mut [f32])
         let in_start = y * in_stride;
         temp_row[..in_row_len].copy_from_slice(&input[in_start..in_start + in_row_len]);
 
-        if has_alpha && channels == 4 {
+        if needs_premul {
             simd::premultiply_alpha_row(&mut temp_row[..in_row_len]);
         }
 
@@ -804,7 +818,7 @@ pub fn resize_f32_into(config: &ResizeConfig, input: &[f32], output: &mut [f32])
         let out_slice = &mut output[out_start..out_start + out_row_len];
         simd::filter_v_row_f32(&row_ptrs, out_slice, weights);
 
-        if has_alpha && channels == 4 {
+        if needs_premul {
             simd::unpremultiply_alpha_row(out_slice);
         }
     }
@@ -827,7 +841,7 @@ mod imgref_impl {
     #[cfg(not(feature = "std"))]
     use alloc::vec::Vec;
 
-    use crate::pixel::{PixelFormat, ResizeConfig};
+    use crate::pixel::{PixelFormat, PixelLayout, ResizeConfig};
     use crate::streaming::StreamingResize;
     use imgref::{Img, ImgRef, ImgVec};
     use rgb::ComponentSlice;
@@ -836,32 +850,29 @@ mod imgref_impl {
     /// `ComponentSlice` (RGBA, BGRA, ARGB, ABGR from the `rgb` crate).
     ///
     /// Channel order is preserved — the pipeline doesn't care whether
-    /// the bytes represent RGBA or BGRA.
+    /// the bytes represent RGBA or BGRA. Use a 4-channel layout
+    /// ([`Rgba`](PixelLayout::Rgba), [`Rgbx`](PixelLayout::Rgbx),
+    /// or [`RgbaPremul`](PixelLayout::RgbaPremul)).
     pub fn resize_4ch<P>(
         img: ImgRef<P>,
         out_width: u32,
         out_height: u32,
-        has_alpha: bool,
+        layout: PixelLayout,
         config: &ResizeConfig,
     ) -> ImgVec<P>
     where
         P: Copy + ComponentSlice<u8> + Default,
     {
         assert_eq!(core::mem::size_of::<P>(), 4, "pixel type must be 4 bytes");
+        assert_eq!(layout.channels(), 4, "layout must be 4-channel");
 
         let mut cfg = config.clone();
         cfg.in_width = img.width() as u32;
         cfg.in_height = img.height() as u32;
         cfg.out_width = out_width;
         cfg.out_height = out_height;
-        cfg.input_format = PixelFormat::Srgb8 {
-            channels: 4,
-            has_alpha,
-        };
-        cfg.output_format = PixelFormat::Srgb8 {
-            channels: 4,
-            has_alpha,
-        };
+        cfg.input_format = PixelFormat::Srgb8(layout);
+        cfg.output_format = PixelFormat::Srgb8(layout);
         cfg.in_stride = 0;
 
         let mut resizer = StreamingResize::new(&cfg);
@@ -910,14 +921,8 @@ mod imgref_impl {
         cfg.in_height = img.height() as u32;
         cfg.out_width = out_width;
         cfg.out_height = out_height;
-        cfg.input_format = PixelFormat::Srgb8 {
-            channels: 3,
-            has_alpha: false,
-        };
-        cfg.output_format = PixelFormat::Srgb8 {
-            channels: 3,
-            has_alpha: false,
-        };
+        cfg.input_format = PixelFormat::Srgb8(PixelLayout::Rgb);
+        cfg.output_format = PixelFormat::Srgb8(PixelLayout::Rgb);
         cfg.in_stride = 0;
 
         let mut resizer = StreamingResize::new(&cfg);
@@ -958,14 +963,8 @@ mod imgref_impl {
         cfg.in_height = img.height() as u32;
         cfg.out_width = out_width;
         cfg.out_height = out_height;
-        cfg.input_format = PixelFormat::Srgb8 {
-            channels: 1,
-            has_alpha: false,
-        };
-        cfg.output_format = PixelFormat::Srgb8 {
-            channels: 1,
-            has_alpha: false,
-        };
+        cfg.input_format = PixelFormat::Srgb8(PixelLayout::Gray);
+        cfg.output_format = PixelFormat::Srgb8(PixelLayout::Gray);
         cfg.in_stride = 0;
 
         let mut resizer = StreamingResize::new(&cfg);
@@ -991,15 +990,12 @@ pub use imgref_impl::{resize_3ch, resize_4ch, resize_gray8};
 mod tests {
     use super::*;
     use crate::filter::Filter;
-    use crate::pixel::PixelFormat;
+    use crate::pixel::{PixelFormat, PixelLayout};
 
     fn test_config(in_w: u32, in_h: u32, out_w: u32, out_h: u32) -> ResizeConfig {
         ResizeConfig::builder(in_w, in_h, out_w, out_h)
             .filter(Filter::Lanczos)
-            .format(PixelFormat::Srgb8 {
-                channels: 4,
-                has_alpha: true,
-            })
+            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
             .srgb()
             .build()
     }
@@ -1068,10 +1064,7 @@ mod tests {
     fn test_resize_with_stride() {
         // Create an image with extra padding bytes per row
         let config = ResizeConfig::builder(10, 10, 5, 5)
-            .format(PixelFormat::Srgb8 {
-                channels: 4,
-                has_alpha: true,
-            })
+            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
             .srgb()
             .in_stride(10 * 4 + 8) // 8 bytes padding per row
             .build();
@@ -1105,10 +1098,7 @@ mod tests {
     fn test_resizer_matches_resize_linear() {
         let config = ResizeConfig::builder(20, 20, 10, 10)
             .filter(Filter::Lanczos)
-            .format(PixelFormat::Srgb8 {
-                channels: 4,
-                has_alpha: true,
-            })
+            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
             .linear()
             .build();
         let input = vec![100u8; 20 * 20 * 4];
@@ -1124,10 +1114,7 @@ mod tests {
     fn test_resizer_matches_resize_3ch() {
         let config = ResizeConfig::builder(20, 20, 10, 10)
             .filter(Filter::Lanczos)
-            .format(PixelFormat::Srgb8 {
-                channels: 3,
-                has_alpha: false,
-            })
+            .format(PixelFormat::Srgb8(PixelLayout::Rgb))
             .srgb()
             .build();
         let input = vec![100u8; 20 * 20 * 3];

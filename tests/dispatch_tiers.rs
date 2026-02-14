@@ -7,14 +7,11 @@
 //! for accurate results (token disabling is process-wide).
 
 use archmage::testing::{CompileTimePolicy, for_each_token_permutation};
-use zenresize::{Filter, PixelFormat, ResizeConfig, resize};
+use zenresize::{Filter, PixelFormat, PixelLayout, ResizeConfig, resize};
 
 fn config_srgb(in_w: u32, in_h: u32, out_w: u32, out_h: u32) -> ResizeConfig {
     ResizeConfig::builder(in_w, in_h, out_w, out_h)
-        .format(PixelFormat::Srgb8 {
-            channels: 4,
-            has_alpha: true,
-        })
+        .format(PixelFormat::Srgb8(PixelLayout::Rgba))
         .filter(Filter::Lanczos)
         .srgb()
         .build()

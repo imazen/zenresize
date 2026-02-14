@@ -28,7 +28,8 @@ pub struct StreamingResize {
     h_weights: F32WeightTable,
     v_weights: F32WeightTable,
     channels: usize,
-    has_alpha: bool,
+    needs_premul: bool,
+    alpha_is_last: bool,
 
     /// Ring buffer of horizontally-filtered rows (f32).
     h_cache: Vec<Vec<f32>>,
@@ -61,8 +62,10 @@ impl StreamingResize {
         let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
         let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
 
-        let channels = config.input_format.channels() as usize;
-        let has_alpha = config.input_format.has_alpha();
+        let layout = config.input_format.layout();
+        let channels = layout.channels() as usize;
+        let needs_premul = layout.needs_premultiply();
+        let alpha_is_last = layout.alpha_is_last_channel();
 
         let cache_size = v_weights.max_taps + 2;
         let row_len = config.out_width as usize * channels;
@@ -80,7 +83,8 @@ impl StreamingResize {
             h_weights,
             v_weights,
             channels,
-            has_alpha,
+            needs_premul,
+            alpha_is_last,
             h_cache,
             cache_write_idx: 0,
             cache_size,
@@ -115,13 +119,13 @@ impl StreamingResize {
                 pixel_data,
                 &mut self.temp_input_f32[..pixel_len],
                 self.channels,
-                self.has_alpha,
+                self.alpha_is_last,
             );
         } else {
             simd::u8_to_f32_row(pixel_data, &mut self.temp_input_f32[..pixel_len]);
         }
 
-        if self.has_alpha && self.channels == 4 {
+        if self.needs_premul {
             simd::premultiply_alpha_row(&mut self.temp_input_f32[..pixel_len]);
         }
 
@@ -150,7 +154,7 @@ impl StreamingResize {
 
         self.temp_input_f32[..pixel_len].copy_from_slice(&row[..pixel_len]);
 
-        if self.has_alpha && self.channels == 4 {
+        if self.needs_premul {
             simd::premultiply_alpha_row(&mut self.temp_input_f32[..pixel_len]);
         }
 
@@ -271,7 +275,7 @@ impl StreamingResize {
 
         simd::filter_v_row_f32(&rows, &mut self.temp_output_f32[..row_len], weights);
 
-        if self.has_alpha && self.channels == 4 {
+        if self.needs_premul {
             simd::unpremultiply_alpha_row(&mut self.temp_output_f32[..row_len]);
         }
 
@@ -282,7 +286,7 @@ impl StreamingResize {
                     &self.temp_output_f32[..row_len],
                     &mut out_row,
                     self.channels,
-                    self.has_alpha,
+                    self.alpha_is_last,
                 );
             } else {
                 simd::f32_to_u8_row(&self.temp_output_f32[..row_len], &mut out_row);
@@ -302,14 +306,11 @@ impl StreamingResize {
 mod tests {
     use super::*;
     use crate::filter::Filter;
-    use crate::pixel::{ColorSpace, PixelFormat};
+    use crate::pixel::{ColorSpace, PixelFormat, PixelLayout};
 
     fn make_config(in_w: u32, in_h: u32, out_w: u32, out_h: u32) -> ResizeConfig {
         ResizeConfig::builder(in_w, in_h, out_w, out_h)
-            .format(PixelFormat::Srgb8 {
-                channels: 4,
-                has_alpha: true,
-            })
+            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
             .srgb()
             .build()
     }

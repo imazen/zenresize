@@ -3,24 +3,20 @@
 //! Tests cover: streaming vs full-frame parity, all filter types,
 //! edge cases, stride handling, and format combinations.
 
-use zenresize::{Filter, PixelFormat, ResizeConfig, StreamingResize, resize, resize_f32};
+use zenresize::{
+    Filter, PixelFormat, PixelLayout, ResizeConfig, StreamingResize, resize, resize_f32,
+};
 
 fn config_srgb(in_w: u32, in_h: u32, out_w: u32, out_h: u32) -> ResizeConfig {
     ResizeConfig::builder(in_w, in_h, out_w, out_h)
-        .format(PixelFormat::Srgb8 {
-            channels: 4,
-            has_alpha: true,
-        })
+        .format(PixelFormat::Srgb8(PixelLayout::Rgba))
         .srgb()
         .build()
 }
 
 fn config_linear(in_w: u32, in_h: u32, out_w: u32, out_h: u32) -> ResizeConfig {
     ResizeConfig::builder(in_w, in_h, out_w, out_h)
-        .format(PixelFormat::Srgb8 {
-            channels: 4,
-            has_alpha: true,
-        })
+        .format(PixelFormat::Srgb8(PixelLayout::Rgba))
         .linear()
         .build()
 }
@@ -199,10 +195,7 @@ fn all_filters_produce_valid_output() {
     for filter in &filters {
         let config = ResizeConfig::builder(32, 32, 16, 16)
             .filter(*filter)
-            .format(PixelFormat::Srgb8 {
-                channels: 4,
-                has_alpha: true,
-            })
+            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
             .srgb()
             .build();
 
@@ -319,10 +312,7 @@ fn resize_large_upscale() {
 #[test]
 fn resize_rgb_3ch() {
     let config = ResizeConfig::builder(20, 20, 10, 10)
-        .format(PixelFormat::Srgb8 {
-            channels: 3,
-            has_alpha: false,
-        })
+        .format(PixelFormat::Srgb8(PixelLayout::Rgb))
         .srgb()
         .build();
 
@@ -334,10 +324,7 @@ fn resize_rgb_3ch() {
 #[test]
 fn resize_gray_1ch() {
     let config = ResizeConfig::builder(20, 20, 10, 10)
-        .format(PixelFormat::Srgb8 {
-            channels: 1,
-            has_alpha: false,
-        })
+        .format(PixelFormat::Srgb8(PixelLayout::Gray))
         .srgb()
         .build();
 
@@ -347,22 +334,47 @@ fn resize_gray_1ch() {
 }
 
 #[test]
-fn resize_gray_alpha_2ch() {
+fn resize_rgbx_no_premul() {
+    // RGBX: 4 channels, no alpha premultiply/unpremultiply
     let config = ResizeConfig::builder(20, 20, 10, 10)
-        .format(PixelFormat::Srgb8 {
-            channels: 2,
-            has_alpha: true,
-        })
+        .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
         .srgb()
         .build();
 
-    let mut input = vec![0u8; 20 * 20 * 2];
-    for px in input.chunks_exact_mut(2) {
+    let mut input = vec![0u8; 20 * 20 * 4];
+    for px in input.chunks_exact_mut(4) {
         px[0] = 128;
-        px[1] = 255;
+        px[1] = 64;
+        px[2] = 32;
+        px[3] = 0; // padding
     }
     let output = resize(&config, &input);
-    assert_eq!(output.len(), 10 * 10 * 2);
+    assert_eq!(output.len(), 10 * 10 * 4);
+}
+
+#[test]
+fn resize_premultiplied_alpha() {
+    // RgbaPremul: 4 channels, already premultiplied — skip premul/unpremul
+    let config = ResizeConfig::builder(20, 20, 10, 10)
+        .format(PixelFormat::Srgb8(PixelLayout::RgbaPremul))
+        .srgb()
+        .build();
+
+    let mut input = vec![0u8; 20 * 20 * 4];
+    for px in input.chunks_exact_mut(4) {
+        px[0] = 64; // R * A/255 = 128 * 128/255 ≈ 64
+        px[1] = 32;
+        px[2] = 16;
+        px[3] = 128; // alpha
+    }
+    let output = resize(&config, &input);
+    assert_eq!(output.len(), 10 * 10 * 4);
+
+    // Constant input → output should be close to constant
+    for px in output.chunks_exact(4) {
+        assert!((px[0] as i16 - 64).unsigned_abs() <= 3, "R: {}", px[0]);
+        assert!((px[3] as i16 - 128).unsigned_abs() <= 2, "A: {}", px[3]);
+    }
 }
 
 // =============================================================================
@@ -372,10 +384,7 @@ fn resize_gray_alpha_2ch() {
 #[test]
 fn resize_f32_constant() {
     let config = ResizeConfig::builder(20, 20, 10, 10)
-        .format(PixelFormat::LinearF32 {
-            channels: 4,
-            has_alpha: true,
-        })
+        .format(PixelFormat::LinearF32(PixelLayout::Rgba))
         .linear()
         .build();
 
@@ -391,10 +400,7 @@ fn resize_f32_constant() {
 #[test]
 fn resize_f32_gradient() {
     let config = ResizeConfig::builder(30, 30, 15, 15)
-        .format(PixelFormat::LinearF32 {
-            channels: 4,
-            has_alpha: false,
-        })
+        .format(PixelFormat::LinearF32(PixelLayout::Rgbx))
         .linear()
         .build();
 
@@ -465,10 +471,7 @@ fn strided_input_matches_tight() {
     }
 
     let config_strided = ResizeConfig::builder(w, h, 10, 10)
-        .format(PixelFormat::Srgb8 {
-            channels: 4,
-            has_alpha: true,
-        })
+        .format(PixelFormat::Srgb8(PixelLayout::Rgba))
         .srgb()
         .in_stride(padded_stride)
         .build();
@@ -528,10 +531,7 @@ fn push_rows_matches_individual() {
 fn linear_i16_matches_f32_downscale() {
     let config = ResizeConfig::builder(64, 64, 32, 32)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Srgb8 {
-            channels: 4,
-            has_alpha: false,
-        })
+        .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
         .linear()
         .build();
 
@@ -574,10 +574,7 @@ fn linear_i16_matches_f32_downscale() {
 fn linear_i16_matches_f32_upscale() {
     let config = ResizeConfig::builder(16, 16, 48, 48)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Srgb8 {
-            channels: 4,
-            has_alpha: false,
-        })
+        .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
         .linear()
         .build();
 
@@ -618,10 +615,7 @@ fn linear_i16_matches_f32_upscale() {
 fn resizer_matches_oneshot_linear_no_alpha() {
     let config = ResizeConfig::builder(32, 32, 16, 16)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Srgb8 {
-            channels: 4,
-            has_alpha: false,
-        })
+        .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
         .linear()
         .build();
 
@@ -651,38 +645,14 @@ fn no_catastrophic_errors_across_all_combinations() {
 
     // Path configs: (format, color_space_fn, label)
     let path_configs: Vec<(PixelFormat, bool, &str)> = vec![
+        (PixelFormat::Srgb8(PixelLayout::Rgbx), false, "srgb-noalpha"),
+        (PixelFormat::Srgb8(PixelLayout::Rgba), false, "srgb-alpha"),
         (
-            PixelFormat::Srgb8 {
-                channels: 4,
-                has_alpha: false,
-            },
-            false,
-            "srgb-noalpha",
-        ),
-        (
-            PixelFormat::Srgb8 {
-                channels: 4,
-                has_alpha: true,
-            },
-            false,
-            "srgb-alpha",
-        ),
-        (
-            PixelFormat::Srgb8 {
-                channels: 4,
-                has_alpha: false,
-            },
+            PixelFormat::Srgb8(PixelLayout::Rgbx),
             true,
             "linear-noalpha",
         ),
-        (
-            PixelFormat::Srgb8 {
-                channels: 4,
-                has_alpha: true,
-            },
-            true,
-            "linear-alpha",
-        ),
+        (PixelFormat::Srgb8(PixelLayout::Rgba), true, "linear-alpha"),
     ];
 
     let mut failures: Vec<String> = Vec::new();
@@ -765,7 +735,7 @@ fn no_catastrophic_errors_across_all_combinations() {
 // =============================================================================
 // The pipeline is channel-order-agnostic. sRGB transfer is identical for R/G/B,
 // and convolution kernels just multiply N floats. BGRA data passes through
-// unchanged — use {channels: 4, has_alpha: true}, same as RGBA.
+// unchanged — use Srgb8(PixelLayout::Rgba), same as RGBA.
 
 #[test]
 fn bgra_preserves_channel_order() {
@@ -782,10 +752,7 @@ fn bgra_preserves_channel_order() {
 
     // Same config as RGBA — pipeline doesn't care about channel names
     let config = ResizeConfig::builder(w, h, 10, 10)
-        .format(PixelFormat::Srgb8 {
-            channels: 4,
-            has_alpha: true,
-        })
+        .format(PixelFormat::Srgb8(PixelLayout::Rgba))
         .srgb()
         .build();
 
@@ -803,7 +770,7 @@ fn bgra_preserves_channel_order() {
 
 #[test]
 fn bgrx_as_4ch_no_alpha() {
-    // BGRX: 4 bytes, no alpha. Use {channels: 4, has_alpha: false}.
+    // BGRX: 4 bytes, no alpha. Use Srgb8(PixelLayout::Rgbx).
     // The X channel is just another data channel — passes through like any other.
     let w = 20u32;
     let h = 20u32;
@@ -816,10 +783,7 @@ fn bgrx_as_4ch_no_alpha() {
     }
 
     let config = ResizeConfig::builder(w, h, 10, 10)
-        .format(PixelFormat::Srgb8 {
-            channels: 4,
-            has_alpha: false,
-        })
+        .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
         .srgb()
         .build();
 
@@ -851,10 +815,7 @@ fn bgra_linear_preserves_order() {
     }
 
     let config = ResizeConfig::builder(w, h, 10, 10)
-        .format(PixelFormat::Srgb8 {
-            channels: 4,
-            has_alpha: true,
-        })
+        .format(PixelFormat::Srgb8(PixelLayout::Rgba))
         .linear() // linear-light processing
         .build();
 

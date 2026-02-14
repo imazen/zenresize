@@ -12,14 +12,14 @@
 //! # Quick Start
 //!
 //! ```
-//! use zenresize::{resize, ResizeConfig, Filter, PixelFormat};
+//! use zenresize::{resize, ResizeConfig, Filter, PixelFormat, PixelLayout};
 //!
 //! // Create a 4×4 RGBA test image
 //! let input_pixels = vec![128u8; 4 * 4 * 4];
 //!
 //! let config = ResizeConfig::builder(4, 4, 2, 2)
 //!     .filter(Filter::Lanczos)
-//!     .format(PixelFormat::Srgb8 { channels: 4, has_alpha: true })
+//!     .format(PixelFormat::Srgb8(PixelLayout::Rgba))
 //!     .linear()
 //!     .build();
 //!
@@ -45,7 +45,7 @@ mod simd;
 
 // Re-exports: minimal public API
 pub use filter::Filter;
-pub use pixel::{ColorSpace, PixelFormat, ResizeConfig, ResizeConfigBuilder};
+pub use pixel::{ColorSpace, PixelFormat, PixelLayout, ResizeConfig, ResizeConfigBuilder};
 pub use resize::{Resizer, resize, resize_f32, resize_f32_into, resize_into};
 pub use streaming::StreamingResize;
 

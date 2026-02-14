@@ -34,10 +34,7 @@ fn main() {
     // --- Full linear resize (sRGB→linear→filter→sRGB) ---
     let config_linear = zenresize::ResizeConfig::builder(w, h, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::Srgb8 {
-            channels: 4,
-            has_alpha: true,
-        })
+        .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgba))
         .linear()
         .build();
 
@@ -55,10 +52,7 @@ fn main() {
     // --- sRGB integer fast path (for comparison) ---
     let config_srgb = zenresize::ResizeConfig::builder(w, h, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::Srgb8 {
-            channels: 4,
-            has_alpha: false,
-        })
+        .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgbx))
         .srgb()
         .build();
 
@@ -79,10 +73,7 @@ fn main() {
     // Use 3 channels — no i16 fast path for 3ch, so it forces f32.
     let config_f32_no_linear = zenresize::ResizeConfig::builder(w, h, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::Srgb8 {
-            channels: 3,
-            has_alpha: false,
-        })
+        .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgb))
         .srgb()
         .build();
     let rgba3: Vec<u8> = rgba
@@ -144,10 +135,9 @@ fn main() {
     let f32_rgba: Vec<f32> = rgba.iter().map(|&b| b as f32 / 255.0).collect();
     let config_f32 = zenresize::ResizeConfig::builder(w, h, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::LinearF32 {
-            channels: 4,
-            has_alpha: true,
-        })
+        .format(zenresize::PixelFormat::LinearF32(
+            zenresize::PixelLayout::Rgba,
+        ))
         .build();
 
     for _ in 0..warmup {
@@ -164,10 +154,9 @@ fn main() {
     // --- f32 end-to-end, no alpha ---
     let config_f32_noalpha = zenresize::ResizeConfig::builder(w, h, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::LinearF32 {
-            channels: 4,
-            has_alpha: false,
-        })
+        .format(zenresize::PixelFormat::LinearF32(
+            zenresize::PixelLayout::Rgbx,
+        ))
         .build();
 
     for _ in 0..warmup {

@@ -85,10 +85,7 @@ fn test_image() -> TestImage {
 fn run_zenresize_srgb(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     let config = zenresize::ResizeConfig::builder(img.width, img.height, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::Srgb8 {
-            channels: 4,
-            has_alpha: false,
-        })
+        .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgbx))
         .srgb()
         .build();
     zenresize::resize(&config, &img.rgba)
@@ -97,10 +94,7 @@ fn run_zenresize_srgb(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
 fn run_zenresize_linear(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     let config = zenresize::ResizeConfig::builder(img.width, img.height, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::Srgb8 {
-            channels: 4,
-            has_alpha: true,
-        })
+        .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgba))
         .linear()
         .build();
     zenresize::resize(&config, &img.rgba)
@@ -109,10 +103,7 @@ fn run_zenresize_linear(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
 fn run_zenresize_linear_i16(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     let config = zenresize::ResizeConfig::builder(img.width, img.height, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::Srgb8 {
-            channels: 4,
-            has_alpha: false,
-        })
+        .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgbx))
         .linear()
         .build();
     zenresize::resize(&config, &img.rgba)
@@ -207,10 +198,9 @@ fn run_picscale_safe_f32(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
 fn run_zenresize_f32(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     let config = zenresize::ResizeConfig::builder(img.width, img.height, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::LinearF32 {
-            channels: 4,
-            has_alpha: false,
-        })
+        .format(zenresize::PixelFormat::LinearF32(
+            zenresize::PixelLayout::Rgbx,
+        ))
         .build();
     let result_f32 = zenresize::resize_f32(&config, &img.rgba_f32);
     let bytes: Vec<u8> = result_f32.iter().flat_map(|v| v.to_ne_bytes()).collect();
@@ -494,10 +484,7 @@ fn main() {
     {
         let config = zenresize::ResizeConfig::builder(img.width, img.height, out_w, out_h)
             .filter(zenresize::Filter::Lanczos)
-            .format(zenresize::PixelFormat::Srgb8 {
-                channels: 4,
-                has_alpha: false,
-            })
+            .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgbx))
             .srgb()
             .build();
         let mut resizer = zenresize::Resizer::new(&config);

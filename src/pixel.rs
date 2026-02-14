@@ -1,39 +1,105 @@
 //! Pixel format descriptors and color space configuration.
 
+/// Pixel memory layout.
+///
+/// Describes the number of channels and how alpha is handled.
+/// Channel order doesn't matter — RGBA, BGRA, ARGB all work identically
+/// because the sRGB transfer function is the same for R, G, and B,
+/// and the convolution kernels just operate on N floats per pixel.
+#[non_exhaustive]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum PixelLayout {
+    /// Single-channel grayscale.
+    Gray,
+    /// 3-channel (RGB, BGR, etc.). No alpha.
+    Rgb,
+    /// 4-channel with padding (RGBX, BGRX). The 4th channel is processed
+    /// identically to the others — it's not skipped, just not treated as alpha.
+    Rgbx,
+    /// 4-channel with straight (non-premultiplied) alpha.
+    /// The pipeline premultiplies before filtering and unpremultiplies after.
+    Rgba,
+    /// 4-channel with premultiplied alpha.
+    /// Skips premultiply/unpremultiply — data is filtered as-is.
+    RgbaPremul,
+}
+
+impl PixelLayout {
+    /// Number of channels per pixel.
+    #[inline]
+    pub fn channels(&self) -> u8 {
+        match self {
+            Self::Gray => 1,
+            Self::Rgb => 3,
+            Self::Rgbx | Self::Rgba | Self::RgbaPremul => 4,
+        }
+    }
+
+    /// Whether the format carries meaningful alpha.
+    #[inline]
+    pub fn has_alpha(&self) -> bool {
+        matches!(self, Self::Rgba | Self::RgbaPremul)
+    }
+
+    /// Whether the pipeline needs to premultiply/unpremultiply alpha.
+    ///
+    /// True only for straight alpha ([`Rgba`](Self::Rgba)).
+    /// Premultiplied and non-alpha layouts skip this step.
+    #[inline]
+    pub fn needs_premultiply(&self) -> bool {
+        matches!(self, Self::Rgba)
+    }
+
+    /// Whether the data is already premultiplied.
+    #[inline]
+    pub fn is_premultiplied(&self) -> bool {
+        matches!(self, Self::RgbaPremul)
+    }
+
+    /// Whether the last channel is alpha (and should skip sRGB linearization).
+    #[inline]
+    pub fn alpha_is_last_channel(&self) -> bool {
+        matches!(self, Self::Rgba | Self::RgbaPremul)
+    }
+}
+
 /// Pixel format descriptor.
+///
+/// Combines a data type (u8 sRGB or f32 linear) with a [`PixelLayout`].
 ///
 /// The pipeline is channel-order-agnostic: RGBA, BGRA, ARGB all work
 /// identically because the sRGB transfer function is the same for R, G, and B,
 /// and the convolution kernels just operate on N floats per pixel.
-///
-/// For BGRA: use `Srgb8 { channels: 4, has_alpha: true }` — same as RGBA.
-/// For BGRX: use `Srgb8 { channels: 4, has_alpha: false }` — X is just a padding channel.
 #[non_exhaustive]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PixelFormat {
     /// sRGB gamma-encoded u8 pixels (the common case).
     ///
     /// Channel order doesn't matter — RGBA, BGRA, ARGB all work identically.
-    Srgb8 { channels: u8, has_alpha: bool },
+    Srgb8(PixelLayout),
     /// Linear light f32 pixels (HDR, scientific, pipeline use).
-    LinearF32 { channels: u8, has_alpha: bool },
+    LinearF32(PixelLayout),
 }
 
 impl PixelFormat {
-    /// Number of channels per pixel.
+    /// The pixel layout.
     #[inline]
-    pub fn channels(&self) -> u8 {
+    pub fn layout(&self) -> PixelLayout {
         match self {
-            Self::Srgb8 { channels, .. } | Self::LinearF32 { channels, .. } => *channels,
+            Self::Srgb8(layout) | Self::LinearF32(layout) => *layout,
         }
     }
 
-    /// Whether the format has an alpha channel.
+    /// Number of channels per pixel.
+    #[inline]
+    pub fn channels(&self) -> u8 {
+        self.layout().channels()
+    }
+
+    /// Whether the format carries meaningful alpha.
     #[inline]
     pub fn has_alpha(&self) -> bool {
-        match self {
-            Self::Srgb8 { has_alpha, .. } | Self::LinearF32 { has_alpha, .. } => *has_alpha,
-        }
+        self.layout().has_alpha()
     }
 
     /// Components per pixel (same as channels).
@@ -45,25 +111,25 @@ impl PixelFormat {
     /// Whether this is a u8-based format.
     #[inline]
     pub fn is_u8(&self) -> bool {
-        matches!(self, Self::Srgb8 { .. })
+        matches!(self, Self::Srgb8(..))
     }
 
     /// Whether this is an f32-based format.
     #[inline]
     pub fn is_f32(&self) -> bool {
-        matches!(self, Self::LinearF32 { .. })
+        matches!(self, Self::LinearF32(..))
     }
 
     /// Whether this format uses sRGB gamma encoding.
     #[inline]
     pub fn is_srgb(&self) -> bool {
-        matches!(self, Self::Srgb8 { .. })
+        matches!(self, Self::Srgb8(..))
     }
 
     /// Whether this format uses linear light values.
     #[inline]
     pub fn is_linear(&self) -> bool {
-        matches!(self, Self::LinearF32 { .. })
+        matches!(self, Self::LinearF32(..))
     }
 }
 
@@ -127,19 +193,8 @@ impl ResizeConfig {
         if self.out_width == 0 || self.out_height == 0 {
             return Err("output dimensions must be positive");
         }
-        let in_ch = self.input_format.channels();
-        let out_ch = self.output_format.channels();
-        if !(1..=4).contains(&in_ch) {
-            return Err("input channels must be 1-4");
-        }
-        if !(1..=4).contains(&out_ch) {
-            return Err("output channels must be 1-4");
-        }
-        if in_ch != out_ch {
-            return Err("input and output must have same channel count");
-        }
-        if self.input_format.has_alpha() != self.output_format.has_alpha() {
-            return Err("input and output must agree on alpha");
+        if self.input_format.layout() != self.output_format.layout() {
+            return Err("input and output must have same layout");
         }
         Ok(())
     }
@@ -173,8 +228,14 @@ impl ResizeConfig {
     }
 
     /// Whether linear-light processing is needed.
+    ///
+    /// True when the color space is [`Linear`](ColorSpace::Linear) and the input
+    /// is sRGB. Premultiplied alpha layouts skip linearization (linearizing
+    /// premultiplied sRGB data is mathematically incorrect).
     pub fn needs_linearization(&self) -> bool {
-        self.color_space == ColorSpace::Linear && self.input_format.is_srgb()
+        self.color_space == ColorSpace::Linear
+            && self.input_format.is_srgb()
+            && !self.input_format.layout().is_premultiplied()
     }
 }
 
@@ -182,11 +243,11 @@ impl ResizeConfig {
 ///
 /// # Example
 /// ```
-/// use zenresize::{ResizeConfig, Filter, PixelFormat};
+/// use zenresize::{ResizeConfig, Filter, PixelFormat, PixelLayout};
 ///
 /// let config = ResizeConfig::builder(1024, 768, 512, 384)
 ///     .filter(Filter::Lanczos)
-///     .format(PixelFormat::Srgb8 { channels: 4, has_alpha: true })
+///     .format(PixelFormat::Srgb8(PixelLayout::Rgba))
 ///     .linear()
 ///     .build();
 /// ```
@@ -212,10 +273,7 @@ impl ResizeConfigBuilder {
             out_width,
             out_height,
             filter: crate::filter::Filter::default(),
-            input_format: PixelFormat::Srgb8 {
-                channels: 4,
-                has_alpha: true,
-            },
+            input_format: PixelFormat::Srgb8(PixelLayout::Rgba),
             output_format: None,
             sharpen: 0.0,
             color_space: ColorSpace::Linear,
