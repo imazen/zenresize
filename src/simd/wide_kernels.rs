@@ -92,26 +92,70 @@ fn filter_h_generic(input: &[f32], output: &mut [f32], weights: &F32WeightTable,
 }
 
 /// Vertical f32 convolution using f32x4 FMA.
+///
+/// Processes 8 pixels (32 floats) per outer loop iteration with 8 f32x4
+/// accumulators for maximum ILP and reduced loop overhead.
 #[inline(always)]
 pub(super) fn filter_v_row_f32(rows: &[&[f32]], output: &mut [f32], weights: &[f32]) {
-    let (out_chunks, out_tail) = output.as_chunks_mut::<4>();
+    // Process 8 pixels (32 floats) at a time with 8 accumulators
+    let (out_chunks32, out_remainder32) = output.as_chunks_mut::<32>();
 
-    for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
+    for (ci, out_chunk) in out_chunks32.iter_mut().enumerate() {
+        let base = ci * 32;
+        let mut acc0 = f32x4::ZERO;
+        let mut acc1 = f32x4::ZERO;
+        let mut acc2 = f32x4::ZERO;
+        let mut acc3 = f32x4::ZERO;
+        let mut acc4 = f32x4::ZERO;
+        let mut acc5 = f32x4::ZERO;
+        let mut acc6 = f32x4::ZERO;
+        let mut acc7 = f32x4::ZERO;
+
+        for (row, &weight) in rows.iter().zip(weights.iter()) {
+            let wv = f32x4::splat(weight);
+            let (row_chunks, _) = row.as_chunks::<4>();
+            let ri = base / 4;
+            acc0 = f32x4::new(row_chunks[ri]).mul_add(wv, acc0);
+            acc1 = f32x4::new(row_chunks[ri + 1]).mul_add(wv, acc1);
+            acc2 = f32x4::new(row_chunks[ri + 2]).mul_add(wv, acc2);
+            acc3 = f32x4::new(row_chunks[ri + 3]).mul_add(wv, acc3);
+            acc4 = f32x4::new(row_chunks[ri + 4]).mul_add(wv, acc4);
+            acc5 = f32x4::new(row_chunks[ri + 5]).mul_add(wv, acc5);
+            acc6 = f32x4::new(row_chunks[ri + 6]).mul_add(wv, acc6);
+            acc7 = f32x4::new(row_chunks[ri + 7]).mul_add(wv, acc7);
+        }
+
+        out_chunk[0..4].copy_from_slice(&acc0.to_array());
+        out_chunk[4..8].copy_from_slice(&acc1.to_array());
+        out_chunk[8..12].copy_from_slice(&acc2.to_array());
+        out_chunk[12..16].copy_from_slice(&acc3.to_array());
+        out_chunk[16..20].copy_from_slice(&acc4.to_array());
+        out_chunk[20..24].copy_from_slice(&acc5.to_array());
+        out_chunk[24..28].copy_from_slice(&acc6.to_array());
+        out_chunk[28..32].copy_from_slice(&acc7.to_array());
+    }
+
+    // Handle remainder: 1 pixel (4 floats) at a time
+    let base32 = out_chunks32.len() * 32;
+    let (rem_chunks4, rem_tail) = out_remainder32.as_chunks_mut::<4>();
+
+    for (ci, out_chunk) in rem_chunks4.iter_mut().enumerate() {
+        let ri = (base32 / 4) + ci;
         let mut acc = f32x4::ZERO;
         for (row, &weight) in rows.iter().zip(weights.iter()) {
             let (row_chunks, _) = row.as_chunks::<4>();
-            let src = f32x4::new(row_chunks[ci]);
+            let src = f32x4::new(row_chunks[ri]);
             acc = src.mul_add(f32x4::splat(weight), acc);
         }
         *out_chunk = acc.to_array();
     }
 
-    // Scalar tail
-    let base4 = out_chunks.len() * 4;
-    for (x, out) in out_tail.iter_mut().enumerate() {
+    // Scalar tail (0-3 floats)
+    let base_scalar = base32 + rem_chunks4.len() * 4;
+    for (x, out) in rem_tail.iter_mut().enumerate() {
         let mut sum = 0.0f32;
         for (row, &weight) in rows.iter().zip(weights.iter()) {
-            sum += row[base4 + x] * weight;
+            sum += row[base_scalar + x] * weight;
         }
         *out = sum;
     }
