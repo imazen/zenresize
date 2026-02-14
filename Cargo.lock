@@ -90,14 +90,14 @@ checksum = "5f0e0fee31ef5ed1ba1316088939cea399010ed7731dba877ed44aeb407a75ea"
 
 [[package]]
 name = "archmage"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "archmage-macros",
 ]
 
 [[package]]
 name = "archmage-macros"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -21,7 +21,7 @@ bench-simd-competitors = ["pic-scale/sse", "pic-scale/avx", "pic-scale/rdm"]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512", "bench-simd-competitors"))'] }
 
 [dependencies]
-archmage = { version = "0.6", path = "../archmage", default-features = false, features = ["macros"] }
+archmage = { version = "0.7", path = "../archmage", default-features = false, features = ["macros"] }
 linear-srgb = { version = "0.4", path = "../linear-srgb", default-features = false }
 safe_unaligned_simd = "0.2.4"
 wide = { version = "1.1", default-features = false }
@@ -58,4 +58,8 @@ harness = false
 
 [[bench]]
 name = "tango_bench"
+harness = false
+
+[[bench]]
+name = "profile_linear"
 harness = false
