@@ -1,0 +1,57 @@
+   Compiling zenresize v0.1.0 (/home/lilith/work/zenresize-hoisted)
+    Finished `bench` profile [optimized] target(s) in 10.06s
+     Running benches/paired_bench.rs (target/release/deps/paired_bench-9dd0b168aefd665e)
+Paired Interleaved Resize Benchmark
+====================================
+Image: synth_1024 (1024x1024, 1.05 MP)
+Output: 512x512 (50% downscale)
+Rounds: 50 (interleaved A/B/B/A pattern)
+
+Absolute times (mean of 50 rounds):
+Library                   Time (ms)       MP/s
+------------------------ ---------- ----------
+zenresize_srgb              1.17 ±0.01        896
+zenresize_linear            6.21 ±0.04        169
+pic_scale_scalar_srgb       4.61 ±0.02        228
+pic_scale_scalar_lin        6.94 ±0.08        151
+pic_scale_safe_srgb         5.55 ±0.05        189
+pic_scale_safe_lin          4.37 ±0.05        240
+fir_srgb                    1.72 ±0.03        611
+fir_linear                  7.01 ±0.08        150
+resize_crate_srgb           3.71 ±0.18        282
+zenresize_f32               4.85 ±0.03        216
+pic_scale_safe_f32          3.49 ±0.03        300
+fir_f32                     4.38 ±0.04        239
+
+Paired comparisons (each row vs zenresize_srgb):
+Library                     Diff (ms)       95% CI   vs zenresize
+------------------------ ------------ ------------ --------------
+zenresize_linear            +4.967 ms     0.024 ms   4.99x slower
+pic_scale_scalar_srgb       +3.551 ms     0.032 ms   3.91x slower
+pic_scale_scalar_lin        +5.608 ms     0.085 ms   5.29x slower
+pic_scale_safe_srgb         +4.199 ms     0.031 ms   4.30x slower
+pic_scale_safe_lin          +3.060 ms     0.044 ms   3.43x slower
+fir_srgb                    +0.502 ms     0.017 ms   1.43x slower
+fir_linear                  +5.620 ms     0.064 ms   5.49x slower
+resize_crate_srgb           +2.464 ms     0.127 ms   2.81x slower
+zenresize_f32               +3.808 ms     0.055 ms   3.95x slower
+pic_scale_safe_f32          +2.309 ms     0.072 ms   2.76x slower
+fir_f32                     +3.313 ms     0.097 ms   3.51x slower
+
+Paired comparisons (each row vs pic_scale_srgb):
+Library                     Diff (ms)       95% CI   vs pic-scale
+------------------------ ------------ ------------ --------------
+zenresize_srgb              -3.449 ms     0.009 ms   3.93x faster
+zenresize_linear            +1.376 ms     0.035 ms   1.31x slower
+pic_scale_scalar_lin        +2.509 ms     0.109 ms   1.52x slower
+pic_scale_safe_srgb         +0.625 ms     0.028 ms   1.13x slower
+pic_scale_safe_lin          -0.542 ms     0.021 ms   1.13x faster
+fir_srgb                    -2.933 ms     0.017 ms   2.72x faster
+fir_linear                  +2.267 ms     0.071 ms   1.47x slower
+resize_crate_srgb           -1.191 ms     0.138 ms   1.37x faster
+zenresize_f32               +0.351 ms     0.068 ms   1.09x slower
+pic_scale_safe_f32          -1.196 ms     0.052 ms   1.33x faster
+fir_f32                     +0.042 ms     0.108 ms   1.01x slower
+
+Resizer (cached weights) vs one-shot:
+zenresize_resizer           1.36 ±0.02        773 MP/s
