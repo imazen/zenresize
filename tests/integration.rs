@@ -3,10 +3,7 @@
 //! Tests cover: streaming vs full-frame parity, all filter types,
 //! edge cases, stride handling, and format combinations.
 
-use zenresize::filter::Filter;
-use zenresize::pixel::{PixelFormat, ResizeConfig};
-use zenresize::resize::{resize, resize_f32};
-use zenresize::streaming::StreamingResize;
+use zenresize::{Filter, PixelFormat, ResizeConfig, StreamingResize, resize, resize_f32};
 
 fn config_srgb(in_w: u32, in_h: u32, out_w: u32, out_h: u32) -> ResizeConfig {
     ResizeConfig::builder(in_w, in_h, out_w, out_h)
@@ -630,7 +627,7 @@ fn resizer_matches_oneshot_linear_no_alpha() {
 
     let input = gradient_image(32, 32);
     let oneshot = resize(&config, &input);
-    let mut resizer = zenresize::resize::Resizer::new(&config);
+    let mut resizer = zenresize::Resizer::new(&config);
     let cached = resizer.resize(&input);
     assert_eq!(oneshot, cached, "Resizer path 1 should match one-shot path");
 }

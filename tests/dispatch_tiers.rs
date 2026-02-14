@@ -7,9 +7,7 @@
 //! for accurate results (token disabling is process-wide).
 
 use archmage::testing::{CompileTimePolicy, for_each_token_permutation};
-use zenresize::filter::Filter;
-use zenresize::pixel::{PixelFormat, ResizeConfig};
-use zenresize::resize::resize;
+use zenresize::{Filter, PixelFormat, ResizeConfig, resize};
 
 fn config_srgb(in_w: u32, in_h: u32, out_w: u32, out_h: u32) -> ResizeConfig {
     ResizeConfig::builder(in_w, in_h, out_w, out_h)

@@ -33,22 +33,21 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
-pub mod color;
-pub mod filter;
-pub mod pixel;
-pub mod resize;
-pub mod streaming;
-pub mod weights;
+pub(crate) mod color;
+pub(crate) mod filter;
+pub(crate) mod pixel;
+pub(crate) mod resize;
+pub(crate) mod streaming;
+pub(crate) mod weights;
 
 mod proven;
 mod simd;
 
-// Re-exports
-pub use filter::{Filter, InterpolationDetails};
+// Re-exports: minimal public API
+pub use filter::Filter;
 pub use pixel::{ColorSpace, PixelFormat, ResizeConfig, ResizeConfigBuilder};
 pub use resize::{Resizer, resize, resize_f32, resize_f32_into, resize_into};
 pub use streaming::StreamingResize;
-pub use weights::{F32WeightTable, I16WeightTable};
 
 #[cfg(feature = "imgref")]
 pub use resize::{resize_3ch, resize_4ch, resize_gray8};

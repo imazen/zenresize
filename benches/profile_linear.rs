@@ -74,22 +74,9 @@ fn main() {
     }
 
     // --- f32 path WITHOUT linearization (sRGB space, same f32 codepath) ---
-    // This uses the same f32 H+V filter but skips sRGB↔linear conversion.
+    // This uses the f32 filter path but skips sRGB↔linear conversion.
     // The difference from full linear = color conversion cost.
-    let config_f32_no_linear = zenresize::ResizeConfig::builder(w, h, out_w, out_h)
-        .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::Srgb8 {
-            channels: 4,
-            has_alpha: true,
-        })
-        .srgb() // sRGB space BUT has_alpha=true forces f32 path
-        .build();
-
-    // Verify this actually uses f32 path (should not hit the i16 fast path
-    // because... actually, checking: the i16 fast path triggers on !linearize && channels==4.
-    // With has_alpha=true and srgb(), linearize=false, channels=4 → hits i16 fast path!
-    // Need a different way to force f32 path without linearization.
-    // Use 3 channels instead — no i16 fast path for 3ch.
+    // Use 3 channels — no i16 fast path for 3ch, so it forces f32.
     let config_f32_no_linear = zenresize::ResizeConfig::builder(w, h, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
         .format(zenresize::PixelFormat::Srgb8 {
@@ -115,7 +102,7 @@ fn main() {
         std::hint::black_box(&result);
     }
 
-    // --- Color conversion alone ---
+    // --- Color conversion alone (using linear-srgb crate directly) ---
     let in_row_len = w as usize * 4;
     let out_row_len = out_w as usize * 4;
     let in_row = &rgba[..in_row_len];
@@ -126,14 +113,14 @@ fn main() {
     // Forward: sRGB u8 → linear f32 (1024 rows)
     for _ in 0..warmup {
         for _ in 0..h as usize {
-            zenresize::color::srgb_u8_to_linear_f32(in_row, &mut f32_buf, 4, true);
+            linear_srgb::default::srgb_u8_to_linear_slice(in_row, &mut f32_buf);
         }
     }
     let mut times_forward = Vec::with_capacity(rounds);
     for _ in 0..rounds {
         let start = Instant::now();
         for _ in 0..h as usize {
-            zenresize::color::srgb_u8_to_linear_f32(in_row, &mut f32_buf, 4, true);
+            linear_srgb::default::srgb_u8_to_linear_slice(in_row, &mut f32_buf);
         }
         times_forward.push(start.elapsed().as_secs_f64() * 1000.0);
     }
@@ -141,14 +128,14 @@ fn main() {
     // Inverse: linear f32 → sRGB u8 (512 rows)
     for _ in 0..warmup {
         for _ in 0..out_h as usize {
-            zenresize::color::linear_f32_to_srgb_u8(&f32_in, &mut u8_buf, 4, true);
+            linear_srgb::default::linear_to_srgb_u8_slice(&f32_in, &mut u8_buf);
         }
     }
     let mut times_inverse = Vec::with_capacity(rounds);
     for _ in 0..rounds {
         let start = Instant::now();
         for _ in 0..out_h as usize {
-            zenresize::color::linear_f32_to_srgb_u8(&f32_in, &mut u8_buf, 4, true);
+            linear_srgb::default::linear_to_srgb_u8_slice(&f32_in, &mut u8_buf);
         }
         times_inverse.push(start.elapsed().as_secs_f64() * 1000.0);
     }

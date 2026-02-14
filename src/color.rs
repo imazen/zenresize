@@ -62,6 +62,7 @@ pub(crate) fn linear_f32_to_srgb_u8_impl(
 }
 
 /// Convert a row of sRGB u8 pixels to f32 without gamma conversion (sRGB space).
+#[cfg(test)]
 pub fn srgb_u8_to_f32(input: &[u8], output: &mut [f32]) {
     debug_assert_eq!(input.len(), output.len());
     for (inp, out) in input.iter().zip(output.iter_mut()) {
@@ -70,6 +71,7 @@ pub fn srgb_u8_to_f32(input: &[u8], output: &mut [f32]) {
 }
 
 /// Convert a row of f32 pixels to u8 without gamma conversion (sRGB space).
+#[cfg(test)]
 pub fn f32_to_srgb_u8(input: &[f32], output: &mut [u8]) {
     debug_assert_eq!(input.len(), output.len());
     for (inp, out) in input.iter().zip(output.iter_mut()) {
@@ -80,6 +82,7 @@ pub fn f32_to_srgb_u8(input: &[f32], output: &mut [u8]) {
 /// Premultiply alpha in-place on a row of f32 RGBA pixels.
 ///
 /// Multiplies RGB channels by the alpha value.
+#[cfg(test)]
 pub fn premultiply_alpha_f32(row: &mut [f32], channels: usize) {
     debug_assert_eq!(channels, 4);
     for pixel in row.chunks_exact_mut(4) {
@@ -93,6 +96,7 @@ pub fn premultiply_alpha_f32(row: &mut [f32], channels: usize) {
 /// Unpremultiply alpha in-place on a row of f32 RGBA pixels.
 ///
 /// Divides RGB channels by the alpha value. Transparent pixels (alpha ≈ 0) are left as-is.
+#[cfg(test)]
 pub fn unpremultiply_alpha_f32(row: &mut [f32], channels: usize) {
     debug_assert_eq!(channels, 4);
     for pixel in row.chunks_exact_mut(4) {

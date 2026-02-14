@@ -184,26 +184,6 @@ Plus `LanczosSharp`, `Lanczos2Sharp`, `RobidouxFast`, `GinsengSharp`, `CubicFast
 
 Sharp variants use a slightly reduced blur factor for tighter kernels. Fast variants use smaller windows.
 
-### Weight Tables
-
-Pre-computed weight tables are available for direct access:
-
-```rust
-use zenresize::{F32WeightTable, I16WeightTable};
-use zenresize::filter::{Filter, InterpolationDetails};
-
-let filter = InterpolationDetails::create(Filter::Lanczos);
-let weights = F32WeightTable::new(100, 50, &filter); // 100→50 downscale
-
-for out_pixel in 0..weights.len() {
-    let left = weights.left[out_pixel];       // starting input pixel
-    let w = weights.weights(out_pixel);        // weight slice (normalized, sums to 1.0)
-    let padded = weights.weights_padded(out_pixel); // zero-padded to max_taps
-}
-```
-
-`I16WeightTable` provides 14-bit fixed-point weights for integer SIMD paths.
-
 ### imgref Integration
 
 With the `imgref` feature, you get typed wrappers for the `imgref` + `rgb` crates:

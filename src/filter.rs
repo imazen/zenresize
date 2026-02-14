@@ -188,6 +188,7 @@ pub struct InterpolationDetails {
     /// The filter function to use
     filter_fn: FilterFn,
     /// Sharpening goal (0.0 = none, positive = sharpen)
+    #[allow(dead_code)]
     pub sharpen_percent_goal: f32,
 }
 
@@ -363,17 +364,14 @@ impl InterpolationDetails {
     }
 
     /// Get the effective window size accounting for blur.
+    #[cfg(test)]
     #[inline]
     pub fn effective_window(&self) -> f64 {
         self.window * self.blur
     }
 
-    /// Set the sharpening goal.
-    pub fn set_sharpen_percent_goal(&mut self, goal: f32) {
-        self.sharpen_percent_goal = goal;
-    }
-
     /// Calculate the percentage of negative weight (for ringing estimation).
+    #[cfg(test)]
     pub fn calculate_percent_negative_weight(&self) -> f64 {
         let samples = 50i32;
         let step = self.window / samples as f64;

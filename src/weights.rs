@@ -337,12 +337,6 @@ impl I16WeightTable {
         &self.expanded_4ch
     }
 
-    /// Pointer to the start of the expanded_4ch buffer.
-    #[inline]
-    pub fn expanded_4ch_ptr(&self) -> *const i16 {
-        self.expanded_4ch.as_ptr()
-    }
-
     /// Number of output pixels.
     #[inline]
     pub fn len(&self) -> usize {
@@ -350,6 +344,7 @@ impl I16WeightTable {
     }
 
     /// Check if empty.
+    #[cfg(test)]
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.left.is_empty()
