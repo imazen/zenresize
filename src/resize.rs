@@ -384,15 +384,23 @@ impl Resizer {
             let intermediate = &mut self.intermediate_u8;
 
             if channels == 4 && !has_alpha {
+                let h_padding = h_weights.groups4 * 16;
                 let batch_count = in_h / 4;
                 let remainder = in_h % 4;
 
                 for batch in 0..batch_count {
                     let y0 = batch * 4;
-                    let r0 = &input[y0 * in_stride..(y0 + 1) * in_stride];
-                    let r1 = &input[(y0 + 1) * in_stride..(y0 + 2) * in_stride];
-                    let r2 = &input[(y0 + 2) * in_stride..(y0 + 3) * in_stride];
-                    let r3 = &input[(y0 + 3) * in_stride..(y0 + 4) * in_stride];
+                    // Extend each row slice to include SIMD padding from adjacent
+                    // rows. Zero-padded weights ensure padding data doesn't affect
+                    // results, but enables the fast global-guard kernel path.
+                    let r0 = &input[y0 * in_stride
+                        ..(y0 * in_stride + in_row_len + h_padding).min(input.len())];
+                    let r1 = &input[(y0 + 1) * in_stride
+                        ..((y0 + 1) * in_stride + in_row_len + h_padding).min(input.len())];
+                    let r2 = &input[(y0 + 2) * in_stride
+                        ..((y0 + 2) * in_stride + in_row_len + h_padding).min(input.len())];
+                    let r3 = &input[(y0 + 3) * in_stride
+                        ..((y0 + 3) * in_stride + in_row_len + h_padding).min(input.len())];
 
                     let out_base = y0 * h_row_len;
                     let (o0, rest) = intermediate[out_base..].split_at_mut(h_row_len);
@@ -406,7 +414,8 @@ impl Resizer {
                 for i in 0..remainder {
                     let y = batch_count * 4 + i;
                     let in_start = y * in_stride;
-                    let in_row = &input[in_start..in_start + in_row_len];
+                    let in_end = (in_start + in_row_len + h_padding).min(input.len());
+                    let in_row = &input[in_start..in_end];
                     let out_start = y * h_row_len;
 
                     simd::filter_h_u8_i16(
