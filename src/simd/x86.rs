@@ -11,6 +11,7 @@ use core::arch::x86_64::*;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
+use crate::proven::{idx, idx_mut, sub};
 use crate::weights::{F32WeightTable, I16_PRECISION, I16WeightTable};
 use archmage::X64V3Token;
 
@@ -516,12 +517,12 @@ fn filter_h_u8_4ch(_token: X64V3Token, input: &[u8], output: &mut [u8], weights:
         let left = weights.left[out_x] as usize;
         let byte_start = left * 4;
 
-        // Pre-slice input window and weight window: ONE bounds check each per pixel.
-        // Inner loop then iterates chunks with no bounds checks.
-        let input_window = &input[byte_start..byte_start + groups4 * 16];
+        // Pre-slice input window and weight window: bounds proven by
+        // the `has_full_padding` guard above.
+        let input_window = sub(input, byte_start..byte_start + groups4 * 16);
         let (in_chunks, _) = input_window.as_chunks::<16>();
         let ew_base = out_x * groups4;
-        let ew_window = &ew_chunks[ew_base..ew_base + groups4];
+        let ew_window = sub(ew_chunks, ew_base..ew_base + groups4);
 
         let mut acc = _mm256_setzero_si256();
 
@@ -709,12 +710,13 @@ fn filter_h_u8_4ch_4rows(
         let byte_end = byte_start + groups4 * 16;
         let ew_base = out_x * groups4;
 
-        // Pre-slice all 4 input windows + weight window: bounds checks here, not inner loop.
-        let (c0, _) = in0[byte_start..byte_end].as_chunks::<16>();
-        let (c1, _) = in1[byte_start..byte_end].as_chunks::<16>();
-        let (c2, _) = in2[byte_start..byte_end].as_chunks::<16>();
-        let (c3, _) = in3[byte_start..byte_end].as_chunks::<16>();
-        let ew_window = &ew_chunks[ew_base..ew_base + groups4];
+        // Pre-slice all 4 input windows + weight window: bounds proven by
+        // the `max_left + groups4*4 + 3 < in_pixels` guard above.
+        let (c0, _) = sub(in0, byte_start..byte_end).as_chunks::<16>();
+        let (c1, _) = sub(in1, byte_start..byte_end).as_chunks::<16>();
+        let (c2, _) = sub(in2, byte_start..byte_end).as_chunks::<16>();
+        let (c3, _) = sub(in3, byte_start..byte_end).as_chunks::<16>();
+        let ew_window = sub(ew_chunks, ew_base..ew_base + groups4);
 
         let mut acc0 = _mm256_setzero_si256();
         let mut acc1 = _mm256_setzero_si256();
@@ -722,27 +724,27 @@ fn filter_h_u8_4ch_4rows(
         let mut acc3 = _mm256_setzero_si256();
 
         for g in 0..groups4 {
-            let w = _mm256_loadu_si256(&ew_window[g]);
+            let w = _mm256_loadu_si256(idx(ew_window, g));
 
-            let p0 = _mm256_cvtepu8_epi16(_mm_loadu_si128(&c0[g]));
+            let p0 = _mm256_cvtepu8_epi16(_mm_loadu_si128(idx(c0, g)));
             acc0 = _mm256_add_epi32(
                 acc0,
                 _mm256_madd_epi16(_mm256_shuffle_epi8(p0, ymm_shuffle), w),
             );
 
-            let p1 = _mm256_cvtepu8_epi16(_mm_loadu_si128(&c1[g]));
+            let p1 = _mm256_cvtepu8_epi16(_mm_loadu_si128(idx(c1, g)));
             acc1 = _mm256_add_epi32(
                 acc1,
                 _mm256_madd_epi16(_mm256_shuffle_epi8(p1, ymm_shuffle), w),
             );
 
-            let p2 = _mm256_cvtepu8_epi16(_mm_loadu_si128(&c2[g]));
+            let p2 = _mm256_cvtepu8_epi16(_mm_loadu_si128(idx(c2, g)));
             acc2 = _mm256_add_epi32(
                 acc2,
                 _mm256_madd_epi16(_mm256_shuffle_epi8(p2, ymm_shuffle), w),
             );
 
-            let p3 = _mm256_cvtepu8_epi16(_mm_loadu_si128(&c3[g]));
+            let p3 = _mm256_cvtepu8_epi16(_mm_loadu_si128(idx(c3, g)));
             acc3 = _mm256_add_epi32(
                 acc3,
                 _mm256_madd_epi16(_mm256_shuffle_epi8(p3, ymm_shuffle), w),
@@ -775,10 +777,10 @@ fn filter_h_u8_4ch_4rows(
         let pack23 = _mm_packs_epi32(s2, s3);
         let result = _mm_packus_epi16(pack01, pack23);
 
-        op0[out_x].copy_from_slice(&(_mm_cvtsi128_si32(result) as u32).to_ne_bytes());
-        op1[out_x].copy_from_slice(&(_mm_extract_epi32::<1>(result) as u32).to_ne_bytes());
-        op2[out_x].copy_from_slice(&(_mm_extract_epi32::<2>(result) as u32).to_ne_bytes());
-        op3[out_x].copy_from_slice(&(_mm_extract_epi32::<3>(result) as u32).to_ne_bytes());
+        idx_mut(op0, out_x).copy_from_slice(&(_mm_cvtsi128_si32(result) as u32).to_ne_bytes());
+        idx_mut(op1, out_x).copy_from_slice(&(_mm_extract_epi32::<1>(result) as u32).to_ne_bytes());
+        idx_mut(op2, out_x).copy_from_slice(&(_mm_extract_epi32::<2>(result) as u32).to_ne_bytes());
+        idx_mut(op3, out_x).copy_from_slice(&(_mm_extract_epi32::<3>(result) as u32).to_ne_bytes());
     }
 }
 
@@ -904,8 +906,9 @@ pub(crate) fn filter_v_all_u8_i16_v3(
             let mut acc_hi = _mm256_setzero_si256();
 
             for (pw, ri_pair) in paired_wts[..pairs].iter().zip(tap_rows.chunks_exact(2)) {
-                let src0 = _mm_loadu_si128(&ri_pair[0][ci]);
-                let src1 = _mm_loadu_si128(&ri_pair[1][ci]);
+                // ri_pair[0]/[1] guaranteed by chunks_exact(2); idx eliminates [ci] check.
+                let src0 = _mm_loadu_si128(idx(ri_pair[0], ci));
+                let src1 = _mm_loadu_si128(idx(ri_pair[1], ci));
 
                 let il_lo = _mm_unpacklo_epi8(src0, src1);
                 let il_hi = _mm_unpackhi_epi8(src0, src1);
@@ -918,7 +921,7 @@ pub(crate) fn filter_v_all_u8_i16_v3(
             }
 
             if odd {
-                let src = _mm_loadu_si128(&tap_rows[tap_count - 1][ci]);
+                let src = _mm_loadu_si128(idx(tap_rows[tap_count - 1], ci));
                 let zero_src = _mm_setzero_si128();
                 let il_lo = _mm_unpacklo_epi8(src, zero_src);
                 let il_hi = _mm_unpackhi_epi8(src, zero_src);
@@ -1255,9 +1258,10 @@ pub(crate) fn filter_v_all_i16_i16_v3(
             let mut acc_lo = _mm256_setzero_si256();
 
             for (pw, ri_pair) in paired_wts[..pairs].iter().zip(tap_rows.chunks_exact(2)) {
-                // Load 8 i16 from each of two rows (16 bytes each)
-                let src0 = _mm_loadu_si128(&ri_pair[0][ci]);
-                let src1 = _mm_loadu_si128(&ri_pair[1][ci]);
+                // Load 8 i16 from each of two rows (16 bytes each).
+                // ri_pair[0]/[1] guaranteed by chunks_exact(2); idx eliminates [ci] check.
+                let src0 = _mm_loadu_si128(idx(ri_pair[0], ci));
+                let src1 = _mm_loadu_si128(idx(ri_pair[1], ci));
 
                 // Interleave i16 pairs: [a0,b0, a1,b1, a2,b2, a3,b3]
                 let il_lo = _mm_unpacklo_epi16(src0, src1);
@@ -1269,7 +1273,7 @@ pub(crate) fn filter_v_all_i16_i16_v3(
             }
 
             if odd {
-                let src = _mm_loadu_si128(&tap_rows[tap_count - 1][ci]);
+                let src = _mm_loadu_si128(idx(tap_rows[tap_count - 1], ci));
                 let zero_src = _mm_setzero_si128();
                 let il_lo = _mm_unpacklo_epi16(src, zero_src);
                 let il_hi = _mm_unpackhi_epi16(src, zero_src);

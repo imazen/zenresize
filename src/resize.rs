@@ -14,6 +14,7 @@ use alloc::{vec, vec::Vec};
 use crate::color;
 use crate::filter::InterpolationDetails;
 use crate::pixel::ResizeConfig;
+use crate::proven;
 use crate::simd;
 use crate::weights::{F32WeightTable, I16WeightTable};
 
@@ -27,7 +28,7 @@ use crate::weights::{F32WeightTable, I16WeightTable};
 pub fn resize(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
     let out_row_len = config.output_row_len();
     let len = config.out_height as usize * out_row_len;
-    let mut output = vec![0u8; len];
+    let mut output = proven::alloc_output::<u8>(len);
     resize_into(config, input, &mut output);
     output
 }
@@ -501,7 +502,7 @@ impl Resizer {
     pub fn resize(&mut self, input: &[u8]) -> Vec<u8> {
         let out_row_len = self.config.output_row_len();
         let len = self.config.out_height as usize * out_row_len;
-        let mut output = vec![0u8; len];
+        let mut output = proven::alloc_output::<u8>(len);
         self.resize_into(input, &mut output);
         output
     }

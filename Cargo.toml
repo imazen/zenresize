@@ -16,9 +16,10 @@ avx512 = ["archmage/avx512"]
 imgref = ["dep:imgref", "dep:rgb"]
 # Enable SIMD features on pic-scale for benchmarks (default: scalar-only)
 bench-simd-competitors = ["pic-scale/sse", "pic-scale/avx", "pic-scale/rdm"]
+pretty-safe = []
 
 [lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512", "bench-simd-competitors"))'] }
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512", "bench-simd-competitors", "pretty-safe"))'] }
 
 [dependencies]
 archmage = { version = "0.7", path = "../archmage", default-features = false, features = ["macros"] }
