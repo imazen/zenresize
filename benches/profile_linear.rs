@@ -153,30 +153,79 @@ fn main() {
         times_inverse.push(start.elapsed().as_secs_f64() * 1000.0);
     }
 
+    // --- f32 end-to-end (f32 input → f32 output, no conversion) ---
+    let f32_rgba: Vec<f32> = rgba.iter().map(|&b| b as f32 / 255.0).collect();
+    let config_f32 = zenresize::ResizeConfig::builder(w, h, out_w, out_h)
+        .filter(zenresize::Filter::Lanczos)
+        .format(zenresize::PixelFormat::LinearF32 {
+            channels: 4,
+            has_alpha: true,
+        })
+        .build();
+
+    for _ in 0..warmup {
+        let _ = zenresize::resize_f32(&config_f32, &f32_rgba);
+    }
+    let mut times_f32_e2e = Vec::with_capacity(rounds);
+    for _ in 0..rounds {
+        let start = Instant::now();
+        let result = zenresize::resize_f32(&config_f32, &f32_rgba);
+        times_f32_e2e.push(start.elapsed().as_secs_f64() * 1000.0);
+        std::hint::black_box(&result);
+    }
+
+    // --- f32 end-to-end, no alpha ---
+    let config_f32_noalpha = zenresize::ResizeConfig::builder(w, h, out_w, out_h)
+        .filter(zenresize::Filter::Lanczos)
+        .format(zenresize::PixelFormat::LinearF32 {
+            channels: 4,
+            has_alpha: false,
+        })
+        .build();
+
+    for _ in 0..warmup {
+        let _ = zenresize::resize_f32(&config_f32_noalpha, &f32_rgba);
+    }
+    let mut times_f32_noalpha = Vec::with_capacity(rounds);
+    for _ in 0..rounds {
+        let start = Instant::now();
+        let result = zenresize::resize_f32(&config_f32_noalpha, &f32_rgba);
+        times_f32_noalpha.push(start.elapsed().as_secs_f64() * 1000.0);
+        std::hint::black_box(&result);
+    }
+
     // --- Results ---
     let linear = mean_ms(&times_linear);
     let srgb = mean_ms(&times_srgb);
     let f32_nolin = mean_ms(&times_f32_nolin);
     let fwd = mean_ms(&times_forward);
     let inv = mean_ms(&times_inverse);
+    let f32_e2e = mean_ms(&times_f32_e2e);
+    let f32_noalpha = mean_ms(&times_f32_noalpha);
 
     println!("Linear Path Phase Profile (1024→512, Lanczos, RGBA)");
     println!("=====================================================");
-    println!("Full linear resize:        {:>7.2} ms", linear);
-    println!("sRGB integer fast path:    {:>7.2} ms", srgb);
-    println!("f32 path, no linearize (3ch): {:>4.2} ms", f32_nolin);
+    println!("Full linear resize (u8→u8): {:>7.2} ms", linear);
+    println!("sRGB integer fast path:     {:>7.2} ms", srgb);
+    println!("f32 u8 path, no lin (3ch):  {:>7.2} ms", f32_nolin);
+    println!("f32→f32 (with alpha):       {:>7.2} ms", f32_e2e);
+    println!("f32→f32 (no alpha):         {:>7.2} ms", f32_noalpha);
     println!();
     println!("Color conversion:");
-    println!("  srgb→linear (1024 rows): {:>7.2} ms", fwd);
-    println!("  linear→srgb (512 rows):  {:>7.2} ms", inv);
-    println!("  Total color conv:        {:>7.2} ms", fwd + inv);
+    println!("  srgb→linear (1024 rows):  {:>7.2} ms", fwd);
+    println!("  linear→srgb (512 rows):   {:>7.2} ms", inv);
+    println!("  Total color conv:         {:>7.2} ms", fwd + inv);
     println!();
     println!(
-        "Estimated f32 filter time: {:>7.2} ms (linear - color conv)",
+        "Estimated f32 filter time:  {:>7.2} ms (linear - color conv)",
         linear - fwd - inv
     );
     println!(
-        "f32/i16 filter ratio:      {:>7.1}x",
+        "f32/i16 filter ratio:       {:>7.1}x",
         (linear - fwd - inv) / srgb
+    );
+    println!(
+        "f32 e2e / i16 ratio:        {:>7.1}x",
+        f32_e2e / srgb
     );
 }
