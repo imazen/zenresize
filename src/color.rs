@@ -5,10 +5,27 @@
 
 /// Convert a row of sRGB u8 pixels to linear f32.
 ///
-/// Uses LUT-based batch conversion (~20x faster than per-pixel scalar powf).
-/// Alpha channels (if `has_alpha` is true and `channels` is 4) are copied
-/// as-is (divided by 255.0 but not gamma-converted).
+/// Dispatches through archmage `incant!` for token-based SIMD dispatch.
 pub fn srgb_u8_to_linear_f32(input: &[u8], output: &mut [f32], channels: usize, has_alpha: bool) {
+    crate::simd::srgb_u8_to_linear_f32(input, output, channels, has_alpha);
+}
+
+/// Convert a row of linear f32 pixels to sRGB u8.
+///
+/// Dispatches through archmage `incant!` for token-based SIMD dispatch.
+pub fn linear_f32_to_srgb_u8(input: &[f32], output: &mut [u8], channels: usize, has_alpha: bool) {
+    crate::simd::linear_f32_to_srgb_u8(input, output, channels, has_alpha);
+}
+
+/// Implementation: sRGB u8 → linear f32 using LUT.
+///
+/// Called by all dispatch tiers (scalar, x86, neon, wasm128).
+pub(crate) fn srgb_u8_to_linear_f32_impl(
+    input: &[u8],
+    output: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
     debug_assert_eq!(input.len(), output.len());
 
     // Batch LUT conversion: all channels including alpha go through sRGB curve
@@ -22,14 +39,18 @@ pub fn srgb_u8_to_linear_f32(input: &[u8], output: &mut [f32], channels: usize, 
     }
 }
 
-/// Convert a row of linear f32 pixels to sRGB u8.
+/// Implementation: linear f32 → sRGB u8 using LUT.
 ///
-/// Uses SIMD-accelerated batch conversion.
-/// Alpha channels are copied as-is (scaled by 255 but not gamma-converted).
-pub fn linear_f32_to_srgb_u8(input: &[f32], output: &mut [u8], channels: usize, has_alpha: bool) {
+/// Called by all dispatch tiers (scalar, x86, neon, wasm128).
+pub(crate) fn linear_f32_to_srgb_u8_impl(
+    input: &[f32],
+    output: &mut [u8],
+    channels: usize,
+    has_alpha: bool,
+) {
     debug_assert_eq!(input.len(), output.len());
 
-    // SIMD batch conversion: all channels including alpha go through sRGB curve
+    // LUT batch conversion: all channels including alpha go through sRGB curve
     linear_srgb::default::linear_to_srgb_u8_slice(input, output);
 
     // Fix alpha: should be linear scale (v*255+0.5), not sRGB curve

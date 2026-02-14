@@ -98,7 +98,11 @@ fn main() {
         })
         .srgb()
         .build();
-    let rgba3: Vec<u8> = rgba.chunks_exact(4).flat_map(|c| &c[..3]).copied().collect();
+    let rgba3: Vec<u8> = rgba
+        .chunks_exact(4)
+        .flat_map(|c| &c[..3])
+        .copied()
+        .collect();
 
     for _ in 0..warmup {
         let _ = zenresize::resize(&config_f32_no_linear, &rgba3);
@@ -167,6 +171,12 @@ fn main() {
     println!("  linear→srgb (512 rows):  {:>7.2} ms", inv);
     println!("  Total color conv:        {:>7.2} ms", fwd + inv);
     println!();
-    println!("Estimated f32 filter time: {:>7.2} ms (linear - color conv)", linear - fwd - inv);
-    println!("f32/i16 filter ratio:      {:>7.1}x", (linear - fwd - inv) / srgb);
+    println!(
+        "Estimated f32 filter time: {:>7.2} ms (linear - color conv)",
+        linear - fwd - inv
+    );
+    println!(
+        "f32/i16 filter ratio:      {:>7.1}x",
+        (linear - fwd - inv) / srgb
+    );
 }

@@ -956,3 +956,27 @@ pub(crate) fn filter_v_all_u8_i16_v3(
         }
     }
 }
+
+/// Convert sRGB u8 → linear f32 using LUT.
+#[archmage::arcane]
+pub(crate) fn srgb_u8_to_linear_f32_v3(
+    _token: X64V3Token,
+    input: &[u8],
+    output: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
+    crate::color::srgb_u8_to_linear_f32_impl(input, output, channels, has_alpha);
+}
+
+/// Convert linear f32 → sRGB u8 using LUT.
+#[archmage::arcane]
+pub(crate) fn linear_f32_to_srgb_u8_v3(
+    _token: X64V3Token,
+    input: &[f32],
+    output: &mut [u8],
+    channels: usize,
+    has_alpha: bool,
+) {
+    crate::color::linear_f32_to_srgb_u8_impl(input, output, channels, has_alpha);
+}

@@ -128,3 +128,23 @@ pub(crate) fn premultiply_u8_row(input: &[u8], output: &mut [u8]) {
 pub(crate) fn unpremultiply_u8_row(row: &mut [u8]) {
     archmage::incant!(unpremultiply_u8_row(row))
 }
+
+/// Convert sRGB u8 → linear f32 (LUT-based, dispatched via token).
+pub(crate) fn srgb_u8_to_linear_f32(
+    input: &[u8],
+    output: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
+    archmage::incant!(srgb_u8_to_linear_f32(input, output, channels, has_alpha))
+}
+
+/// Convert linear f32 → sRGB u8 (LUT-based, dispatched via token).
+pub(crate) fn linear_f32_to_srgb_u8(
+    input: &[f32],
+    output: &mut [u8],
+    channels: usize,
+    has_alpha: bool,
+) {
+    archmage::incant!(linear_f32_to_srgb_u8(input, output, channels, has_alpha))
+}

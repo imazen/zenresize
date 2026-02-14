@@ -203,6 +203,28 @@ pub(crate) fn unpremultiply_u8_row_scalar(_token: ScalarToken, row: &mut [u8]) {
     }
 }
 
+/// Convert sRGB u8 → linear f32 using LUT.
+pub(crate) fn srgb_u8_to_linear_f32_scalar(
+    _token: ScalarToken,
+    input: &[u8],
+    output: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
+    crate::color::srgb_u8_to_linear_f32_impl(input, output, channels, has_alpha);
+}
+
+/// Convert linear f32 → sRGB u8 using LUT.
+pub(crate) fn linear_f32_to_srgb_u8_scalar(
+    _token: ScalarToken,
+    input: &[f32],
+    output: &mut [u8],
+    channels: usize,
+    has_alpha: bool,
+) {
+    crate::color::linear_f32_to_srgb_u8_impl(input, output, channels, has_alpha);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -96,3 +96,25 @@ pub(crate) fn premultiply_u8_row_neon(_token: NeonToken, input: &[u8], output: &
 pub(crate) fn unpremultiply_u8_row_neon(_token: NeonToken, row: &mut [u8]) {
     super::wide_kernels::unpremultiply_u8_row(row)
 }
+
+#[archmage::arcane]
+pub(crate) fn srgb_u8_to_linear_f32_neon(
+    _token: NeonToken,
+    input: &[u8],
+    output: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
+    crate::color::srgb_u8_to_linear_f32_impl(input, output, channels, has_alpha);
+}
+
+#[archmage::arcane]
+pub(crate) fn linear_f32_to_srgb_u8_neon(
+    _token: NeonToken,
+    input: &[f32],
+    output: &mut [u8],
+    channels: usize,
+    has_alpha: bool,
+) {
+    crate::color::linear_f32_to_srgb_u8_impl(input, output, channels, has_alpha);
+}
