@@ -34,6 +34,7 @@ extern crate alloc;
 
 pub(crate) mod color;
 pub(crate) mod filter;
+pub mod layout;
 pub(crate) mod pixel;
 pub(crate) mod resize;
 pub(crate) mod streaming;
@@ -44,6 +45,9 @@ mod simd;
 
 // Re-exports: minimal public API
 pub use filter::Filter;
+pub use layout::{
+    CanvasColor, Constraint, ConstraintMode, Gravity, Layout, LayoutError, Rect, SourceCrop,
+};
 pub use pixel::{PixelFormat, PixelLayout, ResizeConfig, ResizeConfigBuilder};
 pub use resize::Resizer;
 pub use streaming::StreamingResize;
