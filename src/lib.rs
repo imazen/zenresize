@@ -34,6 +34,7 @@ extern crate alloc;
 
 pub(crate) mod color;
 pub(crate) mod filter;
+#[cfg(feature = "layout")]
 pub mod layout;
 pub(crate) mod pixel;
 pub(crate) mod resize;
@@ -45,6 +46,7 @@ mod simd;
 
 // Re-exports: minimal public API
 pub use filter::Filter;
+#[cfg(feature = "layout")]
 pub use layout::{
     CanvasColor, Constraint, ConstraintMode, Gravity, Layout, LayoutError, Rect, SourceCrop,
 };

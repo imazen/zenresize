@@ -1,6 +1,6 @@
-//! Layout constraint computation for resize operations.
+//! Layout constraint computation and pipeline planning for resize operations.
 //!
-//! This module re-exports layout types from [`zenlayout`]. See that crate for
+//! This module re-exports types from [`zenlayout`]. See that crate for
 //! full documentation.
 //!
 //! # Example
@@ -17,6 +17,5 @@
 //! assert!(layout.source_crop.is_some());
 //! ```
 
-pub use zenlayout::{
-    CanvasColor, Constraint, ConstraintMode, Gravity, Layout, LayoutError, Rect, Size, SourceCrop,
-};
+// Re-export everything from zenlayout
+pub use zenlayout::*;

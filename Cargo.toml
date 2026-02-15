@@ -10,9 +10,10 @@ keywords = ["image", "resize", "resampling", "simd", "lanczos"]
 categories = ["graphics", "multimedia::images", "no-std"]
 
 [features]
-default = ["std"]
-std = ["archmage/std", "linear-srgb/std", "wide/std", "zenlayout/std"]
+default = ["std", "layout"]
+std = ["archmage/std", "linear-srgb/std", "wide/std", "zenlayout?/std"]
 avx512 = ["archmage/avx512"]
+layout = ["dep:zenlayout"]
 imgref = ["dep:imgref", "dep:rgb"]
 # Enable SIMD features on pic-scale for benchmarks (default: scalar-only)
 bench-simd-competitors = ["pic-scale/sse", "pic-scale/avx", "pic-scale/rdm"]
@@ -23,8 +24,8 @@ unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512",
 
 [dependencies]
 archmage = { version = "0.7", path = "../archmage", default-features = false, features = ["macros"] }
-zenlayout = { version = "0.1", path = "../zenlayout", default-features = false }
-linear-srgb = { version = "0.4", path = "../linear-srgb", default-features = false }
+zenlayout = { version = "0.1", path = "../zenlayout", default-features = false, optional = true }
+linear-srgb = { version = "0.5", path = "../linear-srgb", default-features = false }
 safe_unaligned_simd = "0.2.4"
 wide = { version = "1.1", default-features = false }
 imgref = { version = "1.12", optional = true }
