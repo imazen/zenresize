@@ -3,9 +3,7 @@
 //! Tests cover: streaming vs full-frame parity, all filter types,
 //! edge cases, stride handling, and format combinations.
 
-use zenresize::{
-    Filter, PixelFormat, PixelLayout, ResizeConfig, Resizer, StreamingResize,
-};
+use zenresize::{Filter, PixelFormat, PixelLayout, ResizeConfig, Resizer, StreamingResize};
 
 fn config_srgb(in_w: u32, in_h: u32, out_w: u32, out_h: u32) -> ResizeConfig {
     ResizeConfig::builder(in_w, in_h, out_w, out_h)

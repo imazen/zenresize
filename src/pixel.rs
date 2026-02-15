@@ -228,9 +228,7 @@ impl ResizeConfig {
     /// Premultiplied alpha layouts skip linearization (linearizing
     /// premultiplied sRGB data is mathematically incorrect).
     pub fn needs_linearization(&self) -> bool {
-        self.linear
-            && self.input_format.is_srgb()
-            && !self.input_format.layout().is_premultiplied()
+        self.linear && self.input_format.is_srgb() && !self.input_format.layout().is_premultiplied()
     }
 }
 
