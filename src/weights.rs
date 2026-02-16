@@ -346,6 +346,7 @@ impl I16WeightTable {
     /// Check if empty.
     #[cfg(test)]
     #[inline]
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.left.is_empty()
     }

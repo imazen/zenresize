@@ -33,6 +33,8 @@
 extern crate alloc;
 
 pub(crate) mod color;
+#[cfg(feature = "layout")]
+pub(crate) mod execute;
 pub(crate) mod filter;
 #[cfg(feature = "layout")]
 pub mod layout;
@@ -45,10 +47,13 @@ mod proven;
 mod simd;
 
 // Re-exports: minimal public API
+#[cfg(feature = "layout")]
+pub use execute::{execute, execute_layout, execute_secondary, execute_with_offer, orient_image};
 pub use filter::Filter;
 #[cfg(feature = "layout")]
 pub use layout::{
-    CanvasColor, Constraint, ConstraintMode, Gravity, Layout, LayoutError, Rect, SourceCrop,
+    CanvasColor, Constraint, ConstraintMode, DecoderOffer, DecoderRequest, Gravity, IdealLayout,
+    Layout, LayoutError, LayoutPlan, Orientation, Pipeline, Rect, Size, SourceCrop,
 };
 pub use pixel::{PixelFormat, PixelLayout, ResizeConfig, ResizeConfigBuilder};
 pub use resize::Resizer;
