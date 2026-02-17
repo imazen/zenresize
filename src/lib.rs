@@ -39,6 +39,7 @@ pub(crate) mod filter;
 #[cfg(feature = "layout")]
 pub mod layout;
 pub(crate) mod pixel;
+pub mod plane;
 pub(crate) mod resize;
 pub(crate) mod streaming;
 pub(crate) mod weights;
@@ -56,6 +57,7 @@ pub use layout::{
     Layout, LayoutError, LayoutPlan, Orientation, Pipeline, Rect, Size, SourceCrop,
 };
 pub use pixel::{PixelFormat, PixelLayout, ResizeConfig, ResizeConfigBuilder};
+pub use plane::PlaneResizer;
 pub use resize::Resizer;
 pub use streaming::StreamingResize;
 
