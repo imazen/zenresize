@@ -24,8 +24,7 @@ unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512",
 [dependencies]
 archmage = { version = "0.8.4", default-features = false, features = ["macros"] }
 zenlayout = { version = "0.1", path = "../zenlayout", default-features = false, optional = true }
-linear-srgb = { version = "0.5", path = "../linear-srgb", default-features = false }
-# Note: path dep needed until linear-srgb 0.5.5 is published with archmage 0.8.4
+linear-srgb = { version = "0.5.5", default-features = false }
 safe_unaligned_simd = "0.2.4"
 wide = { version = "1.1", default-features = false }
 imgref = "1.12"
@@ -35,7 +34,7 @@ rgb = { version = "0.8", default-features = false }
 criterion = { version = "0.8", features = ["html_reports"] }
 tango-bench = "0.6"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-linear-srgb = { version = "0.5", path = "../linear-srgb" }
+linear-srgb = "0.5.5"
 
 # Competitors (pic-scale: SIMD controlled by bench-simd-competitors feature)
 pic-scale = { version = "0.6", default-features = false, features = ["colorspaces"] }
