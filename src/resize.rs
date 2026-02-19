@@ -505,7 +505,6 @@ impl Resizer {
 // the pipeline is channel-order-agnostic. The `rgb` crate's ComponentSlice trait
 // gives us zero-copy &[u8] access to any pixel type.
 
-#[cfg(feature = "imgref")]
 mod imgref_impl {
     #[cfg(not(feature = "std"))]
     use alloc::vec::Vec;
@@ -649,7 +648,6 @@ mod imgref_impl {
     }
 }
 
-#[cfg(feature = "imgref")]
 pub use imgref_impl::{resize_3ch, resize_4ch, resize_gray8};
 
 #[cfg(test)]
@@ -776,7 +774,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "imgref")]
     #[test]
     fn test_resize_imgref_rgba() {
         use crate::resize::resize_4ch;

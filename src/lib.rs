@@ -61,5 +61,4 @@ pub use plane::PlaneResizer;
 pub use resize::Resizer;
 pub use streaming::StreamingResize;
 
-#[cfg(feature = "imgref")]
 pub use resize::{resize_3ch, resize_4ch, resize_gray8};

@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v6
 
@@ -37,8 +37,8 @@ jobs:
       - name: Test (no_std, no layout)
         run: cargo test --no-default-features --lib
 
-      - name: Test (with imgref interop)
-        run: cargo test --features imgref
+      - name: Test (pretty-safe: unchecked bounds)
+        run: cargo test --features pretty-safe
 
   # ==========================================================================
   # Native aarch64 testing
@@ -52,6 +52,7 @@ jobs:
         include:
           - { os: ubuntu-24.04-arm, name: Linux }
           - { os: macos-latest, name: macOS }
+          - { os: windows-11-arm, name: Windows }
     steps:
       - uses: actions/checkout@v6
 
@@ -63,6 +64,37 @@ jobs:
 
       - name: Test (default: std + layout)
         run: cargo test
+
+      - name: Test (pretty-safe: unchecked bounds)
+        run: cargo test --features pretty-safe
+
+  # ==========================================================================
+  # WASM SIMD128 testing
+  # ==========================================================================
+  test-wasm:
+    name: Test WASM SIMD128
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasmtime
+        run: |
+          curl https://wasmtime.dev/install.sh -sSf | bash
+          echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
+
+      - name: Test WASM (no_std)
+        env:
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: "wasmtime --dir=. --"
+          RUSTFLAGS: "-C target-feature=+simd128"
+        run: cargo test --target wasm32-wasip1 --no-default-features --lib
 
   # ==========================================================================
   # Clippy
@@ -83,6 +115,9 @@ jobs:
 
       - name: Clippy (default features)
         run: cargo clippy --all-targets -- -D warnings
+
+      - name: Clippy (pretty-safe)
+        run: cargo clippy --all-targets --features pretty-safe -- -D warnings
 
   # ==========================================================================
   # Format check

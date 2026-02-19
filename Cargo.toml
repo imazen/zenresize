@@ -14,7 +14,6 @@ default = ["std", "layout"]
 std = ["archmage/std", "linear-srgb/std", "wide/std", "zenlayout?/std"]
 avx512 = ["archmage/avx512"]
 layout = ["dep:zenlayout"]
-imgref = ["dep:imgref", "dep:rgb"]
 # Enable SIMD features on pic-scale for benchmarks (default: scalar-only)
 bench-simd-competitors = ["pic-scale/sse", "pic-scale/avx", "pic-scale/rdm"]
 pretty-safe = []
@@ -28,8 +27,8 @@ zenlayout = { version = "0.1", path = "../zenlayout", default-features = false, 
 linear-srgb = { version = "0.5", path = "../linear-srgb", default-features = false }
 safe_unaligned_simd = "0.2.4"
 wide = { version = "1.1", default-features = false }
-imgref = { version = "1.12", optional = true }
-rgb = { version = "0.8", optional = true, default-features = false }
+imgref = "1.12"
+rgb = { version = "0.8", default-features = false }
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
