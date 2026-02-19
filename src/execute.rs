@@ -181,7 +181,9 @@ pub fn execute(
     let request = DecoderRequest {
         crop: ideal.source_crop,
         target_size: ideal.layout.resize_to,
+        min_precise_decode_size: ideal.layout.resize_to,
         orientation: ideal.orientation,
+        min_precise_scaling_ratio: None,
     };
     let offer = DecoderOffer::full_decode(pre_orient.width, pre_orient.height);
     let plan = ideal.finalize(&request, &offer);
@@ -752,7 +754,9 @@ mod tests {
             decoder_request: DecoderRequest {
                 crop: None,
                 target_size: Size::new(w, h),
+                min_precise_decode_size: Size::new(w, h),
                 orientation: Orientation::Identity,
+                min_precise_scaling_ratio: None,
             },
             trim: None,
             resize_to: Size::new(w, h),
@@ -859,7 +863,9 @@ mod tests {
             decoder_request: DecoderRequest {
                 crop: None,
                 target_size: Size::new(6, 6),
+                min_precise_decode_size: Size::new(6, 6),
                 orientation: Orientation::Identity,
+                min_precise_scaling_ratio: None,
             },
             trim: Some(trim),
             resize_to: Size::new(6, 6),
