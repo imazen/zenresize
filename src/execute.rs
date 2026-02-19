@@ -178,12 +178,11 @@ pub fn execute(
         .inverse()
         .transform_dimensions(ideal.layout.source.width, ideal.layout.source.height);
 
-    let request = DecoderRequest {
-        crop: ideal.source_crop,
-        target_size: ideal.layout.resize_to,
-        min_precise_decode_size: ideal.layout.resize_to,
-        orientation: ideal.orientation,
-        min_precise_scaling_ratio: None,
+    let request = match ideal.source_crop {
+        Some(crop) => {
+            DecoderRequest::new(ideal.layout.resize_to, ideal.orientation).with_crop(crop)
+        }
+        None => DecoderRequest::new(ideal.layout.resize_to, ideal.orientation),
     };
     let offer = DecoderOffer::full_decode(pre_orient.width, pre_orient.height);
     let plan = ideal.finalize(&request, &offer);
@@ -750,23 +749,7 @@ mod tests {
         let format = PixelFormat::Srgb8(PixelLayout::Rgba);
         let img = make_test_image(w, h, ch);
 
-        let plan = LayoutPlan {
-            decoder_request: DecoderRequest {
-                crop: None,
-                target_size: Size::new(w, h),
-                min_precise_decode_size: Size::new(w, h),
-                orientation: Orientation::Identity,
-                min_precise_scaling_ratio: None,
-            },
-            trim: None,
-            resize_to: Size::new(w, h),
-            remaining_orientation: Orientation::Identity,
-            canvas: Size::new(w, h),
-            placement: (0, 0),
-            canvas_color: CanvasColor::Transparent,
-            resize_is_identity: true,
-            content_size: None,
-        };
+        let plan = LayoutPlan::identity(Size::new(w, h));
 
         let result = execute_layout(&img, w, h, &plan, format, Filter::Lanczos);
         assert_eq!(result, img);
@@ -859,23 +842,11 @@ mod tests {
         let result_a = Resizer::new(&config_a).resize(&extracted);
 
         // Method B: via execute_layout with trim (uses zero-copy stride path)
-        let plan = LayoutPlan {
-            decoder_request: DecoderRequest {
-                crop: None,
-                target_size: Size::new(6, 6),
-                min_precise_decode_size: Size::new(6, 6),
-                orientation: Orientation::Identity,
-                min_precise_scaling_ratio: None,
-            },
-            trim: Some(trim),
-            resize_to: Size::new(6, 6),
-            remaining_orientation: Orientation::Identity,
-            canvas: Size::new(6, 6),
-            placement: (0, 0),
-            canvas_color: CanvasColor::Transparent,
-            resize_is_identity: false,
-            content_size: None,
-        };
+        let target = Size::new(6, 6);
+        let plan = LayoutPlan::identity(target)
+            .with_trim(trim)
+            .with_resize_to(target)
+            .with_canvas(target);
 
         let result_b = execute_layout(&img, src_w, src_h, &plan, format, Filter::Lanczos);
 
@@ -906,11 +877,8 @@ mod tests {
             orient_image(&stored_img, stored_w, stored_h, Orientation::Rotate90, ch as u8);
         assert_eq!((ow, oh), (40, 60));
 
-        let offer = DecoderOffer {
-            dimensions: Size::new(ow, oh),
-            crop_applied: None,
-            orientation_applied: Orientation::Rotate90,
-        };
+        let offer =
+            DecoderOffer::full_decode(ow, oh).with_orientation_applied(Orientation::Rotate90);
 
         let result = execute_with_offer(&oriented_img, &ideal, &request, &offer, format, Filter::Lanczos);
         assert_eq!(result.len(), 20 * 30 * ch);
@@ -1011,11 +979,8 @@ mod tests {
         let (gm_oriented, ow, oh) =
             orient_image(&gm_stored, gm_w, gm_h, Orientation::Rotate90, ch as u8);
 
-        let gm_offer = DecoderOffer {
-            dimensions: Size::new(ow, oh),
-            crop_applied: None,
-            orientation_applied: Orientation::Rotate90,
-        };
+        let gm_offer =
+            DecoderOffer::full_decode(ow, oh).with_orientation_applied(Orientation::Rotate90);
 
         // Step 3: execute with offer — same function as primary
         let result_negotiated = execute_with_offer(
