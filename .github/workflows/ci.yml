@@ -12,8 +12,11 @@ env:
   CI: true
 
 jobs:
-  test:
-    name: Test (${{ matrix.os }})
+  # ==========================================================================
+  # Native x86_64 testing
+  # ==========================================================================
+  test-x64:
+    name: Test x64 (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -21,39 +24,99 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Test
-        run: cargo test --all-features
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Test (default: std + layout)
+        run: cargo test
+
+      - name: Test (no_std, no layout)
+        run: cargo test --no-default-features --lib
+
+      - name: Test (with imgref interop)
+        run: cargo test --features imgref
+
+  # ==========================================================================
+  # Native aarch64 testing
+  # ==========================================================================
+  test-aarch64:
+    name: Test aarch64 (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04-arm, name: Linux }
+          - { os: macos-latest, name: macOS }
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Test (default: std + layout)
+        run: cargo test
+
+  # ==========================================================================
+  # Clippy
+  # ==========================================================================
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets --all-features -- -D warnings
 
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Clippy (default features)
+        run: cargo clippy --all-targets -- -D warnings
+
+  # ==========================================================================
+  # Format check
+  # ==========================================================================
   fmt:
     name: Format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - run: cargo fmt --all -- --check
 
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+  # ==========================================================================
+  # MSRV check
+  # ==========================================================================
   msrv:
     name: MSRV (1.93)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
+
+      - name: Install Rust 1.93
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.93"
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check MSRV
+        run: cargo check

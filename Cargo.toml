@@ -35,7 +35,7 @@ rgb = { version = "0.8", optional = true, default-features = false }
 criterion = { version = "0.8", features = ["html_reports"] }
 tango-bench = "0.6"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-linear-srgb = { path = "../linear-srgb" }
+linear-srgb = { version = "0.5", path = "../linear-srgb" }
 
 # Competitors (pic-scale: SIMD controlled by bench-simd-competitors feature)
 pic-scale = { version = "0.6", default-features = false, features = ["colorspaces"] }
