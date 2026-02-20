@@ -33,6 +33,7 @@
 extern crate alloc;
 
 pub(crate) mod color;
+pub mod composite;
 #[cfg(feature = "layout")]
 pub(crate) mod execute;
 pub(crate) mod filter;
@@ -60,5 +61,10 @@ pub use pixel::{PixelFormat, PixelLayout, ResizeConfig, ResizeConfigBuilder};
 pub use plane::PlaneResizer;
 pub use resize::Resizer;
 pub use streaming::StreamingResize;
+
+pub use composite::{
+    Background, CompositeError, NoBackground, SliceBackground, SolidBackground,
+    StreamedBackground,
+};
 
 pub use resize::{resize_3ch, resize_4ch, resize_gray8};
