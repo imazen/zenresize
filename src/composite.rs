@@ -453,9 +453,7 @@ mod tests {
     fn slice_background_fill_row() {
         // 3 rows of 2 RGBA pixels each
         let row_len = 2 * 4;
-        let data: Vec<f32> = (0..3 * row_len)
-            .map(|i| i as f32 * 0.01)
-            .collect();
+        let data: Vec<f32> = (0..3 * row_len).map(|i| i as f32 * 0.01).collect();
         let mut bg = SliceBackground::new(&data, row_len);
 
         let mut dst = vec![0.0f32; row_len];

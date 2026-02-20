@@ -416,8 +416,16 @@ pub fn execute_layout_with_background<B: Background>(
     };
 
     // Even for identity resize, run through Resizer to get composite applied.
-    let actual_rw = if plan.resize_is_identity { orient_w } else { rw };
-    let actual_rh = if plan.resize_is_identity { orient_h } else { rh };
+    let actual_rw = if plan.resize_is_identity {
+        orient_w
+    } else {
+        rw
+    };
+    let actual_rh = if plan.resize_is_identity {
+        orient_h
+    } else {
+        rh
+    };
 
     let resized = {
         let builder = crate::ResizeConfig::builder(orient_w, orient_h, actual_rw, actual_rh)
@@ -1415,8 +1423,7 @@ mod tests {
 
         let (ideal, request) = Pipeline::new(src_w, src_h)
             .constrain(
-                Constraint::new(ConstraintMode::FitPad, 80, 80)
-                    .canvas_color(CanvasColor::white()),
+                Constraint::new(ConstraintMode::FitPad, 80, 80).canvas_color(CanvasColor::white()),
             )
             .plan()
             .unwrap();
@@ -1430,16 +1437,9 @@ mod tests {
         let py = plan.placement.1; // vertical offset (should be 20)
 
         let bg = crate::composite::SolidBackground::white(format.layout());
-        let result = execute_layout_with_background(
-            &img,
-            src_w,
-            src_h,
-            &plan,
-            format,
-            Filter::Lanczos,
-            bg,
-        )
-        .unwrap();
+        let result =
+            execute_layout_with_background(&img, src_w, src_h, &plan, format, Filter::Lanczos, bg)
+                .unwrap();
 
         assert_eq!(result.len(), 80 * 80 * ch);
 
@@ -1459,7 +1459,10 @@ mod tests {
         // With 50% alpha over white: out ≈ fg * 0.5 + white * 0.5
         // Not testing exact values due to sRGB conversion, just that it's not pure white
         assert!(content_pixel[0] > 200, "red channel should be bright");
-        assert!(content_pixel[0] < 255, "red channel should not be pure white");
+        assert!(
+            content_pixel[0] < 255,
+            "red channel should not be pure white"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1488,8 +1491,7 @@ mod tests {
         )
         .unwrap();
 
-        let transparent_bg =
-            crate::composite::SolidBackground::transparent(format.layout());
+        let transparent_bg = crate::composite::SolidBackground::transparent(format.layout());
         let result_transparent = execute_layout_with_background(
             &img,
             w,
@@ -1520,15 +1522,7 @@ mod tests {
         let plan = ideal.finalize(&request, &offer);
 
         let bg = crate::composite::SolidBackground::white(format.layout());
-        let result = execute_layout_with_background(
-            &img,
-            w,
-            h,
-            &plan,
-            format,
-            Filter::Lanczos,
-            bg,
-        );
+        let result = execute_layout_with_background(&img, w, h, &plan, format, Filter::Lanczos, bg);
 
         assert!(matches!(result, Err(CompositeError::PremultipliedInput)));
     }

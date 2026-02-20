@@ -66,8 +66,7 @@ pub use resize::Resizer;
 pub use streaming::StreamingResize;
 
 pub use composite::{
-    Background, CompositeError, NoBackground, SliceBackground, SolidBackground,
-    StreamedBackground,
+    Background, CompositeError, NoBackground, SliceBackground, SolidBackground, StreamedBackground,
 };
 
 pub use resize::{resize_3ch, resize_4ch, resize_gray8};

@@ -915,8 +915,9 @@ mod tests {
         }
 
         let output_new = Resizer::new(&config).resize(&input);
-        let output_bg =
-            Resizer::with_background(&config, NoBackground).unwrap().resize(&input);
+        let output_bg = Resizer::with_background(&config, NoBackground)
+            .unwrap()
+            .resize(&input);
         assert_eq!(output_new, output_bg);
     }
 
@@ -939,7 +940,9 @@ mod tests {
         }
 
         let bg = SolidBackground::white(PixelLayout::Rgba);
-        let output = Resizer::with_background(&config, bg).unwrap().resize(&input);
+        let output = Resizer::with_background(&config, bg)
+            .unwrap()
+            .resize(&input);
         assert_eq!(output.len(), 10 * 10 * 4);
 
         for pixel in output.chunks_exact(4) {
@@ -966,7 +969,9 @@ mod tests {
 
         // Resizer path
         let bg1 = SolidBackground::white(PixelLayout::Rgba);
-        let resizer_output = Resizer::with_background(&config, bg1).unwrap().resize(&input);
+        let resizer_output = Resizer::with_background(&config, bg1)
+            .unwrap()
+            .resize(&input);
 
         // Streaming path
         use crate::streaming::StreamingResize;
@@ -986,7 +991,11 @@ mod tests {
 
         assert_eq!(resizer_output.len(), streaming_output.len());
         // Allow small differences due to path/precision differences
-        for (i, (&a, &b)) in resizer_output.iter().zip(streaming_output.iter()).enumerate() {
+        for (i, (&a, &b)) in resizer_output
+            .iter()
+            .zip(streaming_output.iter())
+            .enumerate()
+        {
             assert!(
                 (a as i16 - b as i16).unsigned_abs() <= 2,
                 "mismatch at byte {}: resizer={}, streaming={}",
