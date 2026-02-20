@@ -10,6 +10,7 @@
 use alloc::{vec, vec::Vec};
 
 use crate::color;
+use crate::composite::{self, Background, CompositeError, NoBackground};
 use crate::filter::InterpolationDetails;
 use crate::pixel::ResizeConfig;
 use crate::simd;
@@ -23,7 +24,11 @@ use crate::weights::F32WeightTable;
 /// identically. The sRGB transfer function is the same for R, G, and B,
 /// and the convolution kernels just operate on N floats per pixel. Pass
 /// BGRA data straight through — no swizzle needed.
-pub struct StreamingResize {
+///
+/// The generic parameter `B` controls background compositing. The default
+/// [`NoBackground`] eliminates all composite code at compile time (zero overhead).
+/// Use [`with_background()`](Self::with_background) to enable source-over compositing.
+pub struct StreamingResize<B: Background = NoBackground> {
     config: ResizeConfig,
     h_weights: F32WeightTable,
     v_weights: F32WeightTable,
@@ -51,12 +56,46 @@ pub struct StreamingResize {
     output_queue: Vec<Vec<u8>>,
     /// Queue of f32 output rows.
     output_queue_f32: Vec<Vec<f32>>,
+
+    /// Background for compositing.
+    background: B,
+    /// Row buffer for non-solid backgrounds. Empty for NoBackground and SolidBackground.
+    composite_bg_row: Vec<f32>,
 }
 
-impl StreamingResize {
-    /// Create a new streaming resizer.
+impl StreamingResize<NoBackground> {
+    /// Create a new streaming resizer (no background compositing).
     pub fn new(config: &ResizeConfig) -> Self {
+        Self::new_inner(config, NoBackground, false)
+    }
+}
+
+impl<B: Background> StreamingResize<B> {
+    /// Create a streaming resizer with background compositing.
+    ///
+    /// Performs source-over compositing between the resized foreground and the
+    /// given background. The compositing happens in premultiplied linear f32
+    /// space, between the vertical filter and unpremultiply.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CompositeError::PremultipliedInput`] if the input format
+    /// is `RgbaPremul` (compositing premultiplied input is mathematically incorrect).
+    pub fn with_background(config: &ResizeConfig, background: B) -> Result<Self, CompositeError> {
+        if config.input_format.layout().is_premultiplied() {
+            return Err(CompositeError::PremultipliedInput);
+        }
+        Ok(Self::new_inner(config, background, true))
+    }
+
+    fn new_inner(config: &ResizeConfig, background: B, has_composite: bool) -> Self {
         config.validate().expect("invalid resize config");
+
+        let mut config = config.clone();
+        // Compositing requires linear f32 path
+        if has_composite && !background.is_transparent() {
+            config.linear = true;
+        }
 
         let filter = InterpolationDetails::create(config.filter);
         let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
@@ -78,8 +117,17 @@ impl StreamingResize {
             vec![0.0f32; config.in_width as usize * channels + h_weights.max_taps * channels];
         let temp_output_f32 = vec![0.0f32; row_len];
 
+        // Only allocate bg row buffer for non-solid, non-transparent backgrounds
+        let needs_bg_row =
+            has_composite && !background.is_transparent() && background.solid_pixel().is_none();
+        let composite_bg_row = if needs_bg_row {
+            vec![0.0f32; row_len]
+        } else {
+            Vec::new()
+        };
+
         Self {
-            config: config.clone(),
+            config,
             h_weights,
             v_weights,
             channels,
@@ -94,7 +142,14 @@ impl StreamingResize {
             output_rows_produced: 0,
             output_queue: Vec::new(),
             output_queue_f32: Vec::new(),
+            background,
+            composite_bg_row,
         }
+    }
+
+    /// Mutable reference to the background (e.g., for pushing rows to [`StreamedBackground`]).
+    pub fn background_mut(&mut self) -> &mut B {
+        &mut self.background
     }
 
     /// How many input rows must be pushed before the first output row.
@@ -275,6 +330,15 @@ impl StreamingResize {
 
         simd::filter_v_row_f32(&rows, &mut self.temp_output_f32[..row_len], weights);
 
+        // === Composite: source-over onto background ===
+        composite::composite_dispatch(
+            &mut self.temp_output_f32[..row_len],
+            &mut self.background,
+            &mut self.composite_bg_row,
+            out_y,
+            self.channels as u8,
+        );
+
         if self.needs_premul {
             simd::unpremultiply_alpha_row(&mut self.temp_output_f32[..row_len]);
         }
@@ -305,6 +369,7 @@ impl StreamingResize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::composite::SolidBackground;
     use crate::filter::Filter;
     use crate::pixel::{PixelFormat, PixelLayout};
 
@@ -418,5 +483,125 @@ mod tests {
         assert_eq!(config.sharpen, 0.0);
         assert_eq!(config.in_stride, 0);
         assert_eq!(config.out_stride, 0);
+    }
+
+    // === Composite tests ===
+
+    #[test]
+    fn no_background_matches_new() {
+        let config = make_config(20, 20, 10, 10);
+        let mut row = vec![0u8; 20 * 4];
+        for pixel in row.chunks_exact_mut(4) {
+            pixel[0] = 128;
+            pixel[1] = 64;
+            pixel[2] = 32;
+            pixel[3] = 200;
+        }
+
+        // Path A: new()
+        let mut r1 = StreamingResize::new(&config);
+        for _ in 0..20 {
+            r1.push_row(&row);
+        }
+        r1.finish();
+
+        // Path B: with_background(NoBackground)
+        let mut r2 = StreamingResize::with_background(&config, NoBackground).unwrap();
+        for _ in 0..20 {
+            r2.push_row(&row);
+        }
+        r2.finish();
+
+        let mut rows1 = Vec::new();
+        let mut rows2 = Vec::new();
+        while let Some(r) = r1.next_output_row() {
+            rows1.push(r);
+        }
+        while let Some(r) = r2.next_output_row() {
+            rows2.push(r);
+        }
+        assert_eq!(rows1, rows2);
+    }
+
+    #[test]
+    fn transparent_background_matches_no_background() {
+        let config = make_config(20, 20, 10, 10);
+        let mut row = vec![0u8; 20 * 4];
+        for pixel in row.chunks_exact_mut(4) {
+            pixel[0] = 100;
+            pixel[1] = 150;
+            pixel[2] = 200;
+            pixel[3] = 180;
+        }
+
+        let mut r1 = StreamingResize::new(&config);
+        for _ in 0..20 {
+            r1.push_row(&row);
+        }
+        r1.finish();
+
+        let bg = SolidBackground::transparent(PixelLayout::Rgba);
+        let mut r2 = StreamingResize::with_background(&config, bg).unwrap();
+        for _ in 0..20 {
+            r2.push_row(&row);
+        }
+        r2.finish();
+
+        let mut rows1 = Vec::new();
+        let mut rows2 = Vec::new();
+        while let Some(r) = r1.next_output_row() {
+            rows1.push(r);
+        }
+        while let Some(r) = r2.next_output_row() {
+            rows2.push(r);
+        }
+        assert_eq!(rows1, rows2);
+    }
+
+    #[test]
+    fn solid_opaque_bg_makes_output_opaque() {
+        let config = ResizeConfig::builder(10, 10, 10, 10)
+            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .linear()
+            .build();
+
+        // Semi-transparent input
+        let mut row = vec![0u8; 10 * 4];
+        for pixel in row.chunks_exact_mut(4) {
+            pixel[0] = 128;
+            pixel[1] = 64;
+            pixel[2] = 32;
+            pixel[3] = 128; // 50% alpha
+        }
+
+        let bg = SolidBackground::white(PixelLayout::Rgba);
+        let mut resizer = StreamingResize::with_background(&config, bg).unwrap();
+        for _ in 0..10 {
+            resizer.push_row(&row);
+        }
+        resizer.finish();
+
+        while let Some(out_row) = resizer.next_output_row() {
+            for pixel in out_row.chunks_exact(4) {
+                // Alpha must be 255 (opaque bg → opaque output)
+                assert_eq!(pixel[3], 255, "output alpha must be 255 with opaque bg");
+                // RGB should be blended: semi-transparent color over white
+                assert!(pixel[0] > 0, "R should have content");
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_premultiplied_input() {
+        let config = ResizeConfig::builder(10, 10, 5, 5)
+            .format(PixelFormat::Srgb8(PixelLayout::RgbaPremul))
+            .build();
+
+        let bg = SolidBackground::white(PixelLayout::RgbaPremul);
+        let result = StreamingResize::with_background(&config, bg);
+        assert!(
+            matches!(result, Err(CompositeError::PremultipliedInput)),
+            "expected PremultipliedInput error"
+        );
     }
 }
