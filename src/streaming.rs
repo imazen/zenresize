@@ -14,6 +14,7 @@ use crate::composite::{self, Background, CompositeError, NoBackground};
 use crate::filter::InterpolationDetails;
 use crate::pixel::ResizeConfig;
 use crate::simd;
+use crate::transfer::{Srgb, TransferFunction};
 use crate::weights::F32WeightTable;
 
 /// Streaming resize state machine.
@@ -56,6 +57,8 @@ pub struct StreamingResize<B: Background = NoBackground> {
     output_queue: Vec<Vec<u8>>,
     /// Queue of f32 output rows.
     output_queue_f32: Vec<Vec<f32>>,
+    /// Queue of u16 output rows.
+    output_queue_u16: Vec<Vec<u16>>,
 
     /// Background for compositing.
     background: B,
@@ -142,6 +145,7 @@ impl<B: Background> StreamingResize<B> {
             output_rows_produced: 0,
             output_queue: Vec::new(),
             output_queue_f32: Vec::new(),
+            output_queue_u16: Vec::new(),
             background,
             composite_bg_row,
         }
@@ -232,6 +236,49 @@ impl<B: Background> StreamingResize<B> {
         total
     }
 
+    /// Push one row of u16 input pixels. Returns number of output rows now available.
+    ///
+    /// Uses the sRGB transfer function to linearize u16 values (0-65535)
+    /// before filtering in f32 linear-light space.
+    pub fn push_row_u16(&mut self, row: &[u16]) -> u32 {
+        let pixel_len = self.config.input_row_len();
+        let stride = self.config.effective_in_stride();
+        assert!(
+            row.len() >= pixel_len.min(stride),
+            "u16 input row too short"
+        );
+
+        let pixel_data = &row[..pixel_len];
+        let tf = Srgb;
+
+        tf.u16_to_linear_f32(
+            pixel_data,
+            &mut self.temp_input_f32[..pixel_len],
+            &(),
+            self.channels,
+            self.alpha_is_last,
+            self.needs_premul,
+        );
+
+        self.push_row_internal()
+    }
+
+    /// Push multiple rows of u16 pixels from a contiguous buffer with stride.
+    pub fn push_rows_u16(&mut self, data: &[u16], stride: usize, count: u32) -> u32 {
+        let mut total = 0;
+        for y in 0..count {
+            let start = y as usize * stride;
+            let end = start + self.config.input_row_len();
+            assert!(
+                end <= data.len(),
+                "push_rows_u16: data too short for row {}",
+                y
+            );
+            total += self.push_row_u16(&data[start..end]);
+        }
+        total
+    }
+
     /// Internal: process the row in temp_input_f32.
     fn push_row_internal(&mut self) -> u32 {
         let cache_slot = self.cache_write_idx % self.cache_size;
@@ -269,6 +316,11 @@ impl<B: Background> StreamingResize<B> {
     /// Pull the next available f32 output row.
     pub fn next_output_row_f32(&mut self) -> Option<Vec<f32>> {
         self.output_queue_f32.pop()
+    }
+
+    /// Pull the next available u16 output row.
+    pub fn next_output_row_u16(&mut self) -> Option<Vec<u16>> {
+        self.output_queue_u16.pop()
     }
 
     /// Total output rows produced so far.
@@ -356,6 +408,19 @@ impl<B: Background> StreamingResize<B> {
                 simd::f32_to_u8_row(&self.temp_output_f32[..row_len], &mut out_row);
             }
             self.output_queue.insert(0, out_row);
+        } else if self.config.output_format.is_u16() {
+            // Unpremultiply already happened above, so pass false here
+            let tf = Srgb;
+            let mut out_row = vec![0u16; row_len];
+            tf.linear_f32_to_u16(
+                &self.temp_output_f32[..row_len],
+                &mut out_row,
+                &(),
+                self.channels,
+                self.alpha_is_last,
+                false,
+            );
+            self.output_queue_u16.insert(0, out_row);
         } else {
             let out_row = self.temp_output_f32[..row_len].to_vec();
             self.output_queue_f32.insert(0, out_row);
@@ -603,5 +668,134 @@ mod tests {
             matches!(result, Err(CompositeError::PremultipliedInput)),
             "expected PremultipliedInput error"
         );
+    }
+
+    // === u16 tests ===
+
+    #[test]
+    fn test_streaming_u16_constant_color() {
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .filter(Filter::Lanczos)
+            .format(PixelFormat::Encoded16(PixelLayout::Rgba))
+            .build();
+
+        let mut resizer = StreamingResize::new(&config);
+
+        let mut row = vec![0u16; 20 * 4];
+        for pixel in row.chunks_exact_mut(4) {
+            pixel[0] = 32768;
+            pixel[1] = 32768;
+            pixel[2] = 32768;
+            pixel[3] = 65535;
+        }
+
+        for _ in 0..20 {
+            resizer.push_row_u16(&row);
+        }
+        resizer.finish();
+
+        let mut total_rows = 0;
+        while let Some(out_row) = resizer.next_output_row_u16() {
+            total_rows += 1;
+            for pixel in out_row.chunks_exact(4) {
+                assert!(
+                    (pixel[0] as i32 - 32768).unsigned_abs() <= 100,
+                    "R off: {} (expected ~32768)",
+                    pixel[0]
+                );
+                assert!(
+                    (pixel[3] as i32 - 65535).unsigned_abs() <= 1,
+                    "A off: {} (expected 65535)",
+                    pixel[3]
+                );
+            }
+        }
+        assert_eq!(total_rows, 10);
+    }
+
+    #[test]
+    fn test_streaming_u16_matches_fullframe() {
+        let config = ResizeConfig::builder(40, 40, 20, 20)
+            .filter(Filter::Lanczos)
+            .format(PixelFormat::Encoded16(PixelLayout::Rgba))
+            .build();
+
+        // Gradient input
+        let mut input = vec![0u16; 40 * 40 * 4];
+        for y in 0..40 {
+            for x in 0..40 {
+                let idx = (y * 40 + x) * 4;
+                input[idx] = ((x * 65535) / 39) as u16;
+                input[idx + 1] = ((y * 65535) / 39) as u16;
+                input[idx + 2] = 32768;
+                input[idx + 3] = 65535;
+            }
+        }
+
+        // Fullframe
+        let fullframe = {
+            use crate::resize::Resizer;
+            Resizer::new(&config).resize_u16(&input)
+        };
+
+        // Streaming
+        let mut resizer = StreamingResize::new(&config);
+        for y in 0..40 {
+            let start = y * 40 * 4;
+            let end = start + 40 * 4;
+            resizer.push_row_u16(&input[start..end]);
+        }
+        resizer.finish();
+
+        let mut streaming = Vec::new();
+        while let Some(row) = resizer.next_output_row_u16() {
+            streaming.extend_from_slice(&row);
+        }
+
+        assert_eq!(fullframe.len(), streaming.len());
+        for (i, (&a, &b)) in fullframe.iter().zip(streaming.iter()).enumerate() {
+            assert!(
+                (a as i32 - b as i32).unsigned_abs() <= 1,
+                "mismatch at element {}: fullframe={}, streaming={}",
+                i,
+                a,
+                b
+            );
+        }
+    }
+
+    #[test]
+    fn test_streaming_u16_rgb_3ch() {
+        let config = ResizeConfig::builder(16, 16, 8, 8)
+            .filter(Filter::Lanczos)
+            .format(PixelFormat::Encoded16(PixelLayout::Rgb))
+            .build();
+
+        let mut resizer = StreamingResize::new(&config);
+
+        let mut row = vec![0u16; 16 * 3];
+        for pixel in row.chunks_exact_mut(3) {
+            pixel[0] = 40000;
+            pixel[1] = 20000;
+            pixel[2] = 60000;
+        }
+
+        for _ in 0..16 {
+            resizer.push_row_u16(&row);
+        }
+        resizer.finish();
+
+        let mut total_rows = 0;
+        while let Some(out_row) = resizer.next_output_row_u16() {
+            total_rows += 1;
+            for pixel in out_row.chunks_exact(3) {
+                assert!(
+                    (pixel[0] as i32 - 40000).unsigned_abs() <= 200,
+                    "R off: {}",
+                    pixel[0]
+                );
+            }
+        }
+        assert_eq!(total_rows, 8);
     }
 }
