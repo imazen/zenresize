@@ -35,6 +35,7 @@ extern crate alloc;
 pub(crate) mod color;
 pub mod composite;
 pub(crate) mod transfer;
+pub(crate) mod working;
 #[cfg(feature = "layout")]
 pub(crate) mod execute;
 pub(crate) mod filter;
