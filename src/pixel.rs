@@ -1,4 +1,46 @@
-//! Pixel format descriptors and color space configuration.
+//! Pixel format descriptors, element types, and color space configuration.
+
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
+// =============================================================================
+// Element trait
+// =============================================================================
+
+/// Pixel element type.
+///
+/// Implemented for `u8`, `u16`, and `f32`. Determines the memory layout of
+/// input and output pixel data. The resize pipeline converts elements to a
+/// working type internally — see the `WorkingType` trait.
+pub trait Element: Copy + Default + Send + Sync + 'static {
+    /// Allocate a zeroed output buffer of the given length.
+    fn alloc_output(len: usize) -> Vec<Self>;
+}
+
+impl Element for u8 {
+    #[inline]
+    fn alloc_output(len: usize) -> Vec<Self> {
+        crate::proven::alloc_output::<u8>(len)
+    }
+}
+
+impl Element for u16 {
+    #[inline]
+    fn alloc_output(len: usize) -> Vec<Self> {
+        vec![0u16; len]
+    }
+}
+
+impl Element for f32 {
+    #[inline]
+    fn alloc_output(len: usize) -> Vec<Self> {
+        vec![0.0f32; len]
+    }
+}
+
+// =============================================================================
+// PixelLayout
+// =============================================================================
 
 /// Pixel memory layout.
 ///
@@ -22,6 +64,9 @@ pub enum PixelLayout {
     /// 4-channel with premultiplied alpha.
     /// Skips premultiply/unpremultiply — data is filtered as-is.
     RgbaPremul,
+    /// 4-channel CMYK. No alpha — all 4 channels are color data.
+    /// Filtered identically to Rgbx (each channel independently).
+    Cmyk,
 }
 
 impl PixelLayout {
@@ -31,7 +76,7 @@ impl PixelLayout {
         match self {
             Self::Gray => 1,
             Self::Rgb => 3,
-            Self::Rgbx | Self::Rgba | Self::RgbaPremul => 4,
+            Self::Rgbx | Self::Rgba | Self::RgbaPremul | Self::Cmyk => 4,
         }
     }
 
@@ -79,6 +124,12 @@ pub enum PixelFormat {
     Srgb8(PixelLayout),
     /// Linear light f32 pixels (HDR, scientific, pipeline use).
     LinearF32(PixelLayout),
+    /// Transfer-function-encoded u16 pixels.
+    ///
+    /// Used for 16-bit sRGB PNG and other 16-bit encoded formats.
+    /// Values span the full 0-65535 range. The transfer function
+    /// (sRGB, PQ, HLG, etc.) is specified separately on the Resizer.
+    Encoded16(PixelLayout),
 }
 
 impl PixelFormat {
@@ -86,7 +137,7 @@ impl PixelFormat {
     #[inline]
     pub fn layout(&self) -> PixelLayout {
         match self {
-            Self::Srgb8(layout) | Self::LinearF32(layout) => *layout,
+            Self::Srgb8(layout) | Self::LinearF32(layout) | Self::Encoded16(layout) => *layout,
         }
     }
 
@@ -114,6 +165,12 @@ impl PixelFormat {
         matches!(self, Self::Srgb8(..))
     }
 
+    /// Whether this is a u16-based format.
+    #[inline]
+    pub fn is_u16(&self) -> bool {
+        matches!(self, Self::Encoded16(..))
+    }
+
     /// Whether this is an f32-based format.
     #[inline]
     pub fn is_f32(&self) -> bool {
@@ -130,6 +187,22 @@ impl PixelFormat {
     #[inline]
     pub fn is_linear(&self) -> bool {
         matches!(self, Self::LinearF32(..))
+    }
+
+    /// Bytes per element for this format.
+    #[inline]
+    pub fn bytes_per_element(&self) -> usize {
+        match self {
+            Self::Srgb8(..) => 1,
+            Self::Encoded16(..) => 2,
+            Self::LinearF32(..) => 4,
+        }
+    }
+
+    /// Bytes per pixel.
+    #[inline]
+    pub fn bytes_per_pixel(&self) -> usize {
+        self.bytes_per_element() * self.components_per_pixel()
     }
 }
 
