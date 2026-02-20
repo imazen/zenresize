@@ -57,11 +57,7 @@ pub(crate) trait WorkingType: Send + Sync + 'static {
     ///
     /// `rows` are references to horizontal-filtered intermediate rows.
     /// `weights` are the per-tap filter weights for this output row.
-    fn filter_v_row(
-        rows: &[&[Self::Value]],
-        output: &mut [Self::Value],
-        weights: &[f32],
-    );
+    fn filter_v_row(rows: &[&[Self::Value]], output: &mut [Self::Value], weights: &[f32]);
 
     /// Batch vertical filter: all output rows at once from the intermediate buffer.
     ///
@@ -99,20 +95,11 @@ impl WorkingType for U8Work {
         I16WeightTable::new(in_size, out_size, filter)
     }
 
-    fn filter_h_row(
-        input: &[u8],
-        output: &mut [u8],
-        weights: &I16WeightTable,
-        channels: usize,
-    ) {
+    fn filter_h_row(input: &[u8], output: &mut [u8], weights: &I16WeightTable, channels: usize) {
         simd::filter_h_u8_i16(input, output, weights, channels);
     }
 
-    fn filter_v_row(
-        _rows: &[&[u8]],
-        _output: &mut [u8],
-        _weights: &[f32],
-    ) {
+    fn filter_v_row(_rows: &[&[u8]], _output: &mut [u8], _weights: &[f32]) {
         // U8Work v-row not used — batch only. Panic if called.
         unimplemented!("U8Work uses batch vertical pass only");
     }
@@ -174,20 +161,11 @@ impl WorkingType for I16Work {
         I16WeightTable::new(in_size, out_size, filter)
     }
 
-    fn filter_h_row(
-        input: &[i16],
-        output: &mut [i16],
-        weights: &I16WeightTable,
-        channels: usize,
-    ) {
+    fn filter_h_row(input: &[i16], output: &mut [i16], weights: &I16WeightTable, channels: usize) {
         simd::filter_h_i16_i16(input, output, weights, channels);
     }
 
-    fn filter_v_row(
-        _rows: &[&[i16]],
-        _output: &mut [i16],
-        _weights: &[f32],
-    ) {
+    fn filter_v_row(_rows: &[&[i16]], _output: &mut [i16], _weights: &[f32]) {
         unimplemented!("I16Work uses batch vertical pass only");
     }
 
@@ -226,20 +204,11 @@ impl WorkingType for F32Work {
         F32WeightTable::new(in_size, out_size, filter)
     }
 
-    fn filter_h_row(
-        input: &[f32],
-        output: &mut [f32],
-        weights: &F32WeightTable,
-        channels: usize,
-    ) {
+    fn filter_h_row(input: &[f32], output: &mut [f32], weights: &F32WeightTable, channels: usize) {
         simd::filter_h_row_f32(input, output, weights, channels);
     }
 
-    fn filter_v_row(
-        rows: &[&[f32]],
-        output: &mut [f32],
-        weights: &[f32],
-    ) {
+    fn filter_v_row(rows: &[&[f32]], output: &mut [f32], weights: &[f32]) {
         simd::filter_v_row_f32(rows, output, weights);
     }
 
@@ -268,11 +237,7 @@ impl WorkingType for F32Work {
             }
 
             let out_start = out_y * h_row_len;
-            simd::filter_v_row_f32(
-                &row_ptrs,
-                &mut output[out_start..out_start + h_row_len],
-                w,
-            );
+            simd::filter_v_row_f32(&row_ptrs, &mut output[out_start..out_start + h_row_len], w);
         }
     }
 
@@ -570,9 +535,7 @@ mod tests {
         let src = [128u8, 0, 255, 200];
         let mut dst = [0i16; 4];
 
-        <u8 as IntoWorking<I16Work, Srgb>>::convert(
-            &src, &mut dst, &tf, &luts, 4, true, false,
-        );
+        <u8 as IntoWorking<I16Work, Srgb>>::convert(&src, &mut dst, &tf, &luts, 4, true, false);
 
         // Should match the compile-time LUT
         assert_eq!(dst[0], crate::color::SRGB_U8_TO_LINEAR_I12[128]);
@@ -587,9 +550,7 @@ mod tests {
         let src = [128u8, 64, 32, 200]; // RGBA
         let mut dst = [0.0f32; 4];
 
-        <u8 as IntoWorking<F32Work, Srgb>>::convert(
-            &src, &mut dst, &tf, &luts, 4, true, false,
-        );
+        <u8 as IntoWorking<F32Work, Srgb>>::convert(&src, &mut dst, &tf, &luts, 4, true, false);
 
         // R should be linearized (~0.216), alpha should be linear (200/255)
         assert!(dst[0] > 0.2 && dst[0] < 0.3, "R: {}", dst[0]);
@@ -603,9 +564,7 @@ mod tests {
         let src = [32768u16, 0, 65535, 50000];
         let mut dst = [0.0f32; 4];
 
-        <u16 as IntoWorking<F32Work, Srgb>>::convert(
-            &src, &mut dst, &tf, &luts, 4, true, false,
-        );
+        <u16 as IntoWorking<F32Work, Srgb>>::convert(&src, &mut dst, &tf, &luts, 4, true, false);
 
         // 32768/65535 ≈ 0.5 encoded → ~0.214 linear (sRGB)
         assert!(dst[0] > 0.2 && dst[0] < 0.25, "R: {}", dst[0]);
@@ -637,9 +596,7 @@ mod tests {
         let src = [0.5f32, 0.0, 1.0, 0.8];
         let mut dst = [0u16; 4];
 
-        <u16 as FromWorking<F32Work, Srgb>>::convert(
-            &src, &mut dst, &tf, &luts, 4, true, false,
-        );
+        <u16 as FromWorking<F32Work, Srgb>>::convert(&src, &mut dst, &tf, &luts, 4, true, false);
 
         // 0.5 linear → ~0.735 sRGB → ~48163 u16
         assert!(dst[0] > 45000 && dst[0] < 50000, "R: {}", dst[0]);
@@ -658,12 +615,8 @@ mod tests {
         let mut f32_buf = [0.0f32; 4];
         let mut out = [0u8; 4];
 
-        <u8 as IntoWorking<F32Work, Srgb>>::convert(
-            &src, &mut f32_buf, &tf, &luts, 4, true, false,
-        );
-        <u8 as FromWorking<F32Work, Srgb>>::convert(
-            &f32_buf, &mut out, &tf, &luts, 4, true, false,
-        );
+        <u8 as IntoWorking<F32Work, Srgb>>::convert(&src, &mut f32_buf, &tf, &luts, 4, true, false);
+        <u8 as FromWorking<F32Work, Srgb>>::convert(&f32_buf, &mut out, &tf, &luts, 4, true, false);
 
         for i in 0..4 {
             let diff = (src[i] as i16 - out[i] as i16).unsigned_abs();
@@ -681,7 +634,13 @@ mod tests {
         let mut out = [0u16; 4];
 
         <u16 as IntoWorking<F32Work, Srgb>>::convert(
-            &src, &mut f32_buf, &tf, &luts, 4, true, false,
+            &src,
+            &mut f32_buf,
+            &tf,
+            &luts,
+            4,
+            true,
+            false,
         );
         <u16 as FromWorking<F32Work, Srgb>>::convert(
             &f32_buf, &mut out, &tf, &luts, 4, true, false,
@@ -709,9 +668,7 @@ mod tests {
         let src = [128u8, 64, 32]; // single RGB pixel
         let mut dst = [0.0f32; 3];
 
-        <u8 as IntoWorking<F32Work, Srgb>>::convert(
-            &src, &mut dst, &tf, &luts, 3, false, false,
-        );
+        <u8 as IntoWorking<F32Work, Srgb>>::convert(&src, &mut dst, &tf, &luts, 3, false, false);
 
         // All channels should be linearized (no alpha special-casing)
         assert!(dst[0] > 0.2, "R: {}", dst[0]);

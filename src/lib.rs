@@ -34,8 +34,6 @@ extern crate alloc;
 
 pub(crate) mod color;
 pub mod composite;
-pub(crate) mod transfer;
-pub(crate) mod working;
 #[cfg(feature = "layout")]
 pub(crate) mod execute;
 pub(crate) mod filter;
@@ -45,7 +43,9 @@ pub(crate) mod pixel;
 pub mod plane;
 pub(crate) mod resize;
 pub(crate) mod streaming;
+pub(crate) mod transfer;
 pub(crate) mod weights;
+pub(crate) mod working;
 
 mod proven;
 mod simd;

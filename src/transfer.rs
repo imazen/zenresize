@@ -388,7 +388,10 @@ impl TransferFunction for Srgb {
     ) {
         // u16 sRGB: normalize to [0,1], apply sRGB EOTF
         if has_alpha && channels >= 2 {
-            for pixel in src.chunks_exact(channels).zip(dst.chunks_exact_mut(channels)) {
+            for pixel in src
+                .chunks_exact(channels)
+                .zip(dst.chunks_exact_mut(channels))
+            {
                 let (src_px, dst_px) = pixel;
                 // Color channels: sRGB curve
                 for i in 0..channels - 1 {
@@ -430,7 +433,10 @@ impl TransferFunction for Srgb {
         };
 
         if has_alpha && channels >= 2 {
-            for (src_px, dst_px) in src.chunks_exact(channels).zip(dst.chunks_exact_mut(channels)) {
+            for (src_px, dst_px) in src
+                .chunks_exact(channels)
+                .zip(dst.chunks_exact_mut(channels))
+            {
                 for i in 0..channels - 1 {
                     dst_px[i] =
                         (self.from_linear(src_px[i]) * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
