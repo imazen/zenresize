@@ -8,12 +8,12 @@ use alloc::vec;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
+use crate::Filter;
 use crate::layout::{
     CanvasColor, DecoderOffer, DecoderRequest, IdealLayout, LayoutPlan, Orientation,
 };
 use crate::pixel::{PixelFormat, PixelLayout};
 use crate::resize::Resizer;
-use crate::Filter;
 
 /// Execute a finalized [`LayoutPlan`] on decoder output.
 ///
@@ -48,9 +48,8 @@ pub fn execute_layout(
         (decoder_width, decoder_height)
     };
 
-    let zero_copy_trim = plan.trim.is_some()
-        && plan.remaining_orientation.is_identity()
-        && !plan.resize_is_identity;
+    let zero_copy_trim =
+        plan.trim.is_some() && plan.remaining_orientation.is_identity() && !plan.resize_is_identity;
 
     // For non-zero-copy trim, extract the sub-rectangle into owned data.
     let trim_owned: Option<Vec<u8>> = if let Some(trim) = plan.trim {
@@ -97,8 +96,13 @@ pub fn execute_layout(
         } else {
             trimmed
         };
-        let (result, new_w, new_h) =
-            orient_image(packed, trim_w, trim_h, plan.remaining_orientation, format.channels());
+        let (result, new_w, new_h) = orient_image(
+            packed,
+            trim_w,
+            trim_h,
+            plan.remaining_orientation,
+            format.channels(),
+        );
         (Some(result), new_w, new_h)
     };
 
@@ -110,7 +114,11 @@ pub fn execute_layout(
         } else {
             let packed_stride = trim_w as usize * ch;
             if trim_stride != packed_stride {
-                (compact_strided(trimmed, trim_w, trim_h, trim_stride, ch), orient_w, orient_h)
+                (
+                    compact_strided(trimmed, trim_w, trim_h, trim_stride, ch),
+                    orient_w,
+                    orient_h,
+                )
             } else {
                 (trimmed.to_vec(), orient_w, orient_h)
             }
@@ -144,7 +152,15 @@ pub fn execute_layout(
         let bg = canvas_color_to_pixel(&plan.canvas_color, format);
         let mut canvas = fill_canvas(canvas_w, canvas_h, &bg);
         place_on_canvas(
-            &mut canvas, canvas_w, canvas_h, &resized, resize_w, resize_h, px, py, ch,
+            &mut canvas,
+            canvas_w,
+            canvas_h,
+            &resized,
+            resize_w,
+            resize_h,
+            px,
+            py,
+            ch,
         );
         canvas
     };
@@ -152,7 +168,14 @@ pub fn execute_layout(
     // --- Step 5: Edge Replicate ---
     if let Some(content) = plan.content_size {
         let mut buf = placed;
-        replicate_edges(&mut buf, canvas_w, canvas_h, content.width, content.height, ch);
+        replicate_edges(
+            &mut buf,
+            canvas_w,
+            canvas_h,
+            content.width,
+            content.height,
+            ch,
+        );
         buf
     } else {
         placed
@@ -323,15 +346,7 @@ fn forward_map(o: Orientation, x: u32, y: u32, w: u32, h: u32) -> (u32, u32) {
 }
 
 /// Copy a sub-rectangle from a tightly-packed source buffer.
-fn extract_rect(
-    src: &[u8],
-    src_width: u32,
-    x: u32,
-    y: u32,
-    w: u32,
-    h: u32,
-    ch: usize,
-) -> Vec<u8> {
+fn extract_rect(src: &[u8], src_width: u32, x: u32, y: u32, w: u32, h: u32, ch: usize) -> Vec<u8> {
     let src_stride = src_width as usize * ch;
     let dst_stride = w as usize * ch;
     let mut out = vec![0u8; dst_stride * h as usize];
@@ -585,10 +600,7 @@ mod tests {
         // Transverse: (x,y) → (h-1-y, w-1-x), output is h×w
         let (out, ow, oh) = orient_image(&img, w, h, Orientation::Transverse, ch as u8);
         assert_eq!((ow, oh), (3, 4));
-        assert_eq!(
-            get_pixel(&out, ow, 2, 3, ch),
-            get_pixel(&img, w, 0, 0, ch)
-        );
+        assert_eq!(get_pixel(&out, ow, 2, 3, ch), get_pixel(&img, w, 0, 0, ch));
     }
 
     // -----------------------------------------------------------------------
@@ -716,20 +728,11 @@ mod tests {
         replicate_edges(&mut buf, cw, ch_, content_w, content_h, ch);
 
         // Right extension: pixel (4,0) and (5,0) should match (3,0)
-        assert_eq!(
-            get_pixel(&buf, cw, 4, 0, ch),
-            get_pixel(&buf, cw, 3, 0, ch)
-        );
-        assert_eq!(
-            get_pixel(&buf, cw, 5, 0, ch),
-            get_pixel(&buf, cw, 3, 0, ch)
-        );
+        assert_eq!(get_pixel(&buf, cw, 4, 0, ch), get_pixel(&buf, cw, 3, 0, ch));
+        assert_eq!(get_pixel(&buf, cw, 5, 0, ch), get_pixel(&buf, cw, 3, 0, ch));
 
         // Right extension on row 2
-        assert_eq!(
-            get_pixel(&buf, cw, 5, 2, ch),
-            get_pixel(&buf, cw, 3, 2, ch)
-        );
+        assert_eq!(get_pixel(&buf, cw, 5, 2, ch), get_pixel(&buf, cw, 3, 2, ch));
 
         // Bottom extension: row 4 and 5 should match row 3 (after right-extend)
         let stride = cw as usize * ch;
@@ -766,10 +769,7 @@ mod tests {
         let format = PixelFormat::Srgb8(PixelLayout::Rgba);
         let img = make_test_image(src_w, src_h, ch);
 
-        let (ideal, request) = Pipeline::new(src_w, src_h)
-            .fit_pad(80, 80)
-            .plan()
-            .unwrap();
+        let (ideal, request) = Pipeline::new(src_w, src_h).fit_pad(80, 80).plan().unwrap();
 
         let offer = DecoderOffer::full_decode(src_w, src_h);
         let plan = ideal.finalize(&request, &offer);
@@ -816,7 +816,10 @@ mod tests {
         let plan = ideal.finalize(&request, &offer);
 
         let result = execute_layout(&img, stored_w, stored_h, &plan, format, Filter::Lanczos);
-        assert_eq!(result.len(), plan.canvas.width as usize * plan.canvas.height as usize * ch);
+        assert_eq!(
+            result.len(),
+            plan.canvas.width as usize * plan.canvas.height as usize * ch
+        );
         assert_eq!(plan.canvas, Size::new(20, 30));
     }
 
@@ -851,7 +854,10 @@ mod tests {
         let result_b = execute_layout(&img, src_w, src_h, &plan, format, Filter::Lanczos);
 
         assert_eq!(result_a.len(), result_b.len());
-        assert_eq!(result_a, result_b, "zero-copy trim must match explicit extract+resize");
+        assert_eq!(
+            result_a, result_b,
+            "zero-copy trim must match explicit extract+resize"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -873,19 +879,38 @@ mod tests {
             .unwrap();
 
         // Simulate decoder applying orientation: output is 40×60 (already rotated)
-        let (oriented_img, ow, oh) =
-            orient_image(&stored_img, stored_w, stored_h, Orientation::Rotate90, ch as u8);
+        let (oriented_img, ow, oh) = orient_image(
+            &stored_img,
+            stored_w,
+            stored_h,
+            Orientation::Rotate90,
+            ch as u8,
+        );
         assert_eq!((ow, oh), (40, 60));
 
         let offer =
             DecoderOffer::full_decode(ow, oh).with_orientation_applied(Orientation::Rotate90);
 
-        let result = execute_with_offer(&oriented_img, &ideal, &request, &offer, format, Filter::Lanczos);
+        let result = execute_with_offer(
+            &oriented_img,
+            &ideal,
+            &request,
+            &offer,
+            format,
+            Filter::Lanczos,
+        );
         assert_eq!(result.len(), 20 * 30 * ch);
 
         // Compare against full_decode path where we orient ourselves
         let offer_full = DecoderOffer::full_decode(stored_w, stored_h);
-        let result_full = execute_with_offer(&stored_img, &ideal, &request, &offer_full, format, Filter::Lanczos);
+        let result_full = execute_with_offer(
+            &stored_img,
+            &ideal,
+            &request,
+            &offer_full,
+            format,
+            Filter::Lanczos,
+        );
         assert_eq!(result_full.len(), 20 * 30 * ch);
 
         // Both paths should produce the same output
@@ -928,18 +953,14 @@ mod tests {
         assert!(result_pixels > 0, "secondary should produce output");
 
         // Verify orientation matches primary
-        let (gm_ideal, gm_req) = sdr_ideal.derive_secondary(
-            Size::new(sdr_w, sdr_h),
-            Size::new(gm_w, gm_h),
-            None,
-        );
+        let (gm_ideal, gm_req) =
+            sdr_ideal.derive_secondary(Size::new(sdr_w, sdr_h), Size::new(gm_w, gm_h), None);
         let gm_offer = DecoderOffer::full_decode(gm_w, gm_h);
         let gm_plan = gm_ideal.finalize(&gm_req, &gm_offer);
         let sdr_offer = DecoderOffer::full_decode(sdr_w, sdr_h);
         let sdr_plan = sdr_ideal.finalize(&sdr_req, &sdr_offer);
         assert_eq!(
-            sdr_plan.remaining_orientation,
-            gm_plan.remaining_orientation,
+            sdr_plan.remaining_orientation, gm_plan.remaining_orientation,
             "secondary must have same orientation as primary"
         );
 
@@ -969,11 +990,8 @@ mod tests {
             .unwrap();
 
         // Step 1: derive secondary → get request hints
-        let (gm_ideal, gm_request) = sdr_ideal.derive_secondary(
-            Size::new(sdr_w, sdr_h),
-            Size::new(gm_w, gm_h),
-            None,
-        );
+        let (gm_ideal, gm_request) =
+            sdr_ideal.derive_secondary(Size::new(sdr_w, sdr_h), Size::new(gm_w, gm_h), None);
 
         // Step 2: decoder applies orientation using the hints
         let (gm_oriented, ow, oh) =
@@ -984,7 +1002,12 @@ mod tests {
 
         // Step 3: execute with offer — same function as primary
         let result_negotiated = execute_with_offer(
-            &gm_oriented, &gm_ideal, &gm_request, &gm_offer, format, Filter::Lanczos,
+            &gm_oriented,
+            &gm_ideal,
+            &gm_request,
+            &gm_offer,
+            format,
+            Filter::Lanczos,
         );
 
         // Compare against full decode convenience path
@@ -1016,14 +1039,12 @@ mod tests {
         let format = PixelFormat::Srgb8(PixelLayout::Rgba);
         let img = make_test_image(w, h, ch);
 
-        let (ideal, request) = Pipeline::new(w, h)
-            .fit(40, 40)
-            .plan()
-            .unwrap();
+        let (ideal, request) = Pipeline::new(w, h).fit(40, 40).plan().unwrap();
 
         let result_exec = execute(&img, &ideal, format, Filter::Lanczos);
         let offer = DecoderOffer::full_decode(w, h);
-        let result_offer = execute_with_offer(&img, &ideal, &request, &offer, format, Filter::Lanczos);
+        let result_offer =
+            execute_with_offer(&img, &ideal, &request, &offer, format, Filter::Lanczos);
 
         assert_eq!(result_exec, result_offer);
     }
@@ -1048,11 +1069,8 @@ mod tests {
             .unwrap();
 
         // derive_secondary + execute should match execute_secondary
-        let (gm_ideal, _gm_req) = sdr_ideal.derive_secondary(
-            Size::new(sdr_w, sdr_h),
-            Size::new(gm_w, gm_h),
-            None,
-        );
+        let (gm_ideal, _gm_req) =
+            sdr_ideal.derive_secondary(Size::new(sdr_w, sdr_h), Size::new(gm_w, gm_h), None);
 
         let result_direct = execute(&gm_img, &gm_ideal, format, Filter::Lanczos);
         let result_convenience = execute_secondary(
