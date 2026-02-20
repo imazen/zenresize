@@ -50,7 +50,10 @@ mod simd;
 
 // Re-exports: minimal public API
 #[cfg(feature = "layout")]
-pub use execute::{execute, execute_layout, execute_secondary, execute_with_offer, orient_image};
+pub use execute::{
+    execute, execute_layout, execute_layout_with_background, execute_secondary,
+    execute_secondary_with_background, execute_with_background, execute_with_offer, orient_image,
+};
 pub use filter::Filter;
 #[cfg(feature = "layout")]
 pub use layout::{

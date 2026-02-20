@@ -9,6 +9,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::Filter;
+use crate::composite::{Background, CompositeError};
 use crate::layout::{
     CanvasColor, DecoderOffer, DecoderRequest, IdealLayout, LayoutPlan, Orientation,
 };
@@ -286,6 +287,261 @@ pub fn execute_secondary(
     execute(source_pixels, &sec_ideal, format, filter)
 }
 
+/// Execute a [`LayoutPlan`] with background compositing.
+///
+/// Same pipeline as [`execute_layout`] but composites the resized foreground
+/// over the given background using Porter-Duff source-over.
+///
+/// # Canvas padding
+///
+/// When the canvas is larger than the resized image (padding case):
+/// - For [`SolidBackground`]: the padding area is filled with the solid color
+///   (automatically converted to sRGB u8).
+/// - For other backgrounds: the padding area uses the plan's `canvas_color`.
+///
+/// # Errors
+///
+/// Returns [`CompositeError::PremultipliedInput`] if `format` uses `RgbaPremul`.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_layout_with_background<B: Background>(
+    decoder_output: &[u8],
+    decoder_width: u32,
+    decoder_height: u32,
+    plan: &LayoutPlan,
+    format: PixelFormat,
+    filter: Filter,
+    background: B,
+) -> Result<Vec<u8>, CompositeError> {
+    // Transparent background → delegate to non-composite path
+    if background.is_transparent() {
+        return Ok(execute_layout(
+            decoder_output,
+            decoder_width,
+            decoder_height,
+            plan,
+            format,
+            filter,
+        ));
+    }
+
+    assert!(
+        format.is_u8(),
+        "execute_layout_with_background only supports Srgb8 formats"
+    );
+    if format.layout().is_premultiplied() {
+        return Err(CompositeError::PremultipliedInput);
+    }
+    let ch = format.channels() as usize;
+
+    let expected_len = decoder_width as usize * decoder_height as usize * ch;
+    assert!(
+        decoder_output.len() >= expected_len,
+        "decoder_output too small: {} < {}",
+        decoder_output.len(),
+        expected_len
+    );
+
+    // --- Step 1: Trim ---
+    let (trim_w, trim_h) = if let Some(trim) = plan.trim {
+        (trim.width, trim.height)
+    } else {
+        (decoder_width, decoder_height)
+    };
+
+    let zero_copy_trim =
+        plan.trim.is_some() && plan.remaining_orientation.is_identity() && !plan.resize_is_identity;
+
+    let trim_owned: Option<Vec<u8>> = if let Some(trim) = plan.trim {
+        if zero_copy_trim {
+            None
+        } else {
+            Some(extract_rect(
+                decoder_output,
+                decoder_width,
+                trim.x,
+                trim.y,
+                trim.width,
+                trim.height,
+                ch,
+            ))
+        }
+    } else {
+        None
+    };
+
+    let (trimmed, trim_stride): (&[u8], usize) = if zero_copy_trim {
+        let trim = plan.trim.unwrap();
+        let offset = (trim.y as usize * decoder_width as usize + trim.x as usize) * ch;
+        let stride = decoder_width as usize * ch;
+        (&decoder_output[offset..], stride)
+    } else if let Some(ref owned) = trim_owned {
+        (owned.as_slice(), trim_w as usize * ch)
+    } else {
+        (decoder_output, decoder_width as usize * ch)
+    };
+
+    // --- Step 2: Orient ---
+    let (oriented, orient_w, orient_h) = if plan.remaining_orientation.is_identity() {
+        (None, trim_w, trim_h)
+    } else {
+        let packed_stride = trim_w as usize * ch;
+        let packed: &[u8] = if trim_stride != packed_stride {
+            unreachable!("zero-copy trim requires identity orientation");
+        } else {
+            trimmed
+        };
+        let (result, new_w, new_h) = orient_image(
+            packed,
+            trim_w,
+            trim_h,
+            plan.remaining_orientation,
+            format.channels(),
+        );
+        (Some(result), new_w, new_h)
+    };
+
+    // --- Step 3: Resize with compositing ---
+    // Capture solid pixel for canvas fill before moving background into Resizer.
+    let solid_fill: Option<Vec<u8>> = background
+        .solid_pixel()
+        .map(|pixel| premul_linear_f32_to_srgb_u8_pixel(pixel, format));
+
+    let rw = plan.resize_to.width;
+    let rh = plan.resize_to.height;
+
+    let (resize_w, resize_h) = if plan.resize_is_identity {
+        (orient_w, orient_h)
+    } else {
+        (rw, rh)
+    };
+
+    // Even for identity resize, run through Resizer to get composite applied.
+    let actual_rw = if plan.resize_is_identity { orient_w } else { rw };
+    let actual_rh = if plan.resize_is_identity { orient_h } else { rh };
+
+    let resized = {
+        let builder = crate::ResizeConfig::builder(orient_w, orient_h, actual_rw, actual_rh)
+            .filter(filter)
+            .format(format);
+
+        if let Some(ref data) = oriented {
+            let config = builder.build();
+            Resizer::with_background(&config, background)?.resize(data)
+        } else {
+            let config = builder.in_stride(trim_stride).build();
+            Resizer::with_background(&config, background)?.resize(trimmed)
+        }
+    };
+
+    // --- Step 4: Canvas + Place ---
+    let canvas_w = plan.canvas.width;
+    let canvas_h = plan.canvas.height;
+    let (px, py) = plan.placement;
+
+    let placed = if canvas_w == resize_w && canvas_h == resize_h && px == 0 && py == 0 {
+        resized
+    } else {
+        // The resized image already has the background composited in the placed region.
+        // For padding: use solid background color if available, else plan.canvas_color.
+        let fill_pixel = if let Some(ref pixel) = solid_fill {
+            pixel.as_slice()
+        } else {
+            &canvas_color_to_pixel(&plan.canvas_color, format)
+        };
+        let mut canvas = fill_canvas(canvas_w, canvas_h, fill_pixel);
+        place_on_canvas(
+            &mut canvas,
+            canvas_w,
+            canvas_h,
+            &resized,
+            resize_w,
+            resize_h,
+            px,
+            py,
+            ch,
+        );
+        canvas
+    };
+
+    // --- Step 5: Edge Replicate ---
+    Ok(if let Some(content) = plan.content_size {
+        let mut buf = placed;
+        replicate_edges(
+            &mut buf,
+            canvas_w,
+            canvas_h,
+            content.width,
+            content.height,
+            ch,
+        );
+        buf
+    } else {
+        placed
+    })
+}
+
+/// Execute an [`IdealLayout`] with background compositing, assuming full decode.
+///
+/// Composited variant of [`execute()`]. See [`execute_layout_with_background()`]
+/// for details on how compositing and canvas padding interact.
+///
+/// # Errors
+///
+/// Returns [`CompositeError::PremultipliedInput`] if `format` uses `RgbaPremul`.
+pub fn execute_with_background<B: Background>(
+    source_pixels: &[u8],
+    ideal: &IdealLayout,
+    format: PixelFormat,
+    filter: Filter,
+    background: B,
+) -> Result<Vec<u8>, CompositeError> {
+    let pre_orient = ideal
+        .orientation
+        .inverse()
+        .transform_dimensions(ideal.layout.source.width, ideal.layout.source.height);
+
+    let request = match ideal.source_crop {
+        Some(crop) => {
+            DecoderRequest::new(ideal.layout.resize_to, ideal.orientation).with_crop(crop)
+        }
+        None => DecoderRequest::new(ideal.layout.resize_to, ideal.orientation),
+    };
+    let offer = DecoderOffer::full_decode(pre_orient.width, pre_orient.height);
+    let plan = ideal.finalize(&request, &offer);
+    execute_layout_with_background(
+        source_pixels,
+        pre_orient.width,
+        pre_orient.height,
+        &plan,
+        format,
+        filter,
+        background,
+    )
+}
+
+/// Convenience: derive and execute a secondary plane with background compositing.
+///
+/// Composited variant of [`execute_secondary()`].
+///
+/// # Errors
+///
+/// Returns [`CompositeError::PremultipliedInput`] if `format` uses `RgbaPremul`.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_secondary_with_background<B: Background>(
+    source_pixels: &[u8],
+    primary_ideal: &IdealLayout,
+    primary_source: crate::layout::Size,
+    secondary_source: crate::layout::Size,
+    secondary_target: Option<crate::layout::Size>,
+    format: PixelFormat,
+    filter: Filter,
+    background: B,
+) -> Result<Vec<u8>, CompositeError> {
+    let (sec_ideal, _sec_request) =
+        primary_ideal.derive_secondary(primary_source, secondary_source, secondary_target);
+    execute_with_background(source_pixels, &sec_ideal, format, filter, background)
+}
+
 /// Apply an [`Orientation`] transform to an image buffer.
 ///
 /// Returns `(transformed_pixels, new_width, new_height)`.
@@ -400,6 +656,28 @@ fn canvas_color_to_pixel(color: &CanvasColor, format: PixelFormat) -> Vec<u8> {
             }
         }
         _ => vec![0u8; ch],
+    }
+}
+
+/// Convert a premultiplied linear f32 pixel to sRGB u8 for canvas fill.
+fn premul_linear_f32_to_srgb_u8_pixel(pixel: &[f32; 4], format: PixelFormat) -> Vec<u8> {
+    // Unpremultiply
+    let a = pixel[3];
+    let (r, g, b) = if a > 1.0 / 1024.0 {
+        let inv_a = 1.0 / a;
+        (pixel[0] * inv_a, pixel[1] * inv_a, pixel[2] * inv_a)
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+    // Linear to sRGB
+    let sr = linear_srgb::scalar::linear_to_srgb_u8(r);
+    let sg = linear_srgb::scalar::linear_to_srgb_u8(g);
+    let sb = linear_srgb::scalar::linear_to_srgb_u8(b);
+    let sa = (a * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+    match format.layout() {
+        PixelLayout::Gray => vec![sr],
+        PixelLayout::Rgb => vec![sr, sg, sb],
+        _ => vec![sr, sg, sb, sa],
     }
 }
 
@@ -519,7 +797,8 @@ fn replicate_edges(
 mod tests {
     use super::*;
     use crate::layout::{
-        CanvasColor, DecoderOffer, DecoderRequest, LayoutPlan, Orientation, Pipeline, Rect, Size,
+        CanvasColor, Constraint, ConstraintMode, DecoderOffer, LayoutPlan, Orientation, Pipeline,
+        Rect, Size,
     };
 
     /// Create a test image where each pixel has a unique value based on position.
@@ -1084,5 +1363,173 @@ mod tests {
         );
 
         assert_eq!(result_direct, result_convenience);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 15: no background matches execute_layout
+    // -----------------------------------------------------------------------
+    #[test]
+    fn execute_with_no_background_matches_plain() {
+        let w = 80u32;
+        let h = 60u32;
+        let ch = 4usize;
+        let format = PixelFormat::Srgb8(PixelLayout::Rgba);
+        let img = make_test_image(w, h, ch);
+
+        let (ideal, request) = Pipeline::new(w, h).fit(40, 40).plan().unwrap();
+        let offer = DecoderOffer::full_decode(w, h);
+        let plan = ideal.finalize(&request, &offer);
+
+        let result_plain = execute_layout(&img, w, h, &plan, format, Filter::Lanczos);
+        let result_bg = execute_layout_with_background(
+            &img,
+            w,
+            h,
+            &plan,
+            format,
+            Filter::Lanczos,
+            crate::composite::NoBackground,
+        )
+        .unwrap();
+
+        assert_eq!(result_plain, result_bg);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 16: solid opaque white bg + FitPad → padding is white, content composited
+    // -----------------------------------------------------------------------
+    #[test]
+    fn execute_with_solid_white_bg_fit_pad() {
+        let src_w = 100u32;
+        let src_h = 50u32;
+        let ch = 4usize;
+        let format = PixelFormat::Srgb8(PixelLayout::Rgba);
+        // Semi-transparent RGBA image
+        let mut img = vec![0u8; src_w as usize * src_h as usize * ch];
+        for pixel in img.chunks_exact_mut(ch) {
+            pixel[0] = 200; // R
+            pixel[1] = 100; // G
+            pixel[2] = 50; // B
+            pixel[3] = 128; // A = 50%
+        }
+
+        let (ideal, request) = Pipeline::new(src_w, src_h)
+            .constrain(
+                Constraint::new(ConstraintMode::FitPad, 80, 80)
+                    .canvas_color(CanvasColor::white()),
+            )
+            .plan()
+            .unwrap();
+
+        let offer = DecoderOffer::full_decode(src_w, src_h);
+        let plan = ideal.finalize(&request, &offer);
+
+        // FitPad 100×50 → 80×80: resize to 80×40, pad to 80×80
+        assert_eq!(plan.canvas, Size::new(80, 80));
+        assert_eq!(plan.resize_to, Size::new(80, 40));
+        let py = plan.placement.1; // vertical offset (should be 20)
+
+        let bg = crate::composite::SolidBackground::white(format.layout());
+        let result = execute_layout_with_background(
+            &img,
+            src_w,
+            src_h,
+            &plan,
+            format,
+            Filter::Lanczos,
+            bg,
+        )
+        .unwrap();
+
+        assert_eq!(result.len(), 80 * 80 * ch);
+
+        // Padding area (top rows before py) should be white (255,255,255,255)
+        let top_pixel = get_pixel(&result, 80, 0, 0, ch);
+        assert_eq!(top_pixel, &[255, 255, 255, 255], "padding should be white");
+
+        // Bottom padding should also be white
+        let bottom_pixel = get_pixel(&result, 80, 0, 79, ch);
+        assert_eq!(bottom_pixel, &[255, 255, 255, 255], "bottom padding white");
+
+        // Content area should be fully opaque (composited over white)
+        let content_pixel = get_pixel(&result, 80, 40, (py + 20) as u32, ch);
+        assert_eq!(content_pixel[3], 255, "composited content should be opaque");
+
+        // Content RGB should be blended (not raw input values)
+        // With 50% alpha over white: out ≈ fg * 0.5 + white * 0.5
+        // Not testing exact values due to sRGB conversion, just that it's not pure white
+        assert!(content_pixel[0] > 200, "red channel should be bright");
+        assert!(content_pixel[0] < 255, "red channel should not be pure white");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 17: transparent background matches no background
+    // -----------------------------------------------------------------------
+    #[test]
+    fn execute_transparent_bg_matches_no_bg() {
+        let w = 60u32;
+        let h = 40u32;
+        let ch = 4usize;
+        let format = PixelFormat::Srgb8(PixelLayout::Rgba);
+        let img = make_test_image(w, h, ch);
+
+        let (ideal, request) = Pipeline::new(w, h).fit(30, 30).plan().unwrap();
+        let offer = DecoderOffer::full_decode(w, h);
+        let plan = ideal.finalize(&request, &offer);
+
+        let result_no_bg = execute_layout_with_background(
+            &img,
+            w,
+            h,
+            &plan,
+            format,
+            Filter::Lanczos,
+            crate::composite::NoBackground,
+        )
+        .unwrap();
+
+        let transparent_bg =
+            crate::composite::SolidBackground::transparent(format.layout());
+        let result_transparent = execute_layout_with_background(
+            &img,
+            w,
+            h,
+            &plan,
+            format,
+            Filter::Lanczos,
+            transparent_bg,
+        )
+        .unwrap();
+
+        assert_eq!(result_no_bg, result_transparent);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 18: rejects premultiplied input
+    // -----------------------------------------------------------------------
+    #[test]
+    fn execute_rejects_premultiplied() {
+        let w = 10u32;
+        let h = 10u32;
+        let ch = 4usize;
+        let format = PixelFormat::Srgb8(PixelLayout::RgbaPremul);
+        let img = vec![128u8; w as usize * h as usize * ch];
+
+        let (ideal, request) = Pipeline::new(w, h).fit(5, 5).plan().unwrap();
+        let offer = DecoderOffer::full_decode(w, h);
+        let plan = ideal.finalize(&request, &offer);
+
+        let bg = crate::composite::SolidBackground::white(format.layout());
+        let result = execute_layout_with_background(
+            &img,
+            w,
+            h,
+            &plan,
+            format,
+            Filter::Lanczos,
+            bg,
+        );
+
+        assert!(matches!(result, Err(CompositeError::PremultipliedInput)));
     }
 }

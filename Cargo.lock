@@ -90,34 +90,18 @@ checksum = "5f0e0fee31ef5ed1ba1316088939cea399010ed7731dba877ed44aeb407a75ea"
 
 [[package]]
 name = "archmage"
-version = "0.7.0"
-dependencies = [
- "archmage-macros 0.7.0",
-]
-
-[[package]]
-name = "archmage"
-version = "0.7.0"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61bd463aee29794a0318115ab857c2486842b28956c3f75365b304f1047b4758"
+checksum = "fba21e64cb000b4890dc6348042557208486e5ea4e9f574b7f75f7a45e99e19d"
 dependencies = [
- "archmage-macros 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "archmage-macros",
 ]
 
 [[package]]
 name = "archmage-macros"
-version = "0.7.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "archmage-macros"
-version = "0.7.0"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02b01e2d131ffadba47bdff5d5e1d5d8a3b9743dc6b3d6ce4847ae2d6d306058"
+checksum = "35c9306deb9d68bc48cd4fa5ab2281b31c82ff2831360419ffbaf2f701b19a5a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -630,9 +614,11 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "linear-srgb"
-version = "0.5.4"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7687eee4c424bdb5f360d5d975a52baa0f56c1ce15e3c5cbef4af7d39e148092"
 dependencies = [
- "archmage 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "archmage",
  "bytemuck",
  "magetypes",
  "num-traits",
@@ -659,11 +645,11 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "magetypes"
-version = "0.7.0"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d55dd4e83507ff9fe129b01669adca1e302ef346dac252ef59139c78def312a"
+checksum = "5963554492ae9c4248d5e761f734a97d79f5d7f07f4c81d708725be8a81f6819"
 dependencies = [
- "archmage 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "archmage",
 ]
 
 [[package]]
@@ -1495,7 +1481,7 @@ version = "0.1.0"
 name = "zenresize"
 version = "0.1.0"
 dependencies = [
- "archmage 0.7.0",
+ "archmage",
  "criterion",
  "fast_image_resize",
  "image",
