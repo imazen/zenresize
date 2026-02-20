@@ -34,6 +34,7 @@ extern crate alloc;
 
 pub(crate) mod color;
 pub mod composite;
+pub(crate) mod transfer;
 #[cfg(feature = "layout")]
 pub(crate) mod execute;
 pub(crate) mod filter;
@@ -70,3 +71,6 @@ pub use composite::{
 };
 
 pub use resize::{resize_3ch, resize_4ch, resize_gray8};
+
+pub use pixel::Element;
+pub use transfer::{NoTransfer, Srgb, TransferFunction};
