@@ -108,6 +108,46 @@ fn make_rgb_gradient(w: usize, h: usize) -> Vec<u8> {
     img
 }
 
+/// Create a deterministic u16 RGBA test image.
+fn make_u16_rgba_gradient(w: usize, h: usize) -> Vec<u16> {
+    let mut img = vec![0u16; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let idx = (y * w + x) * 4;
+            img[idx] = ((x * 65535) / w.max(1)) as u16;
+            img[idx + 1] = ((y * 65535) / h.max(1)) as u16;
+            img[idx + 2] = (((x + y) * 32768) / (w + h).max(1)) as u16;
+            img[idx + 3] = 65535; // opaque
+        }
+    }
+    img
+}
+
+/// Create a deterministic u16 RGB test image.
+fn make_u16_rgb_gradient(w: usize, h: usize) -> Vec<u16> {
+    let mut img = vec![0u16; w * h * 3];
+    for y in 0..h {
+        for x in 0..w {
+            let idx = (y * w + x) * 3;
+            img[idx] = ((x * 65535) / w.max(1)) as u16;
+            img[idx + 1] = ((y * 65535) / h.max(1)) as u16;
+            img[idx + 2] = 32768;
+        }
+    }
+    img
+}
+
+/// Create a deterministic u16 Gray test image.
+fn make_u16_gray_gradient(w: usize, h: usize) -> Vec<u16> {
+    let mut img = vec![0u16; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            img[y * w + x] = ((x * 65535) / w.max(1)) as u16;
+        }
+    }
+    img
+}
+
 fn save_golden(name: &str, data: &[u8]) {
     let dir = std::path::Path::new("test_outputs");
     std::fs::create_dir_all(dir).unwrap();
@@ -375,7 +415,8 @@ fn golden_streaming_matches_fullframe_path2() {
     // Streaming uses f32 path always, so it matches path 2 exactly
     assert_eq!(fullframe.len(), streaming.len());
     assert_eq!(
-        fullframe, streaming,
+        fullframe,
+        streaming,
         "Streaming vs fullframe mismatch! hash_ff={}, hash_st={}",
         hash_bytes(&fullframe),
         hash_bytes(&streaming),
@@ -408,6 +449,58 @@ fn golden_filters() {
         let output = Resizer::new(&config).resize(&input);
         check_golden(&format!("filter_{}_down_80x60_40x30", name), &output);
     }
+}
+
+// ============================================================================
+// Path 4: u16 Encoded16 path (sRGB transfer, f32 working space)
+// ============================================================================
+
+#[test]
+fn golden_u16_rgba_downscale() {
+    let config = ResizeConfig::builder(100, 100, 50, 50)
+        .filter(Filter::Lanczos)
+        .format(PixelFormat::Encoded16(PixelLayout::Rgba))
+        .build();
+    let input = make_u16_rgba_gradient(100, 100);
+    let output = Resizer::new(&config).resize_u16(&input);
+    let bytes: Vec<u8> = output.iter().flat_map(|v| v.to_le_bytes()).collect();
+    check_golden("u16_rgba_down_100x100_50x50", &bytes);
+}
+
+#[test]
+fn golden_u16_rgba_upscale() {
+    let config = ResizeConfig::builder(50, 50, 100, 100)
+        .filter(Filter::Lanczos)
+        .format(PixelFormat::Encoded16(PixelLayout::Rgba))
+        .build();
+    let input = make_u16_rgba_gradient(50, 50);
+    let output = Resizer::new(&config).resize_u16(&input);
+    let bytes: Vec<u8> = output.iter().flat_map(|v| v.to_le_bytes()).collect();
+    check_golden("u16_rgba_up_50x50_100x100", &bytes);
+}
+
+#[test]
+fn golden_u16_rgb_downscale() {
+    let config = ResizeConfig::builder(100, 100, 50, 50)
+        .filter(Filter::Lanczos)
+        .format(PixelFormat::Encoded16(PixelLayout::Rgb))
+        .build();
+    let input = make_u16_rgb_gradient(100, 100);
+    let output = Resizer::new(&config).resize_u16(&input);
+    let bytes: Vec<u8> = output.iter().flat_map(|v| v.to_le_bytes()).collect();
+    check_golden("u16_rgb_down_100x100_50x50", &bytes);
+}
+
+#[test]
+fn golden_u16_gray_downscale() {
+    let config = ResizeConfig::builder(100, 100, 50, 50)
+        .filter(Filter::Lanczos)
+        .format(PixelFormat::Encoded16(PixelLayout::Gray))
+        .build();
+    let input = make_u16_gray_gradient(100, 100);
+    let output = Resizer::new(&config).resize_u16(&input);
+    let bytes: Vec<u8> = output.iter().flat_map(|v| v.to_le_bytes()).collect();
+    check_golden("u16_gray_down_100x100_50x50", &bytes);
 }
 
 // ============================================================================

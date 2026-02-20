@@ -13,6 +13,7 @@ use crate::filter::InterpolationDetails;
 use crate::pixel::ResizeConfig;
 use crate::proven;
 use crate::simd;
+use crate::transfer::{Srgb, TransferFunction};
 use crate::weights::{F32WeightTable, I16WeightTable};
 
 /// Reusable resizer with pre-computed weight tables.
@@ -126,6 +127,32 @@ impl<B: Background> Resizer<B> {
         } else {
             Vec::new()
         };
+
+        // u16 input — always use f32 working path
+        if config.input_format.is_u16() {
+            let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
+            let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
+            let in_w = config.in_width as usize;
+            let h_max_taps = h_weights.max_taps;
+            return Resizer {
+                config,
+                h_weights_i16: None,
+                v_weights_i16: None,
+                h_weights_f32: Some(h_weights),
+                v_weights_f32: Some(v_weights),
+                intermediate_u8: Vec::new(),
+                intermediate_f32: vec![0.0f32; h_row_len * in_h],
+                intermediate_i16: Vec::new(),
+                linearized_row: Vec::new(),
+                v_output_i16: Vec::new(),
+                premul_buf: Vec::new(),
+                temp_row_f32: vec![0.0f32; in_w * channels + h_max_taps * channels],
+                temp_output_f32: vec![0.0f32; h_row_len],
+                path: 4,
+                background,
+                composite_bg_row,
+            };
+        }
 
         // f32 native input — always use f32 path
         if config.input_format.is_f32() {
@@ -247,7 +274,7 @@ impl<B: Background> Resizer<B> {
     pub fn resize(&mut self, input: &[u8]) -> Vec<u8> {
         assert!(
             self.config.input_format.is_u8(),
-            "resize() requires Srgb8 format; use resize_f32() for LinearF32"
+            "resize() requires Srgb8 format; use resize_f32() for LinearF32 or resize_u16() for Encoded16"
         );
         let out_row_len = self.config.output_row_len();
         let len = self.config.out_height as usize * out_row_len;
@@ -263,7 +290,7 @@ impl<B: Background> Resizer<B> {
     pub fn resize_into(&mut self, input: &[u8], output: &mut [u8]) {
         assert!(
             self.config.input_format.is_u8(),
-            "resize_into() requires Srgb8 format; use resize_f32_into() for LinearF32"
+            "resize_into() requires Srgb8 format; use resize_f32_into() for LinearF32 or resize_u16_into() for Encoded16"
         );
         let config = &self.config;
         let in_stride = config.effective_in_stride();
@@ -496,7 +523,7 @@ impl<B: Background> Resizer<B> {
     pub fn resize_f32(&mut self, input: &[f32]) -> Vec<f32> {
         assert!(
             self.config.input_format.is_f32(),
-            "resize_f32() requires LinearF32 format; use resize() for Srgb8"
+            "resize_f32() requires LinearF32 format; use resize() for Srgb8 or resize_u16() for Encoded16"
         );
         let out_row_len = self.config.output_row_len();
         let len = self.config.out_height as usize * out_row_len;
@@ -512,7 +539,7 @@ impl<B: Background> Resizer<B> {
     pub fn resize_f32_into(&mut self, input: &[f32], output: &mut [f32]) {
         assert!(
             self.config.input_format.is_f32(),
-            "resize_f32_into() requires LinearF32 format; use resize_into() for Srgb8"
+            "resize_f32_into() requires LinearF32 format; use resize_into() for Srgb8 or resize_u16_into() for Encoded16"
         );
         let config = &self.config;
         let in_stride = config.effective_in_stride();
@@ -595,6 +622,119 @@ impl<B: Background> Resizer<B> {
                 output[out_start..out_start + out_row_len]
                     .copy_from_slice(&temp_output[..h_row_len]);
             }
+        }
+    }
+
+    /// Resize a u16 image, allocating and returning the output.
+    ///
+    /// Uses the sRGB transfer function to linearize u16 values (0-65535) before
+    /// filtering in f32 linear-light space, then re-encodes to u16.
+    ///
+    /// # Panics
+    /// Panics if the config doesn't use `Encoded16` format.
+    pub fn resize_u16(&mut self, input: &[u16]) -> Vec<u16> {
+        assert!(
+            self.config.input_format.is_u16(),
+            "resize_u16() requires Encoded16 format"
+        );
+        let out_row_len = self.config.output_row_len();
+        let len = self.config.out_height as usize * out_row_len;
+        let mut output = vec![0u16; len];
+        self.resize_u16_into(input, &mut output);
+        output
+    }
+
+    /// Resize a u16 image into a caller-provided buffer.
+    ///
+    /// # Panics
+    /// Panics if the config doesn't use `Encoded16` format.
+    pub fn resize_u16_into(&mut self, input: &[u16], output: &mut [u16]) {
+        assert!(
+            self.config.input_format.is_u16(),
+            "resize_u16_into() requires Encoded16 format"
+        );
+
+        let config = &self.config;
+        let in_stride = config.effective_in_stride();
+        let in_row_len = config.input_row_len();
+        let out_row_len = config.output_row_len();
+        let layout = config.input_format.layout();
+        let channels = layout.channels() as usize;
+        let has_alpha = layout.has_alpha();
+        let needs_premul = layout.needs_premultiply();
+        let in_h = config.in_height as usize;
+        let out_w = config.out_width as usize;
+        let out_h = config.out_height as usize;
+        let h_row_len = out_w * channels;
+
+        let tf = Srgb;
+
+        let h_weights = self.h_weights_f32.as_ref().unwrap();
+        let v_weights = self.v_weights_f32.as_ref().unwrap();
+        let intermediate = &mut self.intermediate_f32;
+        let temp_row = &mut self.temp_row_f32;
+
+        // === Horizontal pass: u16 → f32 (linearize) → f32 (filtered) ===
+        for y in 0..in_h {
+            let in_start = y * in_stride;
+            let in_row = &input[in_start..in_start + in_row_len];
+
+            tf.u16_to_linear_f32(
+                in_row,
+                &mut temp_row[..in_row_len],
+                &(),
+                channels,
+                has_alpha,
+                needs_premul,
+            );
+
+            let out_start = y * h_row_len;
+            simd::filter_h_row_f32(
+                temp_row,
+                &mut intermediate[out_start..out_start + h_row_len],
+                h_weights,
+                channels,
+            );
+        }
+
+        // === Vertical pass: f32 → f32 → u16 (delinearize) ===
+        let max_taps = v_weights.max_taps;
+        let mut row_ptrs: Vec<&[f32]> = Vec::with_capacity(max_taps);
+        let temp_output = &mut self.temp_output_f32;
+
+        for out_y in 0..out_h {
+            let left = v_weights.left[out_y];
+            let tap_count = v_weights.tap_count(out_y);
+            let weights = v_weights.weights(out_y);
+
+            row_ptrs.clear();
+            for t in 0..tap_count {
+                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+                let start = in_y * h_row_len;
+                row_ptrs.push(&intermediate[start..start + h_row_len]);
+            }
+
+            simd::filter_v_row_f32(&row_ptrs, &mut temp_output[..h_row_len], weights);
+
+            // === Composite: source-over onto background ===
+            composite::composite_dispatch(
+                &mut temp_output[..h_row_len],
+                &mut self.background,
+                &mut self.composite_bg_row,
+                out_y as u32,
+                channels as u8,
+            );
+
+            // Convert linear f32 → sRGB u16
+            let out_start = out_y * out_row_len;
+            tf.linear_f32_to_u16(
+                &temp_output[..h_row_len],
+                &mut output[out_start..out_start + out_row_len],
+                &(),
+                channels,
+                has_alpha,
+                needs_premul,
+            );
         }
     }
 }
@@ -1049,6 +1189,126 @@ mod tests {
                 "alpha should be ~1.0, got {}",
                 pixel[3]
             );
+        }
+    }
+
+    // === u16 tests ===
+
+    #[test]
+    fn test_resize_u16_constant_color() {
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .filter(Filter::Lanczos)
+            .format(PixelFormat::Encoded16(PixelLayout::Rgba))
+            .build();
+
+        let mut input = vec![0u16; 20 * 20 * 4];
+        for pixel in input.chunks_exact_mut(4) {
+            pixel[0] = 32768; // ~50% sRGB
+            pixel[1] = 32768;
+            pixel[2] = 32768;
+            pixel[3] = 65535; // fully opaque
+        }
+
+        let output = Resizer::new(&config).resize_u16(&input);
+        assert_eq!(output.len(), 10 * 10 * 4);
+
+        for pixel in output.chunks_exact(4) {
+            assert!(
+                (pixel[0] as i32 - 32768).unsigned_abs() <= 100,
+                "R off: {} (expected ~32768)",
+                pixel[0]
+            );
+            assert!(
+                (pixel[3] as i32 - 65535).unsigned_abs() <= 1,
+                "A off: {} (expected 65535)",
+                pixel[3]
+            );
+        }
+    }
+
+    #[test]
+    fn test_resize_u16_into_matches_alloc() {
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .filter(Filter::Lanczos)
+            .format(PixelFormat::Encoded16(PixelLayout::Rgba))
+            .build();
+
+        let input = vec![40000u16; 20 * 20 * 4];
+
+        let output_alloc = Resizer::new(&config).resize_u16(&input);
+        let mut output_into = vec![0u16; 10 * 10 * 4];
+        Resizer::new(&config).resize_u16_into(&input, &mut output_into);
+
+        assert_eq!(output_alloc, output_into);
+    }
+
+    #[test]
+    fn test_resize_u16_upscale() {
+        let config = ResizeConfig::builder(10, 10, 20, 20)
+            .filter(Filter::Lanczos)
+            .format(PixelFormat::Encoded16(PixelLayout::Rgba))
+            .build();
+
+        let mut input = vec![0u16; 10 * 10 * 4];
+        for pixel in input.chunks_exact_mut(4) {
+            pixel[0] = 50000;
+            pixel[1] = 30000;
+            pixel[2] = 10000;
+            pixel[3] = 65535;
+        }
+
+        let output = Resizer::new(&config).resize_u16(&input);
+        assert_eq!(output.len(), 20 * 20 * 4);
+
+        // Center pixels should be close to original
+        let center_start = (10 * 20 + 10) * 4;
+        let px = &output[center_start..center_start + 4];
+        assert!(
+            (px[0] as i32 - 50000).unsigned_abs() <= 200,
+            "R off: {} (expected ~50000)",
+            px[0]
+        );
+    }
+
+    #[test]
+    fn test_resize_u16_rgb_3ch() {
+        let config = ResizeConfig::builder(16, 16, 8, 8)
+            .filter(Filter::Lanczos)
+            .format(PixelFormat::Encoded16(PixelLayout::Rgb))
+            .build();
+
+        let mut input = vec![0u16; 16 * 16 * 3];
+        for pixel in input.chunks_exact_mut(3) {
+            pixel[0] = 40000;
+            pixel[1] = 20000;
+            pixel[2] = 60000;
+        }
+
+        let output = Resizer::new(&config).resize_u16(&input);
+        assert_eq!(output.len(), 8 * 8 * 3);
+
+        for pixel in output.chunks_exact(3) {
+            assert!(
+                (pixel[0] as i32 - 40000).unsigned_abs() <= 200,
+                "R off: {}",
+                pixel[0]
+            );
+        }
+    }
+
+    #[test]
+    fn test_resize_u16_gray() {
+        let config = ResizeConfig::builder(16, 16, 8, 8)
+            .filter(Filter::Lanczos)
+            .format(PixelFormat::Encoded16(PixelLayout::Gray))
+            .build();
+
+        let input = vec![50000u16; 16 * 16];
+        let output = Resizer::new(&config).resize_u16(&input);
+        assert_eq!(output.len(), 8 * 8);
+
+        for &v in &output {
+            assert!((v as i32 - 50000).unsigned_abs() <= 200, "Gray off: {}", v);
         }
     }
 }
