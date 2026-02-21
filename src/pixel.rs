@@ -12,19 +12,14 @@ use alloc::vec::Vec;
 /// Controls how encoded pixel values (u8 sRGB, u16 encoded) map to/from
 /// linear light during resize. `LinearF32` data is always identity regardless
 /// of this setting.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Transfer {
     /// sRGB gamma curve. Use for standard sRGB images (the common case).
+    #[default]
     Srgb,
     /// Identity (no conversion). Use for data already in the desired space,
     /// or when gamma-space resize is intentional.
     None,
-}
-
-impl Default for Transfer {
-    fn default() -> Self {
-        Self::Srgb
-    }
 }
 
 // =============================================================================

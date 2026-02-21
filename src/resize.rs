@@ -49,7 +49,12 @@ fn decode_u16_row(
         Transfer::Srgb => Srgb.u16_to_linear_f32(src, dst, &(), channels, has_alpha, premul),
         Transfer::None => {
             crate::transfer::NoTransfer.u16_to_linear_f32(
-                src, dst, &(), channels, has_alpha, premul,
+                src,
+                dst,
+                &(),
+                channels,
+                has_alpha,
+                premul,
             );
         }
     }
@@ -68,7 +73,12 @@ fn encode_u16_row(
         Transfer::Srgb => Srgb.linear_f32_to_u16(src, dst, &(), channels, has_alpha, unpremul),
         Transfer::None => {
             crate::transfer::NoTransfer.linear_f32_to_u16(
-                src, dst, &(), channels, has_alpha, unpremul,
+                src,
+                dst,
+                &(),
+                channels,
+                has_alpha,
+                unpremul,
             );
         }
     }
@@ -169,8 +179,8 @@ impl<B: Background> Resizer<B> {
         }
 
         // Force f32 path when data types differ or transfer functions are explicit
-        let cross_format = config.input_format.bytes_per_element()
-            != config.output_format.bytes_per_element();
+        let cross_format =
+            config.input_format.bytes_per_element() != config.output_format.bytes_per_element();
         let has_explicit_transfer =
             config.input_transfer.is_some() || config.output_transfer.is_some();
         let force_f32 = composite_f32 || cross_format || has_explicit_transfer;
@@ -944,11 +954,7 @@ impl<B: Background> Resizer<B> {
                 row_ptrs.push(&self.intermediate_f32[start..start + h_row_len]);
             }
 
-            simd::filter_v_row_f32(
-                &row_ptrs,
-                &mut self.temp_output_f32[..h_row_len],
-                weights,
-            );
+            simd::filter_v_row_f32(&row_ptrs, &mut self.temp_output_f32[..h_row_len], weights);
 
             composite::composite_dispatch(
                 &mut self.temp_output_f32[..h_row_len],
@@ -1010,11 +1016,7 @@ impl<B: Background> Resizer<B> {
                     simd::unpremultiply_alpha_row(out_slice);
                 }
             } else {
-                simd::filter_v_row_f32(
-                    &row_ptrs,
-                    &mut self.temp_output_f32[..h_row_len],
-                    weights,
-                );
+                simd::filter_v_row_f32(&row_ptrs, &mut self.temp_output_f32[..h_row_len], weights);
 
                 composite::composite_dispatch(
                     &mut self.temp_output_f32[..h_row_len],
@@ -1065,11 +1067,7 @@ impl<B: Background> Resizer<B> {
                 row_ptrs.push(&self.intermediate_f32[start..start + h_row_len]);
             }
 
-            simd::filter_v_row_f32(
-                &row_ptrs,
-                &mut self.temp_output_f32[..h_row_len],
-                weights,
-            );
+            simd::filter_v_row_f32(&row_ptrs, &mut self.temp_output_f32[..h_row_len], weights);
 
             composite::composite_dispatch(
                 &mut self.temp_output_f32[..h_row_len],
@@ -1094,7 +1092,10 @@ impl<B: Background> Resizer<B> {
     /// Resize u8 input to f32 output, allocating and returning the output.
     pub fn resize_u8_to_f32(&mut self, input: &[u8]) -> Vec<f32> {
         assert!(self.config.input_format.is_u8(), "input must be Srgb8");
-        assert!(self.config.output_format.is_f32(), "output must be LinearF32");
+        assert!(
+            self.config.output_format.is_f32(),
+            "output must be LinearF32"
+        );
         let len = self.config.out_height as usize * self.config.output_row_len();
         let mut output = vec![0.0f32; len];
         self.resize_u8_to_f32_into(input, &mut output);
@@ -1104,7 +1105,10 @@ impl<B: Background> Resizer<B> {
     /// Resize u8 input to f32 output into a caller-provided buffer.
     pub fn resize_u8_to_f32_into(&mut self, input: &[u8], output: &mut [f32]) {
         assert!(self.config.input_format.is_u8(), "input must be Srgb8");
-        assert!(self.config.output_format.is_f32(), "output must be LinearF32");
+        assert!(
+            self.config.output_format.is_f32(),
+            "output must be LinearF32"
+        );
         self.f32_h_pass_u8(input);
         self.f32_v_pass_to_f32(output);
     }
@@ -1130,7 +1134,10 @@ impl<B: Background> Resizer<B> {
     /// Resize u8 input to u16 output, allocating and returning the output.
     pub fn resize_u8_to_u16(&mut self, input: &[u8]) -> Vec<u16> {
         assert!(self.config.input_format.is_u8(), "input must be Srgb8");
-        assert!(self.config.output_format.is_u16(), "output must be Encoded16");
+        assert!(
+            self.config.output_format.is_u16(),
+            "output must be Encoded16"
+        );
         let len = self.config.out_height as usize * self.config.output_row_len();
         let mut output = vec![0u16; len];
         self.resize_u8_to_u16_into(input, &mut output);
@@ -1140,7 +1147,10 @@ impl<B: Background> Resizer<B> {
     /// Resize u8 input to u16 output into a caller-provided buffer.
     pub fn resize_u8_to_u16_into(&mut self, input: &[u8], output: &mut [u16]) {
         assert!(self.config.input_format.is_u8(), "input must be Srgb8");
-        assert!(self.config.output_format.is_u16(), "output must be Encoded16");
+        assert!(
+            self.config.output_format.is_u16(),
+            "output must be Encoded16"
+        );
         self.f32_h_pass_u8(input);
         self.f32_v_pass_to_u16(output);
     }
@@ -1166,7 +1176,10 @@ impl<B: Background> Resizer<B> {
     /// Resize u16 input to f32 output, allocating and returning the output.
     pub fn resize_u16_to_f32(&mut self, input: &[u16]) -> Vec<f32> {
         assert!(self.config.input_format.is_u16(), "input must be Encoded16");
-        assert!(self.config.output_format.is_f32(), "output must be LinearF32");
+        assert!(
+            self.config.output_format.is_f32(),
+            "output must be LinearF32"
+        );
         let len = self.config.out_height as usize * self.config.output_row_len();
         let mut output = vec![0.0f32; len];
         self.resize_u16_to_f32_into(input, &mut output);
@@ -1176,7 +1189,10 @@ impl<B: Background> Resizer<B> {
     /// Resize u16 input to f32 output into a caller-provided buffer.
     pub fn resize_u16_to_f32_into(&mut self, input: &[u16], output: &mut [f32]) {
         assert!(self.config.input_format.is_u16(), "input must be Encoded16");
-        assert!(self.config.output_format.is_f32(), "output must be LinearF32");
+        assert!(
+            self.config.output_format.is_f32(),
+            "output must be LinearF32"
+        );
         self.f32_h_pass_u16(input);
         self.f32_v_pass_to_f32(output);
     }
@@ -1184,7 +1200,10 @@ impl<B: Background> Resizer<B> {
     /// Resize f32 input to u16 output, allocating and returning the output.
     pub fn resize_f32_to_u16(&mut self, input: &[f32]) -> Vec<u16> {
         assert!(self.config.input_format.is_f32(), "input must be LinearF32");
-        assert!(self.config.output_format.is_u16(), "output must be Encoded16");
+        assert!(
+            self.config.output_format.is_u16(),
+            "output must be Encoded16"
+        );
         let len = self.config.out_height as usize * self.config.output_row_len();
         let mut output = vec![0u16; len];
         self.resize_f32_to_u16_into(input, &mut output);
@@ -1194,7 +1213,10 @@ impl<B: Background> Resizer<B> {
     /// Resize f32 input to u16 output into a caller-provided buffer.
     pub fn resize_f32_to_u16_into(&mut self, input: &[f32], output: &mut [u16]) {
         assert!(self.config.input_format.is_f32(), "input must be LinearF32");
-        assert!(self.config.output_format.is_u16(), "output must be Encoded16");
+        assert!(
+            self.config.output_format.is_u16(),
+            "output must be Encoded16"
+        );
         self.f32_h_pass_f32(input);
         self.f32_v_pass_to_u16(output);
     }
