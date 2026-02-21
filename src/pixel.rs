@@ -4,6 +4,30 @@
 use alloc::vec::Vec;
 
 // =============================================================================
+// Transfer function selection
+// =============================================================================
+
+/// Transfer function selection for format conversion.
+///
+/// Controls how encoded pixel values (u8 sRGB, u16 encoded) map to/from
+/// linear light during resize. `LinearF32` data is always identity regardless
+/// of this setting.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Transfer {
+    /// sRGB gamma curve. Use for standard sRGB images (the common case).
+    Srgb,
+    /// Identity (no conversion). Use for data already in the desired space,
+    /// or when gamma-space resize is intentional.
+    None,
+}
+
+impl Default for Transfer {
+    fn default() -> Self {
+        Self::Srgb
+    }
+}
+
+// =============================================================================
 // Element trait
 // =============================================================================
 
@@ -240,6 +264,16 @@ pub struct ResizeConfig {
     pub in_stride: usize,
     /// Output row stride in elements (0 = tightly packed).
     pub out_stride: usize,
+    /// Transfer function for decoding input pixels to linear working space.
+    ///
+    /// `None` means infer from `input_format` and the `linear` flag (backwards compatible).
+    /// `Some(t)` overrides the inferred transfer function.
+    pub input_transfer: Option<Transfer>,
+    /// Transfer function for encoding linear working space to output pixels.
+    ///
+    /// `None` means infer from `output_format` and the `linear` flag (backwards compatible).
+    /// `Some(t)` overrides the inferred transfer function.
+    pub output_transfer: Option<Transfer>,
 }
 
 impl ResizeConfig {
@@ -303,6 +337,65 @@ impl ResizeConfig {
     pub fn needs_linearization(&self) -> bool {
         self.linear && self.input_format.is_srgb() && !self.input_format.layout().is_premultiplied()
     }
+
+    /// Effective input transfer function after inference.
+    ///
+    /// If `input_transfer` is explicitly set, returns that.
+    /// Otherwise infers from `input_format` and the `linear` flag:
+    /// - Premultiplied layout → `Transfer::None` (linearizing premul sRGB is wrong)
+    /// - `LinearF32` → `Transfer::None` (already linear)
+    /// - `Srgb8` + `linear=true` → `Transfer::Srgb`
+    /// - `Srgb8` + `linear=false` → `Transfer::None`
+    /// - `Encoded16` → `Transfer::Srgb`
+    pub fn effective_input_transfer(&self) -> Transfer {
+        if let Some(t) = self.input_transfer {
+            return t;
+        }
+        // Premultiplied sRGB data must not be linearized
+        if self.input_format.layout().is_premultiplied() {
+            return Transfer::None;
+        }
+        match self.input_format {
+            PixelFormat::LinearF32(_) => Transfer::None,
+            PixelFormat::Srgb8(_) => {
+                if self.linear {
+                    Transfer::Srgb
+                } else {
+                    Transfer::None
+                }
+            }
+            PixelFormat::Encoded16(_) => Transfer::Srgb,
+        }
+    }
+
+    /// Effective output transfer function after inference.
+    ///
+    /// If `output_transfer` is explicitly set, returns that.
+    /// Otherwise infers from `output_format` and the `linear` flag:
+    /// - Premultiplied layout → `Transfer::None`
+    /// - `LinearF32` → `Transfer::None` (already linear)
+    /// - `Srgb8` + `linear=true` → `Transfer::Srgb`
+    /// - `Srgb8` + `linear=false` → `Transfer::None`
+    /// - `Encoded16` → `Transfer::Srgb`
+    pub fn effective_output_transfer(&self) -> Transfer {
+        if let Some(t) = self.output_transfer {
+            return t;
+        }
+        if self.output_format.layout().is_premultiplied() {
+            return Transfer::None;
+        }
+        match self.output_format {
+            PixelFormat::LinearF32(_) => Transfer::None,
+            PixelFormat::Srgb8(_) => {
+                if self.linear {
+                    Transfer::Srgb
+                } else {
+                    Transfer::None
+                }
+            }
+            PixelFormat::Encoded16(_) => Transfer::Srgb,
+        }
+    }
 }
 
 /// Builder for [`ResizeConfig`].
@@ -329,6 +422,8 @@ pub struct ResizeConfigBuilder {
     linear: bool,
     in_stride: usize,
     out_stride: usize,
+    input_transfer: Option<Transfer>,
+    output_transfer: Option<Transfer>,
 }
 
 impl ResizeConfigBuilder {
@@ -345,6 +440,8 @@ impl ResizeConfigBuilder {
             linear: true,
             in_stride: 0,
             out_stride: 0,
+            input_transfer: None,
+            output_transfer: None,
         }
     }
 
@@ -403,6 +500,22 @@ impl ResizeConfigBuilder {
         self
     }
 
+    /// Set the input transfer function explicitly.
+    ///
+    /// Overrides the automatic inference from `input_format` and `linear`.
+    pub fn input_transfer(mut self, transfer: Transfer) -> Self {
+        self.input_transfer = Some(transfer);
+        self
+    }
+
+    /// Set the output transfer function explicitly.
+    ///
+    /// Overrides the automatic inference from `output_format` and `linear`.
+    pub fn output_transfer(mut self, transfer: Transfer) -> Self {
+        self.output_transfer = Some(transfer);
+        self
+    }
+
     /// Build the configuration.
     pub fn build(self) -> ResizeConfig {
         let output_format = self.output_format.unwrap_or(self.input_format);
@@ -418,6 +531,8 @@ impl ResizeConfigBuilder {
             linear: self.linear,
             in_stride: self.in_stride,
             out_stride: self.out_stride,
+            input_transfer: self.input_transfer,
+            output_transfer: self.output_transfer,
         }
     }
 }

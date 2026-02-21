@@ -34,7 +34,7 @@ use alloc::{vec, vec::Vec};
 use crate::color;
 use crate::composite::{self, Background, CompositeError, NoBackground};
 use crate::filter::InterpolationDetails;
-use crate::pixel::ResizeConfig;
+use crate::pixel::{ResizeConfig, Transfer};
 use crate::simd;
 use crate::transfer::{Srgb, TransferFunction};
 use crate::weights::F32WeightTable;
@@ -283,15 +283,18 @@ impl<B: Background> StreamingResize<B> {
 
         let pixel_data = &row[..pixel_len];
 
-        if self.config.needs_linearization() {
-            color::srgb_u8_to_linear_f32(
-                pixel_data,
-                &mut self.temp_input_f32[..pixel_len],
-                self.channels,
-                self.alpha_is_last,
-            );
-        } else {
-            simd::u8_to_f32_row(pixel_data, &mut self.temp_input_f32[..pixel_len]);
+        match self.config.effective_input_transfer() {
+            Transfer::Srgb => {
+                color::srgb_u8_to_linear_f32(
+                    pixel_data,
+                    &mut self.temp_input_f32[..pixel_len],
+                    self.channels,
+                    self.alpha_is_last,
+                );
+            }
+            Transfer::None => {
+                simd::u8_to_f32_row(pixel_data, &mut self.temp_input_f32[..pixel_len]);
+            }
         }
 
         if self.needs_premul {
@@ -377,16 +380,29 @@ impl<B: Background> StreamingResize<B> {
         }
 
         let pixel_data = &row[..pixel_len];
-        let tf = Srgb;
 
-        tf.u16_to_linear_f32(
-            pixel_data,
-            &mut self.temp_input_f32[..pixel_len],
-            &(),
-            self.channels,
-            self.alpha_is_last,
-            self.needs_premul,
-        );
+        match self.config.effective_input_transfer() {
+            Transfer::Srgb => {
+                Srgb.u16_to_linear_f32(
+                    pixel_data,
+                    &mut self.temp_input_f32[..pixel_len],
+                    &(),
+                    self.channels,
+                    self.alpha_is_last,
+                    self.needs_premul,
+                );
+            }
+            Transfer::None => {
+                crate::transfer::NoTransfer.u16_to_linear_f32(
+                    pixel_data,
+                    &mut self.temp_input_f32[..pixel_len],
+                    &(),
+                    self.channels,
+                    self.alpha_is_last,
+                    self.needs_premul,
+                );
+            }
+        }
 
         self.push_row_internal()
     }
@@ -420,18 +436,21 @@ impl<B: Background> StreamingResize<B> {
         }
         self.produce_next_into_temp();
         let row_len = self.config.out_width as usize * self.channels;
-        if self.config.needs_linearization() {
-            color::linear_f32_to_srgb_u8(
-                &self.temp_output_f32[..row_len],
-                &mut self.output_buf_u8[..row_len],
-                self.channels,
-                self.alpha_is_last,
-            );
-        } else {
-            simd::f32_to_u8_row(
-                &self.temp_output_f32[..row_len],
-                &mut self.output_buf_u8[..row_len],
-            );
+        match self.config.effective_output_transfer() {
+            Transfer::Srgb => {
+                color::linear_f32_to_srgb_u8(
+                    &self.temp_output_f32[..row_len],
+                    &mut self.output_buf_u8[..row_len],
+                    self.channels,
+                    self.alpha_is_last,
+                );
+            }
+            Transfer::None => {
+                simd::f32_to_u8_row(
+                    &self.temp_output_f32[..row_len],
+                    &mut self.output_buf_u8[..row_len],
+                );
+            }
         }
         Some(&self.output_buf_u8[..row_len])
     }
@@ -447,15 +466,18 @@ impl<B: Background> StreamingResize<B> {
         }
         self.produce_next_into_temp();
         let row_len = self.config.out_width as usize * self.channels;
-        if self.config.needs_linearization() {
-            color::linear_f32_to_srgb_u8(
-                &self.temp_output_f32[..row_len],
-                &mut dst[..row_len],
-                self.channels,
-                self.alpha_is_last,
-            );
-        } else {
-            simd::f32_to_u8_row(&self.temp_output_f32[..row_len], &mut dst[..row_len]);
+        match self.config.effective_output_transfer() {
+            Transfer::Srgb => {
+                color::linear_f32_to_srgb_u8(
+                    &self.temp_output_f32[..row_len],
+                    &mut dst[..row_len],
+                    self.channels,
+                    self.alpha_is_last,
+                );
+            }
+            Transfer::None => {
+                simd::f32_to_u8_row(&self.temp_output_f32[..row_len], &mut dst[..row_len]);
+            }
         }
         true
     }
@@ -482,15 +504,28 @@ impl<B: Background> StreamingResize<B> {
         }
         self.produce_next_into_temp();
         let row_len = self.config.out_width as usize * self.channels;
-        let tf = Srgb;
-        tf.linear_f32_to_u16(
-            &self.temp_output_f32[..row_len],
-            &mut self.output_buf_u16[..row_len],
-            &(),
-            self.channels,
-            self.alpha_is_last,
-            false, // unpremultiply already happened in produce_next_into_temp
-        );
+        match self.config.effective_output_transfer() {
+            Transfer::Srgb => {
+                Srgb.linear_f32_to_u16(
+                    &self.temp_output_f32[..row_len],
+                    &mut self.output_buf_u16[..row_len],
+                    &(),
+                    self.channels,
+                    self.alpha_is_last,
+                    false, // unpremultiply already happened in produce_next_into_temp
+                );
+            }
+            Transfer::None => {
+                crate::transfer::NoTransfer.linear_f32_to_u16(
+                    &self.temp_output_f32[..row_len],
+                    &mut self.output_buf_u16[..row_len],
+                    &(),
+                    self.channels,
+                    self.alpha_is_last,
+                    false,
+                );
+            }
+        }
         Some(&self.output_buf_u16[..row_len])
     }
 
@@ -504,15 +539,28 @@ impl<B: Background> StreamingResize<B> {
         }
         self.produce_next_into_temp();
         let row_len = self.config.out_width as usize * self.channels;
-        let tf = Srgb;
-        tf.linear_f32_to_u16(
-            &self.temp_output_f32[..row_len],
-            &mut dst[..row_len],
-            &(),
-            self.channels,
-            self.alpha_is_last,
-            false,
-        );
+        match self.config.effective_output_transfer() {
+            Transfer::Srgb => {
+                Srgb.linear_f32_to_u16(
+                    &self.temp_output_f32[..row_len],
+                    &mut dst[..row_len],
+                    &(),
+                    self.channels,
+                    self.alpha_is_last,
+                    false,
+                );
+            }
+            Transfer::None => {
+                crate::transfer::NoTransfer.linear_f32_to_u16(
+                    &self.temp_output_f32[..row_len],
+                    &mut dst[..row_len],
+                    &(),
+                    self.channels,
+                    self.alpha_is_last,
+                    false,
+                );
+            }
+        }
         true
     }
 

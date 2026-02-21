@@ -10,11 +10,69 @@ use alloc::{vec, vec::Vec};
 use crate::color;
 use crate::composite::{self, Background, CompositeError, NoBackground};
 use crate::filter::InterpolationDetails;
-use crate::pixel::ResizeConfig;
+use crate::pixel::{ResizeConfig, Transfer};
 use crate::proven;
 use crate::simd;
 use crate::transfer::{Srgb, TransferFunction};
 use crate::weights::{F32WeightTable, I16WeightTable};
+
+// =============================================================================
+// Transfer-function-aware decode/encode helpers
+// =============================================================================
+
+/// Decode a u8 row to f32 using the specified transfer function.
+fn decode_u8_row(src: &[u8], dst: &mut [f32], tf: Transfer, channels: usize, has_alpha: bool) {
+    match tf {
+        Transfer::Srgb => color::srgb_u8_to_linear_f32(src, dst, channels, has_alpha),
+        Transfer::None => simd::u8_to_f32_row(src, dst),
+    }
+}
+
+/// Encode f32 to u8 row using the specified transfer function.
+fn encode_u8_row(src: &[f32], dst: &mut [u8], tf: Transfer, channels: usize, has_alpha: bool) {
+    match tf {
+        Transfer::Srgb => color::linear_f32_to_srgb_u8(src, dst, channels, has_alpha),
+        Transfer::None => simd::f32_to_u8_row(src, dst),
+    }
+}
+
+/// Decode a u16 row to f32 using the specified transfer function.
+fn decode_u16_row(
+    src: &[u16],
+    dst: &mut [f32],
+    tf: Transfer,
+    channels: usize,
+    has_alpha: bool,
+    premul: bool,
+) {
+    match tf {
+        Transfer::Srgb => Srgb.u16_to_linear_f32(src, dst, &(), channels, has_alpha, premul),
+        Transfer::None => {
+            crate::transfer::NoTransfer.u16_to_linear_f32(
+                src, dst, &(), channels, has_alpha, premul,
+            );
+        }
+    }
+}
+
+/// Encode f32 to u16 row using the specified transfer function.
+fn encode_u16_row(
+    src: &[f32],
+    dst: &mut [u16],
+    tf: Transfer,
+    channels: usize,
+    has_alpha: bool,
+    unpremul: bool,
+) {
+    match tf {
+        Transfer::Srgb => Srgb.linear_f32_to_u16(src, dst, &(), channels, has_alpha, unpremul),
+        Transfer::None => {
+            crate::transfer::NoTransfer.linear_f32_to_u16(
+                src, dst, &(), channels, has_alpha, unpremul,
+            );
+        }
+    }
+}
 
 /// Reusable resizer with pre-computed weight tables.
 ///
@@ -103,12 +161,19 @@ impl<B: Background> Resizer<B> {
         config.validate().expect("invalid resize config");
 
         let mut config = config.clone();
-        let force_f32 = has_composite && !background.is_transparent();
+        let composite_f32 = has_composite && !background.is_transparent();
 
         // Compositing requires linear f32 path
-        if force_f32 {
+        if composite_f32 {
             config.linear = true;
         }
+
+        // Force f32 path when data types differ or transfer functions are explicit
+        let cross_format = config.input_format.bytes_per_element()
+            != config.output_format.bytes_per_element();
+        let has_explicit_transfer =
+            config.input_transfer.is_some() || config.output_transfer.is_some();
+        let force_f32 = composite_f32 || cross_format || has_explicit_transfer;
 
         let filter = InterpolationDetails::create(config.filter);
         let layout = config.input_format.layout();
@@ -434,7 +499,8 @@ impl<B: Background> Resizer<B> {
                 // Path 2: f32 path with u8 I/O
                 let h_weights = self.h_weights_f32.as_ref().unwrap();
                 let v_weights = self.v_weights_f32.as_ref().unwrap();
-                let linearize = config.needs_linearization();
+                let input_tf = config.effective_input_transfer();
+                let output_tf = config.effective_output_transfer();
                 let intermediate = &mut self.intermediate_f32;
                 let temp_row = &mut self.temp_row_f32;
 
@@ -443,16 +509,13 @@ impl<B: Background> Resizer<B> {
                     let in_start = y * in_stride;
                     let in_row = &input[in_start..in_start + in_row_len];
 
-                    if linearize {
-                        color::srgb_u8_to_linear_f32(
-                            in_row,
-                            &mut temp_row[..in_row_len],
-                            channels,
-                            layout.alpha_is_last_channel(),
-                        );
-                    } else {
-                        simd::u8_to_f32_row(in_row, &mut temp_row[..in_row_len]);
-                    }
+                    decode_u8_row(
+                        in_row,
+                        &mut temp_row[..in_row_len],
+                        input_tf,
+                        channels,
+                        layout.alpha_is_last_channel(),
+                    );
 
                     if needs_premul {
                         simd::premultiply_alpha_row(&mut temp_row[..in_row_len]);
@@ -501,16 +564,13 @@ impl<B: Background> Resizer<B> {
 
                     let out_start = out_y * out_row_len;
                     let out_slice = &mut output[out_start..out_start + out_row_len];
-                    if linearize {
-                        color::linear_f32_to_srgb_u8(
-                            &temp_output[..h_row_len],
-                            out_slice,
-                            channels,
-                            layout.alpha_is_last_channel(),
-                        );
-                    } else {
-                        simd::f32_to_u8_row(&temp_output[..h_row_len], out_slice);
-                    }
+                    encode_u8_row(
+                        &temp_output[..h_row_len],
+                        out_slice,
+                        output_tf,
+                        channels,
+                        layout.alpha_is_last_channel(),
+                    );
                 }
             }
         }
@@ -736,6 +796,407 @@ impl<B: Background> Resizer<B> {
                 needs_premul,
             );
         }
+    }
+
+    // =========================================================================
+    // Cross-format resize methods
+    // =========================================================================
+
+    /// Internal: f32-path horizontal pass with u8 input.
+    fn f32_h_pass_u8(&mut self, input: &[u8]) {
+        let config = &self.config;
+        let in_stride = config.effective_in_stride();
+        let in_row_len = config.input_row_len();
+        let layout = config.input_format.layout();
+        let channels = layout.channels() as usize;
+        let needs_premul = layout.needs_premultiply();
+        let in_h = config.in_height as usize;
+        let out_w = config.out_width as usize;
+        let h_row_len = out_w * channels;
+        let input_tf = config.effective_input_transfer();
+
+        let h_weights = self.h_weights_f32.as_ref().unwrap();
+
+        for y in 0..in_h {
+            let in_start = y * in_stride;
+            let in_row = &input[in_start..in_start + in_row_len];
+
+            decode_u8_row(
+                in_row,
+                &mut self.temp_row_f32[..in_row_len],
+                input_tf,
+                channels,
+                layout.alpha_is_last_channel(),
+            );
+
+            if needs_premul {
+                simd::premultiply_alpha_row(&mut self.temp_row_f32[..in_row_len]);
+            }
+
+            let out_start = y * h_row_len;
+            simd::filter_h_row_f32(
+                &self.temp_row_f32,
+                &mut self.intermediate_f32[out_start..out_start + h_row_len],
+                h_weights,
+                channels,
+            );
+        }
+    }
+
+    /// Internal: f32-path horizontal pass with f32 input.
+    fn f32_h_pass_f32(&mut self, input: &[f32]) {
+        let config = &self.config;
+        let in_stride = config.effective_in_stride();
+        let in_row_len = config.input_row_len();
+        let layout = config.input_format.layout();
+        let channels = layout.channels() as usize;
+        let needs_premul = layout.needs_premultiply();
+        let in_h = config.in_height as usize;
+        let out_w = config.out_width as usize;
+        let h_row_len = out_w * channels;
+
+        let h_weights = self.h_weights_f32.as_ref().unwrap();
+
+        for y in 0..in_h {
+            let in_start = y * in_stride;
+            self.temp_row_f32[..in_row_len]
+                .copy_from_slice(&input[in_start..in_start + in_row_len]);
+
+            if needs_premul {
+                simd::premultiply_alpha_row(&mut self.temp_row_f32[..in_row_len]);
+            }
+
+            let out_start = y * h_row_len;
+            simd::filter_h_row_f32(
+                &self.temp_row_f32,
+                &mut self.intermediate_f32[out_start..out_start + h_row_len],
+                h_weights,
+                channels,
+            );
+        }
+    }
+
+    /// Internal: f32-path horizontal pass with u16 input.
+    fn f32_h_pass_u16(&mut self, input: &[u16]) {
+        let config = &self.config;
+        let in_stride = config.effective_in_stride();
+        let in_row_len = config.input_row_len();
+        let layout = config.input_format.layout();
+        let channels = layout.channels() as usize;
+        let needs_premul = layout.needs_premultiply();
+        let has_alpha = layout.has_alpha();
+        let in_h = config.in_height as usize;
+        let out_w = config.out_width as usize;
+        let h_row_len = out_w * channels;
+        let input_tf = config.effective_input_transfer();
+
+        let h_weights = self.h_weights_f32.as_ref().unwrap();
+
+        for y in 0..in_h {
+            let in_start = y * in_stride;
+            let in_row = &input[in_start..in_start + in_row_len];
+
+            decode_u16_row(
+                in_row,
+                &mut self.temp_row_f32[..in_row_len],
+                input_tf,
+                channels,
+                has_alpha,
+                needs_premul,
+            );
+
+            let out_start = y * h_row_len;
+            simd::filter_h_row_f32(
+                &self.temp_row_f32,
+                &mut self.intermediate_f32[out_start..out_start + h_row_len],
+                h_weights,
+                channels,
+            );
+        }
+    }
+
+    /// Internal: f32-path vertical pass, encoding output as u8.
+    fn f32_v_pass_to_u8(&mut self, output: &mut [u8]) {
+        let config = &self.config;
+        let layout = config.output_format.layout();
+        let channels = layout.channels() as usize;
+        let needs_premul = layout.needs_premultiply();
+        let in_h = config.in_height as usize;
+        let out_w = config.out_width as usize;
+        let out_h = config.out_height as usize;
+        let out_row_len = config.output_row_len();
+        let h_row_len = out_w * channels;
+        let output_tf = config.effective_output_transfer();
+
+        let v_weights = self.v_weights_f32.as_ref().unwrap();
+        let max_taps = v_weights.max_taps;
+        let mut row_ptrs: Vec<&[f32]> = Vec::with_capacity(max_taps);
+
+        for out_y in 0..out_h {
+            let left = v_weights.left[out_y];
+            let tap_count = v_weights.tap_count(out_y);
+            let weights = v_weights.weights(out_y);
+
+            row_ptrs.clear();
+            for t in 0..tap_count {
+                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+                let start = in_y * h_row_len;
+                row_ptrs.push(&self.intermediate_f32[start..start + h_row_len]);
+            }
+
+            simd::filter_v_row_f32(
+                &row_ptrs,
+                &mut self.temp_output_f32[..h_row_len],
+                weights,
+            );
+
+            composite::composite_dispatch(
+                &mut self.temp_output_f32[..h_row_len],
+                &mut self.background,
+                &mut self.composite_bg_row,
+                out_y as u32,
+                channels as u8,
+            );
+
+            if needs_premul {
+                simd::unpremultiply_alpha_row(&mut self.temp_output_f32[..h_row_len]);
+            }
+
+            let out_start = out_y * out_row_len;
+            encode_u8_row(
+                &self.temp_output_f32[..h_row_len],
+                &mut output[out_start..out_start + out_row_len],
+                output_tf,
+                channels,
+                layout.alpha_is_last_channel(),
+            );
+        }
+    }
+
+    /// Internal: f32-path vertical pass, encoding output as f32.
+    fn f32_v_pass_to_f32(&mut self, output: &mut [f32]) {
+        let config = &self.config;
+        let layout = config.output_format.layout();
+        let channels = layout.channels() as usize;
+        let needs_premul = layout.needs_premultiply();
+        let in_h = config.in_height as usize;
+        let out_w = config.out_width as usize;
+        let out_h = config.out_height as usize;
+        let out_row_len = config.output_row_len();
+        let h_row_len = out_w * channels;
+
+        let v_weights = self.v_weights_f32.as_ref().unwrap();
+        let max_taps = v_weights.max_taps;
+        let mut row_ptrs: Vec<&[f32]> = Vec::with_capacity(max_taps);
+
+        for out_y in 0..out_h {
+            let left = v_weights.left[out_y];
+            let tap_count = v_weights.tap_count(out_y);
+            let weights = v_weights.weights(out_y);
+
+            row_ptrs.clear();
+            for t in 0..tap_count {
+                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+                let start = in_y * h_row_len;
+                row_ptrs.push(&self.intermediate_f32[start..start + h_row_len]);
+            }
+
+            if self.background.is_transparent() {
+                let out_start = out_y * out_row_len;
+                let out_slice = &mut output[out_start..out_start + out_row_len];
+                simd::filter_v_row_f32(&row_ptrs, out_slice, weights);
+
+                if needs_premul {
+                    simd::unpremultiply_alpha_row(out_slice);
+                }
+            } else {
+                simd::filter_v_row_f32(
+                    &row_ptrs,
+                    &mut self.temp_output_f32[..h_row_len],
+                    weights,
+                );
+
+                composite::composite_dispatch(
+                    &mut self.temp_output_f32[..h_row_len],
+                    &mut self.background,
+                    &mut self.composite_bg_row,
+                    out_y as u32,
+                    channels as u8,
+                );
+
+                if needs_premul {
+                    simd::unpremultiply_alpha_row(&mut self.temp_output_f32[..h_row_len]);
+                }
+
+                let out_start = out_y * out_row_len;
+                output[out_start..out_start + out_row_len]
+                    .copy_from_slice(&self.temp_output_f32[..h_row_len]);
+            }
+        }
+    }
+
+    /// Internal: f32-path vertical pass, encoding output as u16.
+    fn f32_v_pass_to_u16(&mut self, output: &mut [u16]) {
+        let config = &self.config;
+        let layout = config.output_format.layout();
+        let channels = layout.channels() as usize;
+        let needs_premul = layout.needs_premultiply();
+        let has_alpha = layout.has_alpha();
+        let in_h = config.in_height as usize;
+        let out_w = config.out_width as usize;
+        let out_h = config.out_height as usize;
+        let out_row_len = config.output_row_len();
+        let h_row_len = out_w * channels;
+        let output_tf = config.effective_output_transfer();
+
+        let v_weights = self.v_weights_f32.as_ref().unwrap();
+        let max_taps = v_weights.max_taps;
+        let mut row_ptrs: Vec<&[f32]> = Vec::with_capacity(max_taps);
+
+        for out_y in 0..out_h {
+            let left = v_weights.left[out_y];
+            let tap_count = v_weights.tap_count(out_y);
+            let weights = v_weights.weights(out_y);
+
+            row_ptrs.clear();
+            for t in 0..tap_count {
+                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+                let start = in_y * h_row_len;
+                row_ptrs.push(&self.intermediate_f32[start..start + h_row_len]);
+            }
+
+            simd::filter_v_row_f32(
+                &row_ptrs,
+                &mut self.temp_output_f32[..h_row_len],
+                weights,
+            );
+
+            composite::composite_dispatch(
+                &mut self.temp_output_f32[..h_row_len],
+                &mut self.background,
+                &mut self.composite_bg_row,
+                out_y as u32,
+                channels as u8,
+            );
+
+            let out_start = out_y * out_row_len;
+            encode_u16_row(
+                &self.temp_output_f32[..h_row_len],
+                &mut output[out_start..out_start + out_row_len],
+                output_tf,
+                channels,
+                has_alpha,
+                needs_premul,
+            );
+        }
+    }
+
+    /// Resize u8 input to f32 output, allocating and returning the output.
+    pub fn resize_u8_to_f32(&mut self, input: &[u8]) -> Vec<f32> {
+        assert!(self.config.input_format.is_u8(), "input must be Srgb8");
+        assert!(self.config.output_format.is_f32(), "output must be LinearF32");
+        let len = self.config.out_height as usize * self.config.output_row_len();
+        let mut output = vec![0.0f32; len];
+        self.resize_u8_to_f32_into(input, &mut output);
+        output
+    }
+
+    /// Resize u8 input to f32 output into a caller-provided buffer.
+    pub fn resize_u8_to_f32_into(&mut self, input: &[u8], output: &mut [f32]) {
+        assert!(self.config.input_format.is_u8(), "input must be Srgb8");
+        assert!(self.config.output_format.is_f32(), "output must be LinearF32");
+        self.f32_h_pass_u8(input);
+        self.f32_v_pass_to_f32(output);
+    }
+
+    /// Resize f32 input to u8 output, allocating and returning the output.
+    pub fn resize_f32_to_u8(&mut self, input: &[f32]) -> Vec<u8> {
+        assert!(self.config.input_format.is_f32(), "input must be LinearF32");
+        assert!(self.config.output_format.is_u8(), "output must be Srgb8");
+        let len = self.config.out_height as usize * self.config.output_row_len();
+        let mut output = proven::alloc_output::<u8>(len);
+        self.resize_f32_to_u8_into(input, &mut output);
+        output
+    }
+
+    /// Resize f32 input to u8 output into a caller-provided buffer.
+    pub fn resize_f32_to_u8_into(&mut self, input: &[f32], output: &mut [u8]) {
+        assert!(self.config.input_format.is_f32(), "input must be LinearF32");
+        assert!(self.config.output_format.is_u8(), "output must be Srgb8");
+        self.f32_h_pass_f32(input);
+        self.f32_v_pass_to_u8(output);
+    }
+
+    /// Resize u8 input to u16 output, allocating and returning the output.
+    pub fn resize_u8_to_u16(&mut self, input: &[u8]) -> Vec<u16> {
+        assert!(self.config.input_format.is_u8(), "input must be Srgb8");
+        assert!(self.config.output_format.is_u16(), "output must be Encoded16");
+        let len = self.config.out_height as usize * self.config.output_row_len();
+        let mut output = vec![0u16; len];
+        self.resize_u8_to_u16_into(input, &mut output);
+        output
+    }
+
+    /// Resize u8 input to u16 output into a caller-provided buffer.
+    pub fn resize_u8_to_u16_into(&mut self, input: &[u8], output: &mut [u16]) {
+        assert!(self.config.input_format.is_u8(), "input must be Srgb8");
+        assert!(self.config.output_format.is_u16(), "output must be Encoded16");
+        self.f32_h_pass_u8(input);
+        self.f32_v_pass_to_u16(output);
+    }
+
+    /// Resize u16 input to u8 output, allocating and returning the output.
+    pub fn resize_u16_to_u8(&mut self, input: &[u16]) -> Vec<u8> {
+        assert!(self.config.input_format.is_u16(), "input must be Encoded16");
+        assert!(self.config.output_format.is_u8(), "output must be Srgb8");
+        let len = self.config.out_height as usize * self.config.output_row_len();
+        let mut output = proven::alloc_output::<u8>(len);
+        self.resize_u16_to_u8_into(input, &mut output);
+        output
+    }
+
+    /// Resize u16 input to u8 output into a caller-provided buffer.
+    pub fn resize_u16_to_u8_into(&mut self, input: &[u16], output: &mut [u8]) {
+        assert!(self.config.input_format.is_u16(), "input must be Encoded16");
+        assert!(self.config.output_format.is_u8(), "output must be Srgb8");
+        self.f32_h_pass_u16(input);
+        self.f32_v_pass_to_u8(output);
+    }
+
+    /// Resize u16 input to f32 output, allocating and returning the output.
+    pub fn resize_u16_to_f32(&mut self, input: &[u16]) -> Vec<f32> {
+        assert!(self.config.input_format.is_u16(), "input must be Encoded16");
+        assert!(self.config.output_format.is_f32(), "output must be LinearF32");
+        let len = self.config.out_height as usize * self.config.output_row_len();
+        let mut output = vec![0.0f32; len];
+        self.resize_u16_to_f32_into(input, &mut output);
+        output
+    }
+
+    /// Resize u16 input to f32 output into a caller-provided buffer.
+    pub fn resize_u16_to_f32_into(&mut self, input: &[u16], output: &mut [f32]) {
+        assert!(self.config.input_format.is_u16(), "input must be Encoded16");
+        assert!(self.config.output_format.is_f32(), "output must be LinearF32");
+        self.f32_h_pass_u16(input);
+        self.f32_v_pass_to_f32(output);
+    }
+
+    /// Resize f32 input to u16 output, allocating and returning the output.
+    pub fn resize_f32_to_u16(&mut self, input: &[f32]) -> Vec<u16> {
+        assert!(self.config.input_format.is_f32(), "input must be LinearF32");
+        assert!(self.config.output_format.is_u16(), "output must be Encoded16");
+        let len = self.config.out_height as usize * self.config.output_row_len();
+        let mut output = vec![0u16; len];
+        self.resize_f32_to_u16_into(input, &mut output);
+        output
+    }
+
+    /// Resize f32 input to u16 output into a caller-provided buffer.
+    pub fn resize_f32_to_u16_into(&mut self, input: &[f32], output: &mut [u16]) {
+        assert!(self.config.input_format.is_f32(), "input must be LinearF32");
+        assert!(self.config.output_format.is_u16(), "output must be Encoded16");
+        self.f32_h_pass_f32(input);
+        self.f32_v_pass_to_u16(output);
     }
 }
 

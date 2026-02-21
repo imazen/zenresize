@@ -62,7 +62,7 @@ pub use layout::{
     CanvasColor, Constraint, ConstraintMode, DecoderOffer, DecoderRequest, Gravity, IdealLayout,
     Layout, LayoutError, LayoutPlan, Orientation, Pipeline, Rect, Size, SourceCrop,
 };
-pub use pixel::{PixelFormat, PixelLayout, ResizeConfig, ResizeConfigBuilder};
+pub use pixel::{PixelFormat, PixelLayout, ResizeConfig, ResizeConfigBuilder, Transfer};
 pub use plane::PlaneResizer;
 pub use resize::Resizer;
 pub use streaming::{StreamingError, StreamingResize};
