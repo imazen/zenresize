@@ -16,15 +16,22 @@
 //! available output rows between `push_row` calls.
 //!
 //! ```ignore
+//! // Single-row API:
 //! for row in input_rows {
 //!     resizer.push_row(row)?;
 //!     while let Some(output) = resizer.next_output_row() {
 //!         encoder.write_row(output);
 //!     }
 //! }
-//! resizer.finish();
-//! while let Some(output) = resizer.next_output_row() {
-//!     encoder.write_row(output);
+//! let remaining = resizer.finish();
+//! for _ in 0..remaining {
+//!     encoder.write_row(resizer.next_output_row().unwrap());
+//! }
+//!
+//! // Batch API (for multi-row decode buffers):
+//! let available = resizer.push_rows(&buf, stride, rows_read)?;
+//! for _ in 0..available {
+//!     encoder.write_row(resizer.next_output_row().unwrap());
 //! }
 //! ```
 
@@ -181,7 +188,16 @@ pub struct StreamingResize<B: Background = NoBackground> {
 impl StreamingResize<NoBackground> {
     /// Create a new streaming resizer (no background compositing).
     pub fn new(config: &ResizeConfig) -> Self {
-        Self::new_inner(config, NoBackground, false)
+        Self::new_inner(config, NoBackground, false, 0)
+    }
+
+    /// Create a streaming resizer with a batch hint for [`push_rows()`](Self::push_rows).
+    ///
+    /// The `batch_hint` controls the ring buffer size: `max_taps + batch_hint + 2`.
+    /// Set this to the number of rows you'll push per batch (e.g., 8 for zenjpeg).
+    /// Without a hint (or 0), the buffer is sized for one-at-a-time push/drain.
+    pub fn with_batch_hint(config: &ResizeConfig, batch_hint: u32) -> Self {
+        Self::new_inner(config, NoBackground, false, batch_hint)
     }
 }
 
@@ -200,10 +216,15 @@ impl<B: Background> StreamingResize<B> {
         if config.input_format.layout().is_premultiplied() {
             return Err(CompositeError::PremultipliedInput);
         }
-        Ok(Self::new_inner(config, background, true))
+        Ok(Self::new_inner(config, background, true, 0))
     }
 
-    fn new_inner(config: &ResizeConfig, background: B, has_composite: bool) -> Self {
+    fn new_inner(
+        config: &ResizeConfig,
+        background: B,
+        has_composite: bool,
+        batch_hint: u32,
+    ) -> Self {
         config.validate().expect("invalid resize config");
 
         let mut config = config.clone();
@@ -248,7 +269,12 @@ impl<B: Background> StreamingResize<B> {
             StreamingPath::F32
         };
 
-        let cache_size = v_weights.max_taps + 2;
+        let extra_slack = if batch_hint > 0 {
+            batch_hint as usize + 2
+        } else {
+            2
+        };
+        let cache_size = v_weights.max_taps + extra_slack;
         let in_row_len = config.in_width as usize * channels;
         let out_row_len = config.out_width as usize * channels;
 
@@ -445,6 +471,27 @@ impl<B: Background> StreamingResize<B> {
         self.output_rows_produced >= self.config.out_height
     }
 
+    /// Count how many output rows can be produced right now without more input.
+    ///
+    /// This is the number of consecutive `next_output_row()` calls that will
+    /// return `Some` before returning `None`.
+    pub fn output_rows_available(&self) -> u32 {
+        let mut count = 0u32;
+        let mut probe_y = self.output_rows_produced;
+        while probe_y < self.config.out_height {
+            let left = self.v_weights.left[probe_y as usize];
+            let tap_count = self.v_weights.tap_count(probe_y as usize);
+            let right = left + tap_count as i32 - 1;
+            let needed_max = right.min(self.config.in_height as i32 - 1).max(0) as u32;
+            if needed_max >= self.input_rows_received {
+                break;
+            }
+            count += 1;
+            probe_y += 1;
+        }
+        count
+    }
+
     // =========================================================================
     // Input methods
     // =========================================================================
@@ -551,6 +598,43 @@ impl<B: Background> StreamingResize<B> {
         }
 
         self.push_row_internal()
+    }
+
+    /// Push multiple rows of u8 input pixels from a contiguous buffer.
+    ///
+    /// Each row is `stride` bytes apart in `buf`. Pushes `count` rows and
+    /// returns the number of output rows available to drain via `next_output_row()`.
+    ///
+    /// Caller MUST drain all available output rows between `push_rows` calls.
+    /// The batch size must be small enough to fit in the ring buffer without
+    /// draining (typically `max_taps + 2` slots). For typical photo sizes and
+    /// filters, batches of 8 rows work well.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StreamingError::AlreadyFinished`] if called after `finish()`.
+    /// Returns [`StreamingError::InputTooShort`] if `buf` is too short for the
+    /// given `stride` and `count`.
+    /// Returns [`StreamingError::RingBufferOverflow`] if the batch is too large
+    /// for the ring buffer. Use a smaller batch or drain between pushes.
+    pub fn push_rows(
+        &mut self,
+        buf: &[u8],
+        stride: usize,
+        count: u32,
+    ) -> Result<u32, StreamingError> {
+        let expected_len = if count == 0 {
+            0
+        } else {
+            stride * (count as usize - 1) + self.config.input_row_len()
+        };
+        if buf.len() < expected_len {
+            return Err(StreamingError::InputTooShort);
+        }
+        for i in 0..count as usize {
+            self.push_row(&buf[i * stride..])?;
+        }
+        Ok(self.output_rows_available())
     }
 
     /// Push one row of f32 input pixels. Premultiplies (if needed) and caches the row.
@@ -779,15 +863,20 @@ impl<B: Background> StreamingResize<B> {
 
     /// Signal end of input. No more rows may be pushed after this call.
     ///
+    /// Returns the number of output rows still available to drain.
+    ///
     /// After calling `finish()`, drain remaining output rows:
     /// ```ignore
-    /// resizer.finish();
-    /// while let Some(row) = resizer.next_output_row() {
-    ///     encoder.write_row(row);
+    /// let remaining = resizer.finish();
+    /// for _ in 0..remaining {
+    ///     if let Some(row) = resizer.next_output_row() {
+    ///         encoder.write_row(row);
+    ///     }
     /// }
     /// ```
-    pub fn finish(&mut self) {
+    pub fn finish(&mut self) -> u32 {
         self.finished = true;
+        self.output_rows_available()
     }
 
     // =========================================================================
@@ -1426,6 +1515,96 @@ mod tests {
             resizer.push_row(&short_row),
             Err(StreamingError::InputTooShort)
         );
+    }
+
+    #[test]
+    fn test_push_rows_batch_matches_single() {
+        // Use with_batch_hint(8) to size the ring buffer for batch=8 pushes.
+        let (in_w, in_h, out_w, out_h) = (400, 400, 100, 100);
+        let config = make_config(in_w, in_h, out_w, out_h);
+        let row = vec![128u8; in_w as usize * 4];
+
+        // Collect output using single-row API
+        let mut r1 = StreamingResize::new(&config);
+        let single_output = push_drain_collect_u8(&mut r1, &row, in_h);
+
+        // Collect output using batch API (push 8 rows at a time, like zenjpeg)
+        let mut r2 = StreamingResize::with_batch_hint(&config, 8);
+        let stride = in_w as usize * 4;
+        let batch = 8usize;
+        let buf: Vec<u8> = row.iter().copied().cycle().take(stride * batch).collect();
+        let mut batch_output = Vec::new();
+        for chunk_start in (0..in_h).step_by(batch) {
+            let count = batch.min((in_h - chunk_start) as usize) as u32;
+            let available = r2
+                .push_rows(&buf[..stride * count as usize], stride, count)
+                .unwrap();
+            for _ in 0..available {
+                batch_output.push(r2.next_output_row().unwrap().to_vec());
+            }
+        }
+        let remaining = r2.finish();
+        for _ in 0..remaining {
+            batch_output.push(r2.next_output_row().unwrap().to_vec());
+        }
+
+        assert_eq!(single_output.len(), batch_output.len());
+        assert_eq!(single_output.len(), out_h as usize);
+        for (a, b) in single_output.iter().zip(batch_output.iter()) {
+            assert_eq!(a, b);
+        }
+    }
+
+    #[test]
+    fn test_output_rows_available_accurate() {
+        let config = make_config(20, 20, 10, 10);
+        let mut resizer = StreamingResize::new(&config);
+        let row = vec![128u8; 20 * 4];
+
+        // Initially no output available
+        assert_eq!(resizer.output_rows_available(), 0);
+
+        // Push rows until some output becomes available
+        let mut first_available = 0u32;
+        for _ in 0..20 {
+            resizer.push_row(&row).unwrap();
+            let avail = resizer.output_rows_available();
+            if avail > 0 && first_available == 0 {
+                first_available = avail;
+                // The count should match what next_output_row actually produces
+                let mut actual = 0;
+                while resizer.next_output_row().is_some() {
+                    actual += 1;
+                }
+                assert_eq!(first_available, actual);
+                break;
+            }
+        }
+        assert!(first_available > 0, "should have produced output");
+    }
+
+    #[test]
+    fn test_finish_returns_remaining_count() {
+        let config = make_config(20, 20, 10, 10);
+        let mut resizer = StreamingResize::new(&config);
+        let row = vec![128u8; 20 * 4];
+
+        let mut produced = 0u32;
+        for _ in 0..20 {
+            resizer.push_row(&row).unwrap();
+            while resizer.next_output_row().is_some() {
+                produced += 1;
+            }
+        }
+
+        let remaining = resizer.finish();
+        let mut after_finish = 0u32;
+        while resizer.next_output_row().is_some() {
+            after_finish += 1;
+        }
+
+        assert_eq!(remaining, after_finish);
+        assert_eq!(produced + after_finish, 10);
     }
 
     // === Composite tests ===
