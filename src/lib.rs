@@ -53,8 +53,9 @@ mod simd;
 // Re-exports: minimal public API
 #[cfg(feature = "layout")]
 pub use execute::{
-    execute, execute_layout, execute_layout_with_background, execute_secondary,
-    execute_secondary_with_background, execute_with_background, execute_with_offer, orient_image,
+    canvas_color_to_pixel, execute, execute_layout, execute_layout_with_background,
+    execute_secondary, execute_secondary_with_background, execute_with_background,
+    execute_with_offer, fill_canvas, orient_image, place_on_canvas, replicate_edges,
 };
 pub use filter::Filter;
 #[cfg(feature = "layout")]

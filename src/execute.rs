@@ -637,7 +637,7 @@ fn compact_strided(src: &[u8], w: u32, h: u32, stride: usize, ch: usize) -> Vec<
 
 /// Convert a [`CanvasColor`] to pixel bytes for the given format.
 #[allow(unreachable_patterns)] // non_exhaustive enums require wildcard arms
-fn canvas_color_to_pixel(color: &CanvasColor, format: PixelFormat) -> Vec<u8> {
+pub fn canvas_color_to_pixel(color: &CanvasColor, format: PixelFormat) -> Vec<u8> {
     let ch = format.channels() as usize;
     match color {
         CanvasColor::Transparent => vec![0u8; ch],
@@ -690,7 +690,7 @@ fn premul_linear_f32_to_srgb_u8_pixel(pixel: &[f32; 4], format: PixelFormat) -> 
 }
 
 /// Fill a canvas buffer with a repeated pixel value.
-fn fill_canvas(w: u32, h: u32, pixel: &[u8]) -> Vec<u8> {
+pub fn fill_canvas(w: u32, h: u32, pixel: &[u8]) -> Vec<u8> {
     let ch = pixel.len();
     let total = w as usize * h as usize * ch;
     let mut buf = vec![0u8; total];
@@ -716,7 +716,7 @@ fn fill_canvas(w: u32, h: u32, pixel: &[u8]) -> Vec<u8> {
 ///
 /// Handles negative placement (content extends past top-left) and clipping.
 #[allow(clippy::too_many_arguments)]
-fn place_on_canvas(
+pub fn place_on_canvas(
     canvas: &mut [u8],
     canvas_w: u32,
     canvas_h: u32,
@@ -762,7 +762,7 @@ fn place_on_canvas(
 ///
 /// For content rows: replicate the rightmost content pixel across extension columns.
 /// Then copy the last full row (already right-extended) into all rows below.
-fn replicate_edges(
+pub fn replicate_edges(
     buf: &mut [u8],
     canvas_w: u32,
     canvas_h: u32,
