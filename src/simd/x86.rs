@@ -150,71 +150,96 @@ pub(crate) fn filter_h_row_f32_v3(
     }
 }
 
-/// Horizontal filter for 4-channel (RGBA) data.
+/// Horizontal filter for 4-channel (RGBA) data using AVX2 256-bit.
 ///
-/// Uses 4 independent accumulators to break the serial FMA dependency chain.
-/// FMA latency is 4 cycles, throughput is 2/cycle — with 4 independent chains
-/// the CPU's out-of-order engine can keep both FMA ports busy.
+/// Each AVX2 accumulator processes 2 taps simultaneously: the lower 128 bits
+/// accumulate `pixel[t] * weight[t]`, the upper 128 bits accumulate
+/// `pixel[t+1] * weight[t+1]`. Four accumulators process 8 taps per iteration.
 ///
-/// Fixed `max_taps` loop count enables LLVM unrolling. Edge pixels that would
-/// read beyond the input are handled by clamping to the last valid pixel;
-/// the zero-padded weights ensure these clamped reads don't affect the result.
+/// Weight broadcasting uses `vpermps` (cross-lane permute) to extract per-tap
+/// broadcasts from a single 8-weight load, avoiding individual `vbroadcastss`
+/// + `vinsertf128` overhead.
+///
+/// The final reduction adds upper 128 bits to lower 128 bits across all
+/// accumulators, collapsing into one RGBA pixel result.
+///
+/// Remaining taps (0..7) are handled by SSE 128-bit (1 tap at a time).
 #[archmage::rite]
 fn filter_h_4ch(_token: X64V3Token, input: &[f32], output: &mut [f32], weights: &F32WeightTable) {
     let out_width = weights.len();
     let max_taps = weights.max_taps;
 
-    // View input/output as per-pixel [f32; 4] chunks.
-    // Input must include max_taps pixels of zero padding beyond the last pixel
-    // so reads at `left + max_taps - 1` are always in bounds.
+    // View input as per-pixel [f32; 4] chunks (for SSE remainder loop).
     let in_pixels_arr: &[[f32; 4]] = input.as_chunks().0;
     let (out_pixels, _) = output.as_chunks_mut::<4>();
 
-    let chunks4 = max_taps / 4;
-    let remainder = max_taps % 4;
+    let chunks8 = max_taps / 8;
+    let remainder = max_taps - chunks8 * 8;
+
+    // Permutation indices for broadcasting weights from a single 8-weight load.
+    // vpermps: each element index selects from the 8-element source.
+    // _mm256_set_epi32(e7, e6, e5, e4, e3, e2, e1, e0) — high to low.
+    let perm01 = _mm256_set_epi32(1, 1, 1, 1, 0, 0, 0, 0);
+    let perm23 = _mm256_set_epi32(3, 3, 3, 3, 2, 2, 2, 2);
+    let perm45 = _mm256_set_epi32(5, 5, 5, 5, 4, 4, 4, 4);
+    let perm67 = _mm256_set_epi32(7, 7, 7, 7, 6, 6, 6, 6);
 
     for out_x in 0..out_width {
         let left = weights.left[out_x] as usize;
         let w = weights.weights_padded(out_x);
 
-        let mut acc0 = _mm_setzero_ps();
-        let mut acc1 = _mm_setzero_ps();
-        let mut acc2 = _mm_setzero_ps();
-        let mut acc3 = _mm_setzero_ps();
+        // Pre-slice input and weights for AVX2 main loop.
+        // Input window: max_taps pixels × 4 channels = max_taps * 4 f32.
+        // Pairs: 2 consecutive pixels = 8 f32 per pair.
+        let flat_start = left * 4;
+        let input_window = &input[flat_start..flat_start + max_taps * 4];
+        let (pairs, _) = input_window.as_chunks::<8>();
+        let (w_chunks, _) = w.as_chunks::<8>();
 
-        for c in 0..chunks4 {
-            let t = c * 4;
-            let w0 = _mm_set1_ps(*idx(w, t));
-            let w1 = _mm_set1_ps(*idx(w, t + 1));
-            let w2 = _mm_set1_ps(*idx(w, t + 2));
-            let w3 = _mm_set1_ps(*idx(w, t + 3));
+        let mut acc0 = _mm256_setzero_ps();
+        let mut acc1 = _mm256_setzero_ps();
+        let mut acc2 = _mm256_setzero_ps();
+        let mut acc3 = _mm256_setzero_ps();
 
-            // Padding guarantees left + max_taps - 1 < in_pixels_arr.len().
-            // Zero-padded weights make reads into padding inert.
-            let p0 = _mm_loadu_ps(idx(in_pixels_arr, left + t));
-            let p1 = _mm_loadu_ps(idx(in_pixels_arr, left + t + 1));
-            let p2 = _mm_loadu_ps(idx(in_pixels_arr, left + t + 2));
-            let p3 = _mm_loadu_ps(idx(in_pixels_arr, left + t + 3));
+        for c in 0..chunks8 {
+            // Load 8 weights at once, permute to per-tap broadcasts
+            let w_vec = _mm256_loadu_ps(idx(w_chunks, c));
+            let w01 = _mm256_permutevar8x32_ps(w_vec, perm01);
+            let w23 = _mm256_permutevar8x32_ps(w_vec, perm23);
+            let w45 = _mm256_permutevar8x32_ps(w_vec, perm45);
+            let w67 = _mm256_permutevar8x32_ps(w_vec, perm67);
 
-            acc0 = _mm_fmadd_ps(p0, w0, acc0);
-            acc1 = _mm_fmadd_ps(p1, w1, acc1);
-            acc2 = _mm_fmadd_ps(p2, w2, acc2);
-            acc3 = _mm_fmadd_ps(p3, w3, acc3);
+            // Load pairs of pixels (8 f32 = 2 RGBA pixels each)
+            let pi = c * 4;
+            let p01 = _mm256_loadu_ps(idx(pairs, pi));
+            let p23 = _mm256_loadu_ps(idx(pairs, pi + 1));
+            let p45 = _mm256_loadu_ps(idx(pairs, pi + 2));
+            let p67 = _mm256_loadu_ps(idx(pairs, pi + 3));
+
+            acc0 = _mm256_fmadd_ps(p01, w01, acc0);
+            acc1 = _mm256_fmadd_ps(p23, w23, acc1);
+            acc2 = _mm256_fmadd_ps(p45, w45, acc2);
+            acc3 = _mm256_fmadd_ps(p67, w67, acc3);
         }
 
-        let t_start = chunks4 * 4;
+        // Reduce 256-bit accumulators: add upper 128 to lower 128
+        let sum01 = _mm256_add_ps(acc0, acc1);
+        let sum23 = _mm256_add_ps(acc2, acc3);
+        let sum = _mm256_add_ps(sum01, sum23);
+        let lo = _mm256_castps256_ps128(sum);
+        let hi = _mm256_extractf128_ps::<1>(sum);
+        let mut acc_128 = _mm_add_ps(lo, hi);
+
+        // SSE remainder for leftover taps (0..7)
+        let t_start = chunks8 * 8;
         for t in 0..remainder {
             let tt = t_start + t;
             let w_val = _mm_set1_ps(*idx(w, tt));
             let pixel = _mm_loadu_ps(idx(in_pixels_arr, left + tt));
-            acc0 = _mm_fmadd_ps(pixel, w_val, acc0);
+            acc_128 = _mm_fmadd_ps(pixel, w_val, acc_128);
         }
 
-        let sum01 = _mm_add_ps(acc0, acc1);
-        let sum23 = _mm_add_ps(acc2, acc3);
-        let acc = _mm_add_ps(sum01, sum23);
-
-        _mm_storeu_ps(idx_mut(out_pixels, out_x), acc);
+        _mm_storeu_ps(idx_mut(out_pixels, out_x), acc_128);
     }
 }
 
