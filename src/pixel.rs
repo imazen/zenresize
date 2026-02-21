@@ -20,6 +20,40 @@ pub enum Transfer {
     /// Identity (no conversion). Use for data already in the desired space,
     /// or when gamma-space resize is intentional.
     None,
+    /// BT.709/BT.601 transfer curve. Close to sRGB but with a different toe.
+    Bt709,
+    /// SMPTE ST 2084 (PQ / HDR10). Wide dynamic range — requires f32 path.
+    Pq,
+    /// ARIB STD-B67 (HLG). Wide dynamic range — requires f32 path.
+    Hlg,
+}
+
+impl Transfer {
+    /// Whether this transfer requires the f32 path (can't be handled by i16 LUTs).
+    #[inline]
+    pub fn requires_f32(&self) -> bool {
+        matches!(self, Self::Pq | Self::Hlg)
+    }
+
+    /// Whether this is an identity (no-op) transfer.
+    #[inline]
+    pub fn is_identity(&self) -> bool {
+        matches!(self, Self::None)
+    }
+
+    /// Create from ITU-T H.273 `transfer_characteristics` code.
+    ///
+    /// Returns `None` for unrecognized codes.
+    pub fn from_cicp_transfer(tc: u8) -> Option<Self> {
+        match tc {
+            1 | 6 => Some(Transfer::Bt709),
+            8 => Some(Transfer::None),
+            13 => Some(Transfer::Srgb),
+            16 => Some(Transfer::Pq),
+            18 => Some(Transfer::Hlg),
+            _ => None,
+        }
+    }
 }
 
 // =============================================================================

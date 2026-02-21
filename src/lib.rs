@@ -75,4 +75,4 @@ pub use composite::{
 pub use resize::{resize_3ch, resize_4ch, resize_gray8};
 
 pub use pixel::Element;
-pub use transfer::{NoTransfer, Srgb, TransferFunction};
+pub use transfer::{Bt709, Hlg, NoTransfer, Pq, Srgb, TransferFunction};

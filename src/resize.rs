@@ -13,7 +13,7 @@ use crate::filter::InterpolationDetails;
 use crate::pixel::{ResizeConfig, Transfer};
 use crate::proven;
 use crate::simd;
-use crate::transfer::{Srgb, TransferFunction};
+use crate::transfer::{Bt709, Hlg, Pq, Srgb, TransferFunction};
 use crate::weights::{F32WeightTable, I16WeightTable};
 
 // =============================================================================
@@ -25,6 +25,9 @@ fn decode_u8_row(src: &[u8], dst: &mut [f32], tf: Transfer, channels: usize, has
     match tf {
         Transfer::Srgb => color::srgb_u8_to_linear_f32(src, dst, channels, has_alpha),
         Transfer::None => simd::u8_to_f32_row(src, dst),
+        Transfer::Bt709 => Bt709.u8_to_linear_f32(src, dst, &(), channels, has_alpha, false),
+        Transfer::Pq => Pq.u8_to_linear_f32(src, dst, &(), channels, has_alpha, false),
+        Transfer::Hlg => Hlg.u8_to_linear_f32(src, dst, &(), channels, has_alpha, false),
     }
 }
 
@@ -33,6 +36,9 @@ fn encode_u8_row(src: &[f32], dst: &mut [u8], tf: Transfer, channels: usize, has
     match tf {
         Transfer::Srgb => color::linear_f32_to_srgb_u8(src, dst, channels, has_alpha),
         Transfer::None => simd::f32_to_u8_row(src, dst),
+        Transfer::Bt709 => Bt709.linear_f32_to_u8(src, dst, &(), channels, has_alpha, false),
+        Transfer::Pq => Pq.linear_f32_to_u8(src, dst, &(), channels, has_alpha, false),
+        Transfer::Hlg => Hlg.linear_f32_to_u8(src, dst, &(), channels, has_alpha, false),
     }
 }
 
@@ -49,14 +55,12 @@ fn decode_u16_row(
         Transfer::Srgb => Srgb.u16_to_linear_f32(src, dst, &(), channels, has_alpha, premul),
         Transfer::None => {
             crate::transfer::NoTransfer.u16_to_linear_f32(
-                src,
-                dst,
-                &(),
-                channels,
-                has_alpha,
-                premul,
+                src, dst, &(), channels, has_alpha, premul,
             );
         }
+        Transfer::Bt709 => Bt709.u16_to_linear_f32(src, dst, &(), channels, has_alpha, premul),
+        Transfer::Pq => Pq.u16_to_linear_f32(src, dst, &(), channels, has_alpha, premul),
+        Transfer::Hlg => Hlg.u16_to_linear_f32(src, dst, &(), channels, has_alpha, premul),
     }
 }
 
@@ -73,14 +77,12 @@ fn encode_u16_row(
         Transfer::Srgb => Srgb.linear_f32_to_u16(src, dst, &(), channels, has_alpha, unpremul),
         Transfer::None => {
             crate::transfer::NoTransfer.linear_f32_to_u16(
-                src,
-                dst,
-                &(),
-                channels,
-                has_alpha,
-                unpremul,
+                src, dst, &(), channels, has_alpha, unpremul,
             );
         }
+        Transfer::Bt709 => Bt709.linear_f32_to_u16(src, dst, &(), channels, has_alpha, unpremul),
+        Transfer::Pq => Pq.linear_f32_to_u16(src, dst, &(), channels, has_alpha, unpremul),
+        Transfer::Hlg => Hlg.linear_f32_to_u16(src, dst, &(), channels, has_alpha, unpremul),
     }
 }
 
@@ -178,12 +180,16 @@ impl<B: Background> Resizer<B> {
             config.linear = true;
         }
 
-        // Force f32 path when data types differ or transfer functions are explicit
+        // Force f32 path when data types differ, transfer functions are explicit,
+        // or the transfer requires wide-range f32 (PQ, HLG).
         let cross_format =
             config.input_format.bytes_per_element() != config.output_format.bytes_per_element();
         let has_explicit_transfer =
             config.input_transfer.is_some() || config.output_transfer.is_some();
-        let force_f32 = composite_f32 || cross_format || has_explicit_transfer;
+        let transfer_needs_f32 = config.effective_input_transfer().requires_f32()
+            || config.effective_output_transfer().requires_f32();
+        let force_f32 =
+            composite_f32 || cross_format || has_explicit_transfer || transfer_needs_f32;
 
         let filter = InterpolationDetails::create(config.filter);
         let layout = config.input_format.layout();
@@ -737,7 +743,7 @@ impl<B: Background> Resizer<B> {
         let out_h = config.out_height as usize;
         let h_row_len = out_w * channels;
 
-        let tf = Srgb;
+        let input_tf = config.effective_input_transfer();
 
         let h_weights = self.h_weights_f32.as_ref().unwrap();
         let v_weights = self.v_weights_f32.as_ref().unwrap();
@@ -749,10 +755,10 @@ impl<B: Background> Resizer<B> {
             let in_start = y * in_stride;
             let in_row = &input[in_start..in_start + in_row_len];
 
-            tf.u16_to_linear_f32(
+            decode_u16_row(
                 in_row,
                 &mut temp_row[..in_row_len],
-                &(),
+                input_tf,
                 channels,
                 has_alpha,
                 needs_premul,
@@ -795,12 +801,12 @@ impl<B: Background> Resizer<B> {
                 channels as u8,
             );
 
-            // Convert linear f32 → sRGB u16
+            // Convert linear f32 → encoded u16
             let out_start = out_y * out_row_len;
-            tf.linear_f32_to_u16(
+            encode_u16_row(
                 &temp_output[..h_row_len],
                 &mut output[out_start..out_start + out_row_len],
-                &(),
+                config.effective_output_transfer(),
                 channels,
                 has_alpha,
                 needs_premul,

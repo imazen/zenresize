@@ -510,6 +510,738 @@ impl TransferFunction for Srgb {
 }
 
 // =============================================================================
+// Bt709 — BT.709/BT.601 transfer function
+// =============================================================================
+
+/// BT.709 transfer function (also used for BT.601).
+///
+/// Close to sRGB but with a different linear toe segment. For u8 input the
+/// difference from sRGB is small enough that LUT-based fast paths are not
+/// provided — the scalar curve is used via the default batch implementations.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Bt709;
+
+impl Bt709 {
+    const ALPHA: f32 = 0.099;
+    const BETA: f32 = 0.018;
+}
+
+impl TransferFunction for Bt709 {
+    type Luts = ();
+
+    #[inline]
+    fn to_linear(&self, v: f32) -> f32 {
+        if v < 4.5 * Self::BETA {
+            v / 4.5
+        } else {
+            ((v + Self::ALPHA) / (1.0 + Self::ALPHA)).powf(1.0 / 0.45)
+        }
+    }
+
+    #[inline]
+    fn from_linear(&self, v: f32) -> f32 {
+        if v < Self::BETA {
+            4.5 * v
+        } else {
+            (1.0 + Self::ALPHA) * v.powf(0.45) - Self::ALPHA
+        }
+    }
+
+    fn build_luts(&self) -> Self::Luts {}
+
+    fn u8_to_linear_f32(
+        &self,
+        src: &[u8],
+        dst: &mut [f32],
+        _luts: &(),
+        channels: usize,
+        has_alpha: bool,
+        premul: bool,
+    ) {
+        if has_alpha && channels >= 2 {
+            for (src_px, dst_px) in src
+                .chunks_exact(channels)
+                .zip(dst.chunks_exact_mut(channels))
+            {
+                for i in 0..channels - 1 {
+                    dst_px[i] = self.to_linear(src_px[i] as f32 / 255.0);
+                }
+                dst_px[channels - 1] = src_px[channels - 1] as f32 / 255.0;
+            }
+        } else {
+            for (s, d) in src.iter().zip(dst.iter_mut()) {
+                *d = self.to_linear(*s as f32 / 255.0);
+            }
+        }
+        if premul {
+            simd::premultiply_alpha_row(dst);
+        }
+    }
+
+    fn linear_f32_to_u8(
+        &self,
+        src: &[f32],
+        dst: &mut [u8],
+        _luts: &(),
+        channels: usize,
+        has_alpha: bool,
+        unpremul: bool,
+    ) {
+        let work: Vec<f32>;
+        let src = if unpremul {
+            work = {
+                let mut tmp = src.to_vec();
+                simd::unpremultiply_alpha_row(&mut tmp);
+                tmp
+            };
+            &work
+        } else {
+            src
+        };
+
+        if has_alpha && channels >= 2 {
+            for (src_px, dst_px) in src
+                .chunks_exact(channels)
+                .zip(dst.chunks_exact_mut(channels))
+            {
+                for i in 0..channels - 1 {
+                    dst_px[i] = (self.from_linear(src_px[i]) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+                }
+                dst_px[channels - 1] =
+                    (src_px[channels - 1] * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+            }
+        } else {
+            for (s, d) in src.iter().zip(dst.iter_mut()) {
+                *d = (self.from_linear(*s) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+
+    fn u16_to_linear_f32(
+        &self,
+        src: &[u16],
+        dst: &mut [f32],
+        _luts: &(),
+        channels: usize,
+        has_alpha: bool,
+        premul: bool,
+    ) {
+        if has_alpha && channels >= 2 {
+            for (src_px, dst_px) in src
+                .chunks_exact(channels)
+                .zip(dst.chunks_exact_mut(channels))
+            {
+                for i in 0..channels - 1 {
+                    dst_px[i] = self.to_linear(src_px[i] as f32 / 65535.0);
+                }
+                dst_px[channels - 1] = src_px[channels - 1] as f32 / 65535.0;
+            }
+        } else {
+            for (s, d) in src.iter().zip(dst.iter_mut()) {
+                *d = self.to_linear(*s as f32 / 65535.0);
+            }
+        }
+        if premul {
+            simd::premultiply_alpha_row(dst);
+        }
+    }
+
+    fn linear_f32_to_u16(
+        &self,
+        src: &[f32],
+        dst: &mut [u16],
+        _luts: &(),
+        channels: usize,
+        has_alpha: bool,
+        unpremul: bool,
+    ) {
+        let work: Vec<f32>;
+        let src = if unpremul {
+            work = {
+                let mut tmp = src.to_vec();
+                simd::unpremultiply_alpha_row(&mut tmp);
+                tmp
+            };
+            &work
+        } else {
+            src
+        };
+
+        if has_alpha && channels >= 2 {
+            for (src_px, dst_px) in src
+                .chunks_exact(channels)
+                .zip(dst.chunks_exact_mut(channels))
+            {
+                for i in 0..channels - 1 {
+                    dst_px[i] =
+                        (self.from_linear(src_px[i]) * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
+                }
+                dst_px[channels - 1] =
+                    (src_px[channels - 1] * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
+            }
+        } else {
+            for (s, d) in src.iter().zip(dst.iter_mut()) {
+                *d = (self.from_linear(*s) * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
+            }
+        }
+    }
+
+    fn u8_to_linear_i12(&self, src: &[u8], dst: &mut [i16], _luts: &()) {
+        for (s, d) in src.iter().zip(dst.iter_mut()) {
+            let linear = self.to_linear(*s as f32 / 255.0);
+            *d = (linear * 4095.0 + 0.5).clamp(0.0, 4095.0) as i16;
+        }
+    }
+
+    fn linear_i12_to_u8(&self, src: &[i16], dst: &mut [u8], _luts: &()) {
+        for (s, d) in src.iter().zip(dst.iter_mut()) {
+            let linear = (*s).clamp(0, 4095) as f32 / 4095.0;
+            *d = (self.from_linear(linear) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+        }
+    }
+
+    fn f32_to_linear_inplace(
+        &self,
+        row: &mut [f32],
+        channels: usize,
+        has_alpha: bool,
+        premul: bool,
+    ) {
+        if has_alpha && channels >= 2 {
+            for pixel in row.chunks_exact_mut(channels) {
+                for v in &mut pixel[..channels - 1] {
+                    *v = self.to_linear(*v);
+                }
+            }
+        } else {
+            for v in row.iter_mut() {
+                *v = self.to_linear(*v);
+            }
+        }
+        if premul {
+            simd::premultiply_alpha_row(row);
+        }
+    }
+
+    fn linear_to_f32_inplace(
+        &self,
+        row: &mut [f32],
+        channels: usize,
+        has_alpha: bool,
+        unpremul: bool,
+    ) {
+        if unpremul {
+            simd::unpremultiply_alpha_row(row);
+        }
+        if has_alpha && channels >= 2 {
+            for pixel in row.chunks_exact_mut(channels) {
+                for v in &mut pixel[..channels - 1] {
+                    *v = self.from_linear(*v);
+                }
+            }
+        } else {
+            for v in row.iter_mut() {
+                *v = self.from_linear(*v);
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Pq — SMPTE ST 2084 (PQ / HDR10) transfer function
+// =============================================================================
+
+/// SMPTE ST 2084 (PQ) transfer function for HDR10 content.
+///
+/// Maps normalized signal values [0, 1] to linear light [0, 10000] cd/m².
+/// For resize purposes, the pipeline works in normalized PQ signal space,
+/// so `to_linear` / `from_linear` map between [0, 1] signal and [0, 1]
+/// normalized linear (where 1.0 = 10000 cd/m²).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Pq;
+
+impl Pq {
+    const M1: f32 = 0.1593017578125; // 2610/16384
+    const M2: f32 = 78.84375; // 2523/32 * 128
+    const C1: f32 = 0.8359375; // 3424/4096
+    const C2: f32 = 18.8515625; // 2413/128
+    const C3: f32 = 18.6875; // 2392/128
+}
+
+impl TransferFunction for Pq {
+    type Luts = ();
+
+    #[inline]
+    fn to_linear(&self, v: f32) -> f32 {
+        if v <= 0.0 {
+            return 0.0;
+        }
+        let vp = v.powf(1.0 / Self::M2);
+        let num = (vp - Self::C1).max(0.0);
+        let den = Self::C2 - Self::C3 * vp;
+        if den <= 0.0 {
+            return 1.0;
+        }
+        (num / den).powf(1.0 / Self::M1)
+    }
+
+    #[inline]
+    fn from_linear(&self, v: f32) -> f32 {
+        if v <= 0.0 {
+            return 0.0;
+        }
+        let vp = v.powf(Self::M1);
+        let num = Self::C1 + Self::C2 * vp;
+        let den = 1.0 + Self::C3 * vp;
+        (num / den).powf(Self::M2)
+    }
+
+    fn build_luts(&self) -> Self::Luts {}
+
+    fn u8_to_linear_f32(
+        &self,
+        src: &[u8],
+        dst: &mut [f32],
+        _luts: &(),
+        channels: usize,
+        has_alpha: bool,
+        premul: bool,
+    ) {
+        if has_alpha && channels >= 2 {
+            for (src_px, dst_px) in src
+                .chunks_exact(channels)
+                .zip(dst.chunks_exact_mut(channels))
+            {
+                for i in 0..channels - 1 {
+                    dst_px[i] = self.to_linear(src_px[i] as f32 / 255.0);
+                }
+                dst_px[channels - 1] = src_px[channels - 1] as f32 / 255.0;
+            }
+        } else {
+            for (s, d) in src.iter().zip(dst.iter_mut()) {
+                *d = self.to_linear(*s as f32 / 255.0);
+            }
+        }
+        if premul {
+            simd::premultiply_alpha_row(dst);
+        }
+    }
+
+    fn linear_f32_to_u8(
+        &self,
+        src: &[f32],
+        dst: &mut [u8],
+        _luts: &(),
+        channels: usize,
+        has_alpha: bool,
+        unpremul: bool,
+    ) {
+        let work: Vec<f32>;
+        let src = if unpremul {
+            work = {
+                let mut tmp = src.to_vec();
+                simd::unpremultiply_alpha_row(&mut tmp);
+                tmp
+            };
+            &work
+        } else {
+            src
+        };
+
+        if has_alpha && channels >= 2 {
+            for (src_px, dst_px) in src
+                .chunks_exact(channels)
+                .zip(dst.chunks_exact_mut(channels))
+            {
+                for i in 0..channels - 1 {
+                    dst_px[i] = (self.from_linear(src_px[i]) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+                }
+                dst_px[channels - 1] =
+                    (src_px[channels - 1] * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+            }
+        } else {
+            for (s, d) in src.iter().zip(dst.iter_mut()) {
+                *d = (self.from_linear(*s) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+
+    fn u16_to_linear_f32(
+        &self,
+        src: &[u16],
+        dst: &mut [f32],
+        _luts: &(),
+        channels: usize,
+        has_alpha: bool,
+        premul: bool,
+    ) {
+        if has_alpha && channels >= 2 {
+            for (src_px, dst_px) in src
+                .chunks_exact(channels)
+                .zip(dst.chunks_exact_mut(channels))
+            {
+                for i in 0..channels - 1 {
+                    dst_px[i] = self.to_linear(src_px[i] as f32 / 65535.0);
+                }
+                dst_px[channels - 1] = src_px[channels - 1] as f32 / 65535.0;
+            }
+        } else {
+            for (s, d) in src.iter().zip(dst.iter_mut()) {
+                *d = self.to_linear(*s as f32 / 65535.0);
+            }
+        }
+        if premul {
+            simd::premultiply_alpha_row(dst);
+        }
+    }
+
+    fn linear_f32_to_u16(
+        &self,
+        src: &[f32],
+        dst: &mut [u16],
+        _luts: &(),
+        channels: usize,
+        has_alpha: bool,
+        unpremul: bool,
+    ) {
+        let work: Vec<f32>;
+        let src = if unpremul {
+            work = {
+                let mut tmp = src.to_vec();
+                simd::unpremultiply_alpha_row(&mut tmp);
+                tmp
+            };
+            &work
+        } else {
+            src
+        };
+
+        if has_alpha && channels >= 2 {
+            for (src_px, dst_px) in src
+                .chunks_exact(channels)
+                .zip(dst.chunks_exact_mut(channels))
+            {
+                for i in 0..channels - 1 {
+                    dst_px[i] =
+                        (self.from_linear(src_px[i]) * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
+                }
+                dst_px[channels - 1] =
+                    (src_px[channels - 1] * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
+            }
+        } else {
+            for (s, d) in src.iter().zip(dst.iter_mut()) {
+                *d = (self.from_linear(*s) * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
+            }
+        }
+    }
+
+    fn u8_to_linear_i12(&self, src: &[u8], dst: &mut [i16], _luts: &()) {
+        for (s, d) in src.iter().zip(dst.iter_mut()) {
+            let linear = self.to_linear(*s as f32 / 255.0);
+            *d = (linear * 4095.0 + 0.5).clamp(0.0, 4095.0) as i16;
+        }
+    }
+
+    fn linear_i12_to_u8(&self, src: &[i16], dst: &mut [u8], _luts: &()) {
+        for (s, d) in src.iter().zip(dst.iter_mut()) {
+            let linear = (*s).clamp(0, 4095) as f32 / 4095.0;
+            *d = (self.from_linear(linear) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+        }
+    }
+
+    fn f32_to_linear_inplace(
+        &self,
+        row: &mut [f32],
+        channels: usize,
+        has_alpha: bool,
+        premul: bool,
+    ) {
+        if has_alpha && channels >= 2 {
+            for pixel in row.chunks_exact_mut(channels) {
+                for v in &mut pixel[..channels - 1] {
+                    *v = self.to_linear(*v);
+                }
+            }
+        } else {
+            for v in row.iter_mut() {
+                *v = self.to_linear(*v);
+            }
+        }
+        if premul {
+            simd::premultiply_alpha_row(row);
+        }
+    }
+
+    fn linear_to_f32_inplace(
+        &self,
+        row: &mut [f32],
+        channels: usize,
+        has_alpha: bool,
+        unpremul: bool,
+    ) {
+        if unpremul {
+            simd::unpremultiply_alpha_row(row);
+        }
+        if has_alpha && channels >= 2 {
+            for pixel in row.chunks_exact_mut(channels) {
+                for v in &mut pixel[..channels - 1] {
+                    *v = self.from_linear(*v);
+                }
+            }
+        } else {
+            for v in row.iter_mut() {
+                *v = self.from_linear(*v);
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Hlg — ARIB STD-B67 (HLG) transfer function
+// =============================================================================
+
+/// HLG (Hybrid Log-Gamma) transfer function for broadcast HDR.
+///
+/// The OETF maps linear light [0, 1] to signal [0, 1]. `to_linear` is the
+/// inverse OETF (signal → scene linear). `from_linear` is the OETF (scene
+/// linear → signal).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Hlg;
+
+impl Hlg {
+    const A: f32 = 0.17883277;
+    const B: f32 = 0.28466892; // 1 - 4 * A
+    const C: f32 = 0.55991073; // 0.5 - A * ln(4 * A)
+}
+
+impl TransferFunction for Hlg {
+    type Luts = ();
+
+    #[inline]
+    fn to_linear(&self, v: f32) -> f32 {
+        // Inverse OETF: signal → scene linear
+        if v <= 0.0 {
+            0.0
+        } else if v <= 0.5 {
+            (v * v) / 3.0
+        } else {
+            (((v - Self::C) / Self::A).exp() + Self::B) / 12.0
+        }
+    }
+
+    #[inline]
+    fn from_linear(&self, v: f32) -> f32 {
+        // OETF: scene linear → signal
+        if v <= 0.0 {
+            0.0
+        } else if v <= 1.0 / 12.0 {
+            (3.0 * v).sqrt()
+        } else {
+            Self::A * (12.0 * v - Self::B).ln() + Self::C
+        }
+    }
+
+    fn build_luts(&self) -> Self::Luts {}
+
+    fn u8_to_linear_f32(
+        &self,
+        src: &[u8],
+        dst: &mut [f32],
+        _luts: &(),
+        channels: usize,
+        has_alpha: bool,
+        premul: bool,
+    ) {
+        if has_alpha && channels >= 2 {
+            for (src_px, dst_px) in src
+                .chunks_exact(channels)
+                .zip(dst.chunks_exact_mut(channels))
+            {
+                for i in 0..channels - 1 {
+                    dst_px[i] = self.to_linear(src_px[i] as f32 / 255.0);
+                }
+                dst_px[channels - 1] = src_px[channels - 1] as f32 / 255.0;
+            }
+        } else {
+            for (s, d) in src.iter().zip(dst.iter_mut()) {
+                *d = self.to_linear(*s as f32 / 255.0);
+            }
+        }
+        if premul {
+            simd::premultiply_alpha_row(dst);
+        }
+    }
+
+    fn linear_f32_to_u8(
+        &self,
+        src: &[f32],
+        dst: &mut [u8],
+        _luts: &(),
+        channels: usize,
+        has_alpha: bool,
+        unpremul: bool,
+    ) {
+        let work: Vec<f32>;
+        let src = if unpremul {
+            work = {
+                let mut tmp = src.to_vec();
+                simd::unpremultiply_alpha_row(&mut tmp);
+                tmp
+            };
+            &work
+        } else {
+            src
+        };
+
+        if has_alpha && channels >= 2 {
+            for (src_px, dst_px) in src
+                .chunks_exact(channels)
+                .zip(dst.chunks_exact_mut(channels))
+            {
+                for i in 0..channels - 1 {
+                    dst_px[i] = (self.from_linear(src_px[i]) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+                }
+                dst_px[channels - 1] =
+                    (src_px[channels - 1] * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+            }
+        } else {
+            for (s, d) in src.iter().zip(dst.iter_mut()) {
+                *d = (self.from_linear(*s) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+
+    fn u16_to_linear_f32(
+        &self,
+        src: &[u16],
+        dst: &mut [f32],
+        _luts: &(),
+        channels: usize,
+        has_alpha: bool,
+        premul: bool,
+    ) {
+        if has_alpha && channels >= 2 {
+            for (src_px, dst_px) in src
+                .chunks_exact(channels)
+                .zip(dst.chunks_exact_mut(channels))
+            {
+                for i in 0..channels - 1 {
+                    dst_px[i] = self.to_linear(src_px[i] as f32 / 65535.0);
+                }
+                dst_px[channels - 1] = src_px[channels - 1] as f32 / 65535.0;
+            }
+        } else {
+            for (s, d) in src.iter().zip(dst.iter_mut()) {
+                *d = self.to_linear(*s as f32 / 65535.0);
+            }
+        }
+        if premul {
+            simd::premultiply_alpha_row(dst);
+        }
+    }
+
+    fn linear_f32_to_u16(
+        &self,
+        src: &[f32],
+        dst: &mut [u16],
+        _luts: &(),
+        channels: usize,
+        has_alpha: bool,
+        unpremul: bool,
+    ) {
+        let work: Vec<f32>;
+        let src = if unpremul {
+            work = {
+                let mut tmp = src.to_vec();
+                simd::unpremultiply_alpha_row(&mut tmp);
+                tmp
+            };
+            &work
+        } else {
+            src
+        };
+
+        if has_alpha && channels >= 2 {
+            for (src_px, dst_px) in src
+                .chunks_exact(channels)
+                .zip(dst.chunks_exact_mut(channels))
+            {
+                for i in 0..channels - 1 {
+                    dst_px[i] =
+                        (self.from_linear(src_px[i]) * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
+                }
+                dst_px[channels - 1] =
+                    (src_px[channels - 1] * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
+            }
+        } else {
+            for (s, d) in src.iter().zip(dst.iter_mut()) {
+                *d = (self.from_linear(*s) * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
+            }
+        }
+    }
+
+    fn u8_to_linear_i12(&self, src: &[u8], dst: &mut [i16], _luts: &()) {
+        for (s, d) in src.iter().zip(dst.iter_mut()) {
+            let linear = self.to_linear(*s as f32 / 255.0);
+            *d = (linear * 4095.0 + 0.5).clamp(0.0, 4095.0) as i16;
+        }
+    }
+
+    fn linear_i12_to_u8(&self, src: &[i16], dst: &mut [u8], _luts: &()) {
+        for (s, d) in src.iter().zip(dst.iter_mut()) {
+            let linear = (*s).clamp(0, 4095) as f32 / 4095.0;
+            *d = (self.from_linear(linear) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+        }
+    }
+
+    fn f32_to_linear_inplace(
+        &self,
+        row: &mut [f32],
+        channels: usize,
+        has_alpha: bool,
+        premul: bool,
+    ) {
+        if has_alpha && channels >= 2 {
+            for pixel in row.chunks_exact_mut(channels) {
+                for v in &mut pixel[..channels - 1] {
+                    *v = self.to_linear(*v);
+                }
+            }
+        } else {
+            for v in row.iter_mut() {
+                *v = self.to_linear(*v);
+            }
+        }
+        if premul {
+            simd::premultiply_alpha_row(row);
+        }
+    }
+
+    fn linear_to_f32_inplace(
+        &self,
+        row: &mut [f32],
+        channels: usize,
+        has_alpha: bool,
+        unpremul: bool,
+    ) {
+        if unpremul {
+            simd::unpremultiply_alpha_row(row);
+        }
+        if has_alpha && channels >= 2 {
+            for pixel in row.chunks_exact_mut(channels) {
+                for v in &mut pixel[..channels - 1] {
+                    *v = self.from_linear(*v);
+                }
+            }
+        } else {
+            for v in row.iter_mut() {
+                *v = self.from_linear(*v);
+            }
+        }
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
