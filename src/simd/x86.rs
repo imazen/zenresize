@@ -1357,22 +1357,29 @@ pub(crate) fn filter_v_row_u8_i16_v3(
     let half = _mm256_set1_epi32(1 << (I16_PRECISION - 1));
     let chunks16 = width / 16;
 
-    // Pre-chunk row slices for direct indexing.
-    let mut row_chunks: Vec<&[[u8; 16]]> = Vec::with_capacity(tap_count);
-    for row in rows.iter() {
-        row_chunks.push(row.as_chunks::<16>().0);
+    // Pre-chunk row slices for direct indexing (stack array, no heap alloc).
+    const MAX_TAPS: usize = 128;
+    debug_assert!(tap_count <= MAX_TAPS);
+    let effective_taps = tap_count.min(MAX_TAPS);
+    let empty_chunks: &[[u8; 16]] = &[];
+    let mut row_chunks = [empty_chunks; MAX_TAPS];
+    for (t, slot) in row_chunks.iter_mut().enumerate().take(effective_taps) {
+        *slot = rows[t].as_chunks::<16>().0;
     }
+    let row_chunks = &row_chunks[..effective_taps];
 
-    // Pre-compute paired weights.
+    // Pre-compute paired weights (stack array, no heap alloc).
     let pairs = tap_count / 2;
     let odd = tap_count % 2 != 0;
 
-    let mut paired_wts: Vec<__m256i> = Vec::with_capacity(pairs);
+    let zero_ymm = _mm256_setzero_si256();
+    let mut paired_wts = [zero_ymm; MAX_TAPS / 2];
     for p in 0..pairs {
         let w0 = weights[p * 2] as i32;
         let w1 = weights[p * 2 + 1] as i32;
-        paired_wts.push(_mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF)));
+        paired_wts[p] = _mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
     }
+    let paired_wts = &paired_wts[..pairs];
     let odd_weight = if odd {
         _mm256_set1_epi32(weights[tap_count - 1] as i32 & 0xFFFF)
     } else {
@@ -1459,22 +1466,29 @@ pub(crate) fn filter_v_row_i16_v3(
     let zero_xmm = _mm_setzero_si128();
     let chunks8 = width / 8;
 
-    // Pre-chunk row slices for direct indexing.
-    let mut row_chunks: Vec<&[[i16; 8]]> = Vec::with_capacity(tap_count);
-    for row in rows.iter() {
-        row_chunks.push(row.as_chunks::<8>().0);
+    // Pre-chunk row slices for direct indexing (stack array, no heap alloc).
+    const MAX_TAPS: usize = 128;
+    debug_assert!(tap_count <= MAX_TAPS);
+    let effective_taps = tap_count.min(MAX_TAPS);
+    let empty_chunks: &[[i16; 8]] = &[];
+    let mut row_chunks = [empty_chunks; MAX_TAPS];
+    for (t, slot) in row_chunks.iter_mut().enumerate().take(effective_taps) {
+        *slot = rows[t].as_chunks::<8>().0;
     }
+    let row_chunks = &row_chunks[..effective_taps];
 
-    // Pre-compute paired weights.
+    // Pre-compute paired weights (stack array, no heap alloc).
     let pairs = tap_count / 2;
     let odd = tap_count % 2 != 0;
 
-    let mut paired_wts: Vec<__m256i> = Vec::with_capacity(pairs);
+    let zero_ymm = _mm256_setzero_si256();
+    let mut paired_wts = [zero_ymm; MAX_TAPS / 2];
     for p in 0..pairs {
         let w0 = weights[p * 2] as i32;
         let w1 = weights[p * 2 + 1] as i32;
-        paired_wts.push(_mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF)));
+        paired_wts[p] = _mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
     }
+    let paired_wts = &paired_wts[..pairs];
     let odd_weight = if odd {
         _mm256_set1_epi32(weights[tap_count - 1] as i32 & 0xFFFF)
     } else {
