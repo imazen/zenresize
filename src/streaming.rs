@@ -1,15 +1,18 @@
 //! Row-at-a-time streaming resize state machine.
 //!
-//! The streaming resizer uses horizontal-first architecture with lazy pull-based
+//! The streaming resizer uses vertical-first architecture with lazy pull-based
 //! output production and natural backpressure:
 //!
-//! 1. `push_row()`: H-filter the input row and cache it in the ring buffer (no output produced)
-//! 2. `next_output_row()`: Lazily V-filter one output row when enough cached rows exist
+//! 1. `push_row()`: Linearize + premultiply the input row, cache it in the ring buffer
+//! 2. `next_output_row()`: Lazily V-filter → H-filter one output row when enough cached rows exist
 //! 3. Caller MUST drain all available output between `push_row` calls (ring buffer contract)
+//!
+//! V-first runs the H-filter only on output rows (not input rows), reducing H-filter
+//! calls from `in_height` to `out_height` for downscaling.
 //!
 //! # Backpressure Contract
 //!
-//! The H-cache ring buffer has `max_taps + 2` slots. The caller MUST drain all
+//! The ring buffer has `max_taps + 2` slots. The caller MUST drain all
 //! available output rows between `push_row` calls.
 //!
 //! ```ignore
@@ -86,16 +89,19 @@ pub struct StreamingResize<B: Background = NoBackground> {
     needs_premul: bool,
     alpha_is_last: bool,
 
-    /// Ring buffer of horizontally-filtered rows (f32).
-    h_cache: Vec<Vec<f32>>,
-    /// Which ring buffer slot to write the next horizontally-filtered row into.
+    /// Ring buffer of input rows (f32, linearized + premultiplied).
+    /// Each row is `in_width * channels + h_padding` wide (zero-padded for H-filter SIMD).
+    v_cache: Vec<Vec<f32>>,
+    /// Which ring buffer slot to write the next input row into.
     cache_write_idx: usize,
     /// Total number of cache slots.
     cache_size: usize,
 
     /// Temporary buffer for format conversion (u8/u16 → f32).
     temp_input_f32: Vec<f32>,
-    /// Temporary buffer for V-filter output (f32).
+    /// Temporary buffer for V-filter output (in_width-wide, zero-padded for H-filter SIMD).
+    temp_v_output: Vec<f32>,
+    /// Temporary buffer for H-filter output (out_width-wide).
     temp_output_f32: Vec<f32>,
 
     /// Reusable u8 conversion buffer (allocated once, used by `next_output_row`).
@@ -160,25 +166,29 @@ impl<B: Background> StreamingResize<B> {
         let alpha_is_last = layout.alpha_is_last_channel();
 
         let cache_size = v_weights.max_taps + 2;
-        let row_len = config.out_width as usize * channels;
+        let out_row_len = config.out_width as usize * channels;
+        let h_padding = h_weights.max_taps * channels;
+        let v_cache_row_len = config.in_width as usize * channels + h_padding;
 
-        let h_cache = (0..cache_size).map(|_| vec![0.0f32; row_len]).collect();
+        let v_cache = (0..cache_size)
+            .map(|_| vec![0.0f32; v_cache_row_len])
+            .collect();
 
         // Pad with max_taps extra zero elements so SIMD H-pass reads
         // beyond the valid input range hit zeros. Zero-padded weights make these inert.
-        let temp_input_f32 =
-            vec![0.0f32; config.in_width as usize * channels + h_weights.max_taps * channels];
-        let temp_output_f32 = vec![0.0f32; row_len];
+        let temp_input_f32 = vec![0.0f32; v_cache_row_len];
+        let temp_v_output = vec![0.0f32; v_cache_row_len];
+        let temp_output_f32 = vec![0.0f32; out_row_len];
 
         // Reusable output conversion buffers (allocated once)
-        let output_buf_u8 = vec![0u8; row_len];
-        let output_buf_u16 = vec![0u16; row_len];
+        let output_buf_u8 = vec![0u8; out_row_len];
+        let output_buf_u16 = vec![0u16; out_row_len];
 
         // Only allocate bg row buffer for non-solid, non-transparent backgrounds
         let needs_bg_row =
             has_composite && !background.is_transparent() && background.solid_pixel().is_none();
         let composite_bg_row = if needs_bg_row {
-            vec![0.0f32; row_len]
+            vec![0.0f32; out_row_len]
         } else {
             Vec::new()
         };
@@ -190,10 +200,11 @@ impl<B: Background> StreamingResize<B> {
             channels,
             needs_premul,
             alpha_is_last,
-            h_cache,
+            v_cache,
             cache_write_idx: 0,
             cache_size,
             temp_input_f32,
+            temp_v_output,
             temp_output_f32,
             output_buf_u8,
             output_buf_u16,
@@ -248,7 +259,7 @@ impl<B: Background> StreamingResize<B> {
     // Input methods
     // =========================================================================
 
-    /// Push one row of u8 input pixels. H-filters and caches the row.
+    /// Push one row of u8 input pixels. Linearizes, premultiplies, and caches the row.
     ///
     /// Caller MUST drain all available output rows (via `next_output_row` or
     /// `next_output_row_into`) before pushing the next input row.
@@ -290,7 +301,7 @@ impl<B: Background> StreamingResize<B> {
         self.push_row_internal()
     }
 
-    /// Push one row of f32 input pixels. H-filters and caches the row.
+    /// Push one row of f32 input pixels. Premultiplies (if needed) and caches the row.
     ///
     /// Caller MUST drain all available output rows before pushing the next input row.
     ///
@@ -321,7 +332,7 @@ impl<B: Background> StreamingResize<B> {
     ///
     /// The closure receives `&mut [f32]` of length `input_row_len()`. Write your
     /// f32 pixel data into this slice. After the closure returns, premultiply and
-    /// H-filter run without a `copy_from_slice` (saves one memcpy vs `push_row_f32`).
+    /// cache run without a `copy_from_slice` (saves one memcpy vs `push_row_f32`).
     ///
     /// Caller MUST drain all available output rows before pushing the next input row.
     ///
@@ -343,7 +354,7 @@ impl<B: Background> StreamingResize<B> {
         self.push_row_internal()
     }
 
-    /// Push one row of u16 input pixels. H-filters and caches the row.
+    /// Push one row of u16 input pixels. Linearizes, premultiplies, and caches the row.
     ///
     /// Uses the sRGB transfer function to linearize u16 values (0-65535)
     /// before filtering in f32 linear-light space.
@@ -400,7 +411,7 @@ impl<B: Background> StreamingResize<B> {
     /// Pull the next output row as u8. Returns `None` if more input is needed
     /// or all output rows have been produced.
     ///
-    /// Lazily produces one output row: V-filter → composite → unpremultiply → u8 convert.
+    /// Lazily produces one output row: V-filter → H-filter → composite → unpremultiply → u8 convert.
     /// The returned slice borrows from the resizer's internal buffer and is valid
     /// until the next method call on this resizer.
     pub fn next_output_row(&mut self) -> Option<&[u8]> {
@@ -451,7 +462,7 @@ impl<B: Background> StreamingResize<B> {
 
     /// Pull the next output row as f32. Returns `None` if more input is needed.
     ///
-    /// Returns a reference to the V-filter output directly (no format conversion).
+    /// Returns a reference to the H-filter output directly (no format conversion).
     /// The returned slice borrows from the resizer's internal buffer.
     pub fn next_output_row_f32(&mut self) -> Option<&[f32]> {
         if !self.can_produce_next_output() {
@@ -534,7 +545,7 @@ impl<B: Background> StreamingResize<B> {
         needed_max < self.input_rows_received
     }
 
-    /// V-filter one output row into `temp_output_f32`, apply composite and unpremultiply.
+    /// V-filter → H-filter one output row into `temp_output_f32`, apply composite and unpremultiply.
     /// Increments `output_rows_produced`. Caller must check `can_produce_next_output` first.
     fn produce_next_into_temp(&mut self) {
         let out_y = self.output_rows_produced;
@@ -542,20 +553,31 @@ impl<B: Background> StreamingResize<B> {
         let left = self.v_weights.left[out_y as usize];
         let tap_count = self.v_weights.tap_count(out_y as usize);
         let weights = self.v_weights.weights(out_y as usize);
-        let row_len = self.config.out_width as usize * self.channels;
+        let in_row_len = self.config.in_width as usize * self.channels;
+        let out_row_len = self.config.out_width as usize * self.channels;
 
+        // Step 1: V-filter from v_cache into temp_v_output (in_width-wide)
         let mut rows: Vec<&[f32]> = Vec::with_capacity(tap_count);
         for t in 0..tap_count {
             let input_y = (left + t as i32).clamp(0, self.config.in_height as i32 - 1) as u32;
             let cache_idx = input_y as usize % self.cache_size;
-            rows.push(&self.h_cache[cache_idx][..row_len]);
+            rows.push(&self.v_cache[cache_idx][..in_row_len]);
         }
 
-        simd::filter_v_row_f32(&rows, &mut self.temp_output_f32[..row_len], weights);
+        simd::filter_v_row_f32(&rows, &mut self.temp_v_output[..in_row_len], weights);
 
-        // === Composite: source-over onto background ===
+        // Step 2: H-filter from temp_v_output into temp_output_f32 (out_width-wide)
+        // temp_v_output has h_padding zeros beyond in_row_len for SIMD safety
+        simd::filter_h_row_f32(
+            &self.temp_v_output,
+            &mut self.temp_output_f32[..out_row_len],
+            &self.h_weights,
+            self.channels,
+        );
+
+        // Step 3: composite + unpremul (operates on temp_output_f32)
         composite::composite_dispatch(
-            &mut self.temp_output_f32[..row_len],
+            &mut self.temp_output_f32[..out_row_len],
             &mut self.background,
             &mut self.composite_bg_row,
             out_y,
@@ -563,13 +585,13 @@ impl<B: Background> StreamingResize<B> {
         );
 
         if self.needs_premul {
-            simd::unpremultiply_alpha_row(&mut self.temp_output_f32[..row_len]);
+            simd::unpremultiply_alpha_row(&mut self.temp_output_f32[..out_row_len]);
         }
 
         self.output_rows_produced += 1;
     }
 
-    /// Internal: H-filter the row in `temp_input_f32` and cache it.
+    /// Internal: cache the row from `temp_input_f32` into the ring buffer.
     fn push_row_internal(&mut self) -> Result<(), StreamingError> {
         // Verify ring buffer safety before writing
         if self.output_rows_produced < self.config.out_height {
@@ -583,12 +605,8 @@ impl<B: Background> StreamingResize<B> {
         }
 
         let cache_slot = self.cache_write_idx % self.cache_size;
-        simd::filter_h_row_f32(
-            &self.temp_input_f32,
-            &mut self.h_cache[cache_slot],
-            &self.h_weights,
-            self.channels,
-        );
+        let pixel_len = self.config.in_width as usize * self.channels;
+        self.v_cache[cache_slot][..pixel_len].copy_from_slice(&self.temp_input_f32[..pixel_len]);
 
         self.cache_write_idx += 1;
         self.input_rows_received += 1;
