@@ -66,7 +66,7 @@ pub use layout::{
 pub use pixel::{PixelFormat, PixelLayout, ResizeConfig, ResizeConfigBuilder, Transfer};
 pub use plane::PlaneResizer;
 pub use resize::Resizer;
-pub use streaming::{StreamingError, StreamingResize};
+pub use streaming::{StreamingError, StreamingResize, WorkingFormat};
 
 pub use composite::{
     Background, CompositeError, NoBackground, SliceBackground, SolidBackground, StreamedBackground,

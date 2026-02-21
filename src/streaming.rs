@@ -55,6 +55,24 @@ enum StreamingPath {
     I16Linear,
 }
 
+/// The internal working format of the streaming resizer.
+///
+/// Callers can use [`StreamingResize::working_format()`] to query this and
+/// push data in the optimal format, avoiding redundant conversions. For
+/// example, a JPEG decoder could fuse YCbCr→linear i12 conversion and
+/// push via [`push_row_i16()`](StreamingResize::push_row_i16).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkingFormat {
+    /// f32 linear-light (or f32 gamma for `Transfer::None`).
+    F32,
+    /// i16 in sRGB gamma space (u8 values zero-extended to i16).
+    /// Only for 4ch, no linearization, u8 I/O.
+    I16Srgb,
+    /// i16 linear-light i12 (0–4095 range).
+    /// Only for 4ch, linearized, no straight-alpha premul.
+    I16Linear,
+}
+
 /// Errors from streaming resize push operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamingError {
@@ -395,6 +413,20 @@ impl<B: Background> StreamingResize<B> {
         &mut self.background
     }
 
+    /// Query the internal working format.
+    ///
+    /// Callers can use this to produce input data in the optimal format,
+    /// avoiding redundant conversions. For example, if `working_format()`
+    /// returns [`WorkingFormat::I16Linear`], a JPEG decoder could fuse
+    /// YCbCr→linear i12 conversion and push via [`push_row_i16()`](Self::push_row_i16).
+    pub fn working_format(&self) -> WorkingFormat {
+        match self.path {
+            StreamingPath::F32 => WorkingFormat::F32,
+            StreamingPath::I16Srgb => WorkingFormat::I16Srgb,
+            StreamingPath::I16Linear => WorkingFormat::I16Linear,
+        }
+    }
+
     /// How many input rows must be pushed before the first output row.
     pub fn initial_input_rows_needed(&self) -> u32 {
         let first_right = self.first_output_row_max_input();
@@ -657,6 +689,90 @@ impl<B: Background> StreamingResize<B> {
                     self.needs_premul,
                 );
             }
+        }
+
+        self.push_row_internal()
+    }
+
+    /// Push one row of i16 data directly into the i16 ring buffer.
+    ///
+    /// For [`WorkingFormat::I16Srgb`]: values are u8-range (0–255) zero-extended to i16.
+    /// For [`WorkingFormat::I16Linear`]: values are linear i12 (0–4095).
+    ///
+    /// This skips the input transfer function entirely — the caller is responsible
+    /// for providing correctly-formatted data. Use [`working_format()`](Self::working_format)
+    /// to determine what format is expected.
+    ///
+    /// # Panics (debug)
+    ///
+    /// Panics if `working_format()` is [`WorkingFormat::F32`].
+    pub fn push_row_i16(&mut self, row: &[i16]) -> Result<(), StreamingError> {
+        debug_assert!(
+            matches!(
+                self.path,
+                StreamingPath::I16Srgb | StreamingPath::I16Linear
+            ),
+            "push_row_i16 requires an i16 path"
+        );
+        if self.finished {
+            return Err(StreamingError::AlreadyFinished);
+        }
+        let pixel_len = self.config.input_row_len();
+        if row.len() < pixel_len {
+            return Err(StreamingError::InputTooShort);
+        }
+
+        match self.path {
+            StreamingPath::I16Srgb => {
+                // i16 → u8 cache (values are u8-range zero-extended)
+                self.check_ring_buffer()?;
+                let cache_slot = self.cache_write_idx % self.cache_size;
+                for (s, d) in row[..pixel_len]
+                    .iter()
+                    .zip(self.u8_v_cache[cache_slot][..pixel_len].iter_mut())
+                {
+                    *d = (*s).clamp(0, 255) as u8;
+                }
+                self.cache_write_idx += 1;
+                self.input_rows_received += 1;
+                Ok(())
+            }
+            StreamingPath::I16Linear => {
+                // Copy directly into the linearized_row_i16 buffer, then push
+                self.linearized_row_i16[..pixel_len].copy_from_slice(&row[..pixel_len]);
+                self.push_row_internal_i16()
+            }
+            StreamingPath::F32 => unreachable!("guarded by debug_assert"),
+        }
+    }
+
+    /// Push one row of linear f32 data, skipping the input transfer function.
+    ///
+    /// Data must already be in linear-light f32 space. The resizer will still
+    /// premultiply if needed, but skips linearization.
+    ///
+    /// # Panics (debug)
+    ///
+    /// Panics if `working_format()` is not [`WorkingFormat::F32`].
+    pub fn push_row_linear_f32(&mut self, row: &[f32]) -> Result<(), StreamingError> {
+        debug_assert_eq!(
+            self.path,
+            StreamingPath::F32,
+            "push_row_linear_f32 requires f32 path"
+        );
+        if self.finished {
+            return Err(StreamingError::AlreadyFinished);
+        }
+        let pixel_len = self.config.input_row_len();
+        if row.len() < pixel_len {
+            return Err(StreamingError::InputTooShort);
+        }
+
+        // Copy into temp buffer (skip transfer function)
+        self.temp_input_f32[..pixel_len].copy_from_slice(&row[..pixel_len]);
+
+        if self.needs_premul {
+            simd::premultiply_alpha_row(&mut self.temp_input_f32[..pixel_len]);
         }
 
         self.push_row_internal()
