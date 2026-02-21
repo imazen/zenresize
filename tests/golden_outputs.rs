@@ -387,15 +387,17 @@ fn streaming_resize_u8(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
     let in_h = config.in_height as usize;
 
     let mut streamer = StreamingResize::new(config);
+    let mut output = Vec::new();
     for y in 0..in_h {
         let start = y * row_len;
         streamer.push_row(&input[start..start + row_len]);
+        while let Some(row) = streamer.next_output_row() {
+            output.extend_from_slice(row);
+        }
     }
     streamer.finish();
-
-    let mut output = Vec::new();
     while let Some(row) = streamer.next_output_row() {
-        output.extend_from_slice(&row);
+        output.extend_from_slice(row);
     }
     output
 }

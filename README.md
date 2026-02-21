@@ -83,12 +83,13 @@ let config = ResizeConfig::builder(1000, 800, 500, 400)
 
 let mut stream = StreamingResize::new(&config);
 
+// Interleaved push/drain — MUST drain between pushes (backpressure contract)
 for y in 0..800 {
     let row = &input_data[y * 4000..(y + 1) * 4000];
     stream.push_row(row);
 
     while let Some(out_row) = stream.next_output_row() {
-        // out_row is Vec<u8>, width * channels bytes
+        // out_row is &[u8], width * channels bytes (zero-alloc)
     }
 }
 stream.finish();
@@ -102,24 +103,31 @@ assert!(stream.is_complete());
 assert_eq!(stream.output_rows_produced(), 400);
 ```
 
-### Batch row push
+### Zero-copy output into caller buffer
 
-Push multiple rows from a contiguous buffer with stride:
+Write output directly into an encoder's buffer (skips internal buffer):
 
 ```rust
-let stride = 1000 * 4; // bytes between row starts
-let data = vec![128u8; 800 * stride];
-stream.push_rows(&data, stride, 800);
+let row_len = stream.output_row_len();
+let mut enc_buf = vec![0u8; row_len];
+// In the push/drain loop:
+while stream.next_output_row_into(&mut enc_buf) {
+    encoder.write_row(&enc_buf);
+}
 ```
 
 ### f32 streaming
 
 ```rust
 stream.push_row_f32(&f32_row);
-stream.push_rows_f32(&f32_data, stride, count);
+
+// Or write directly into the resizer's internal buffer (saves a memcpy):
+stream.push_row_f32_with(|buf| {
+    // fill buf with f32 pixel data
+});
 
 while let Some(out_row) = stream.next_output_row_f32() {
-    // out_row is Vec<f32>
+    // out_row is &[f32] (zero-alloc)
 }
 ```
 

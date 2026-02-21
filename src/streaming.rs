@@ -1,10 +1,30 @@
 //! Row-at-a-time streaming resize state machine.
 //!
-//! The streaming resizer uses horizontal-first architecture:
-//! 1. Each input row is immediately horizontally filtered and cached
-//! 2. When enough cached rows exist for the vertical filter window,
-//!    vertical filtering produces output rows
-//! 3. Old cached rows are evicted as processing advances
+//! The streaming resizer uses horizontal-first architecture with lazy pull-based
+//! output production and natural backpressure:
+//!
+//! 1. `push_row()`: H-filter the input row and cache it in the ring buffer (no output produced)
+//! 2. `next_output_row()`: Lazily V-filter one output row when enough cached rows exist
+//! 3. Caller MUST drain all available output between `push_row` calls (ring buffer contract)
+//!
+//! # Backpressure Contract
+//!
+//! The H-cache ring buffer has `max_taps + 2` slots. The caller MUST drain all
+//! available output rows between `push_row` calls. A `debug_assert!` fires if
+//! the ring buffer would overflow due to undrained output.
+//!
+//! ```ignore
+//! for row in input_rows {
+//!     resizer.push_row(row);
+//!     while let Some(output) = resizer.next_output_row() {
+//!         encoder.write_row(output);
+//!     }
+//! }
+//! resizer.finish();
+//! while let Some(output) = resizer.next_output_row() {
+//!     encoder.write_row(output);
+//! }
+//! ```
 
 #[cfg(not(feature = "std"))]
 use alloc::{vec, vec::Vec};
@@ -20,6 +40,7 @@ use crate::weights::F32WeightTable;
 /// Streaming resize state machine.
 ///
 /// Push input rows one at a time, pull output rows as they become available.
+/// Uses lazy pull-based production with natural backpressure via the push/drain contract.
 ///
 /// The pipeline is channel-order-agnostic: RGBA, BGRA, ARGB, BGRX all work
 /// identically. The sRGB transfer function is the same for R, G, and B,
@@ -44,21 +65,22 @@ pub struct StreamingResize<B: Background = NoBackground> {
     /// Total number of cache slots.
     cache_size: usize,
 
-    /// Temporary buffer for format conversion (u8 → f32).
+    /// Temporary buffer for format conversion (u8/u16 → f32).
     temp_input_f32: Vec<f32>,
-    /// Temporary buffer for output format conversion.
+    /// Temporary buffer for V-filter output (f32).
     temp_output_f32: Vec<f32>,
+
+    /// Reusable u8 conversion buffer (allocated once, used by `next_output_row`).
+    output_buf_u8: Vec<u8>,
+    /// Reusable u16 conversion buffer (allocated once, used by `next_output_row_u16`).
+    output_buf_u16: Vec<u16>,
 
     /// Number of input rows received.
     input_rows_received: u32,
     /// Number of output rows produced.
     output_rows_produced: u32,
-    /// Queue of output rows ready to be pulled (u8).
-    output_queue: Vec<Vec<u8>>,
-    /// Queue of f32 output rows.
-    output_queue_f32: Vec<Vec<f32>>,
-    /// Queue of u16 output rows.
-    output_queue_u16: Vec<Vec<u16>>,
+    /// End-of-input marker. Asserts on future pushes.
+    finished: bool,
 
     /// Background for compositing.
     background: B,
@@ -120,6 +142,10 @@ impl<B: Background> StreamingResize<B> {
             vec![0.0f32; config.in_width as usize * channels + h_weights.max_taps * channels];
         let temp_output_f32 = vec![0.0f32; row_len];
 
+        // Reusable output conversion buffers (allocated once)
+        let output_buf_u8 = vec![0u8; row_len];
+        let output_buf_u16 = vec![0u16; row_len];
+
         // Only allocate bg row buffer for non-solid, non-transparent backgrounds
         let needs_bg_row =
             has_composite && !background.is_transparent() && background.solid_pixel().is_none();
@@ -141,14 +167,32 @@ impl<B: Background> StreamingResize<B> {
             cache_size,
             temp_input_f32,
             temp_output_f32,
+            output_buf_u8,
+            output_buf_u16,
             input_rows_received: 0,
             output_rows_produced: 0,
-            output_queue: Vec::new(),
-            output_queue_f32: Vec::new(),
-            output_queue_u16: Vec::new(),
+            finished: false,
             background,
             composite_bg_row,
         }
+    }
+
+    // =========================================================================
+    // Info accessors
+    // =========================================================================
+
+    /// Number of elements per input row (for sizing decode buffers).
+    ///
+    /// Equal to `in_width * channels`.
+    pub fn input_row_len(&self) -> usize {
+        self.config.input_row_len()
+    }
+
+    /// Number of elements per output row (for sizing encode buffers).
+    ///
+    /// Equal to `out_width * channels`.
+    pub fn output_row_len(&self) -> usize {
+        self.config.output_row_len()
     }
 
     /// Mutable reference to the background (e.g., for pushing rows to [`StreamedBackground`]).
@@ -162,11 +206,28 @@ impl<B: Background> StreamingResize<B> {
         (first_right + 1).min(self.config.in_height)
     }
 
-    /// Push one row of u8 input pixels. Returns number of output rows now available.
+    /// Total output rows produced so far.
+    pub fn output_rows_produced(&self) -> u32 {
+        self.output_rows_produced
+    }
+
+    /// Check if all output rows have been produced.
+    pub fn is_complete(&self) -> bool {
+        self.output_rows_produced >= self.config.out_height
+    }
+
+    // =========================================================================
+    // Input methods
+    // =========================================================================
+
+    /// Push one row of u8 input pixels. H-filters and caches the row.
     ///
-    /// `row` must contain exactly `in_width * channels` elements (tightly packed),
-    /// or at least `effective_in_stride` elements if stride is set.
-    pub fn push_row(&mut self, row: &[u8]) -> u32 {
+    /// Caller MUST drain all available output rows (via `next_output_row` or
+    /// `next_output_row_into`) before pushing the next input row.
+    ///
+    /// `row` must contain at least `input_row_len()` elements.
+    pub fn push_row(&mut self, row: &[u8]) {
+        debug_assert!(!self.finished, "push_row called after finish()");
         let pixel_len = self.config.input_row_len();
         let stride = self.config.effective_in_stride();
         assert!(row.len() >= pixel_len.min(stride), "input row too short");
@@ -188,26 +249,14 @@ impl<B: Background> StreamingResize<B> {
             simd::premultiply_alpha_row(&mut self.temp_input_f32[..pixel_len]);
         }
 
-        self.push_row_internal()
+        self.push_row_internal();
     }
 
-    /// Push multiple rows of u8 pixels from a contiguous buffer with stride.
+    /// Push one row of f32 input pixels. H-filters and caches the row.
     ///
-    /// `data` is the buffer, `stride` is the byte offset between row starts.
-    /// Pushes `count` rows starting from the beginning of `data`.
-    pub fn push_rows(&mut self, data: &[u8], stride: usize, count: u32) -> u32 {
-        let mut total = 0;
-        for y in 0..count {
-            let start = y as usize * stride;
-            let end = start + self.config.input_row_len();
-            assert!(end <= data.len(), "push_rows: data too short for row {}", y);
-            total += self.push_row(&data[start..end]);
-        }
-        total
-    }
-
-    /// Push one row of f32 input pixels. Returns number of output rows now available.
-    pub fn push_row_f32(&mut self, row: &[f32]) -> u32 {
+    /// Caller MUST drain all available output rows before pushing the next input row.
+    pub fn push_row_f32(&mut self, row: &[f32]) {
+        debug_assert!(!self.finished, "push_row_f32 called after finish()");
         let pixel_len = self.config.input_row_len();
         assert!(row.len() >= pixel_len, "f32 input row too short");
 
@@ -217,30 +266,36 @@ impl<B: Background> StreamingResize<B> {
             simd::premultiply_alpha_row(&mut self.temp_input_f32[..pixel_len]);
         }
 
-        self.push_row_internal()
+        self.push_row_internal();
     }
 
-    /// Push multiple rows of f32 pixels from a contiguous buffer with stride.
-    pub fn push_rows_f32(&mut self, data: &[f32], stride: usize, count: u32) -> u32 {
-        let mut total = 0;
-        for y in 0..count {
-            let start = y as usize * stride;
-            let end = start + self.config.input_row_len();
-            assert!(
-                end <= data.len(),
-                "push_rows_f32: data too short for row {}",
-                y
-            );
-            total += self.push_row_f32(&data[start..end]);
+    /// Push one row of f32 input by writing directly into the resizer's internal buffer.
+    ///
+    /// The closure receives `&mut [f32]` of length `input_row_len()`. Write your
+    /// f32 pixel data into this slice. After the closure returns, premultiply and
+    /// H-filter run without a `copy_from_slice` (saves one memcpy vs `push_row_f32`).
+    ///
+    /// Caller MUST drain all available output rows before pushing the next input row.
+    pub fn push_row_f32_with<F: FnOnce(&mut [f32])>(&mut self, f: F) {
+        debug_assert!(!self.finished, "push_row_f32_with called after finish()");
+        let pixel_len = self.config.input_row_len();
+        f(&mut self.temp_input_f32[..pixel_len]);
+
+        if self.needs_premul {
+            simd::premultiply_alpha_row(&mut self.temp_input_f32[..pixel_len]);
         }
-        total
+
+        self.push_row_internal();
     }
 
-    /// Push one row of u16 input pixels. Returns number of output rows now available.
+    /// Push one row of u16 input pixels. H-filters and caches the row.
     ///
     /// Uses the sRGB transfer function to linearize u16 values (0-65535)
     /// before filtering in f32 linear-light space.
-    pub fn push_row_u16(&mut self, row: &[u16]) -> u32 {
+    ///
+    /// Caller MUST drain all available output rows before pushing the next input row.
+    pub fn push_row_u16(&mut self, row: &[u16]) {
+        debug_assert!(!self.finished, "push_row_u16 called after finish()");
         let pixel_len = self.config.input_row_len();
         let stride = self.config.effective_in_stride();
         assert!(
@@ -260,77 +315,132 @@ impl<B: Background> StreamingResize<B> {
             self.needs_premul,
         );
 
-        self.push_row_internal()
+        self.push_row_internal();
     }
 
-    /// Push multiple rows of u16 pixels from a contiguous buffer with stride.
-    pub fn push_rows_u16(&mut self, data: &[u16], stride: usize, count: u32) -> u32 {
-        let mut total = 0;
-        for y in 0..count {
-            let start = y as usize * stride;
-            let end = start + self.config.input_row_len();
-            assert!(
-                end <= data.len(),
-                "push_rows_u16: data too short for row {}",
-                y
+    /// Signal end of input. No more rows may be pushed after this call.
+    ///
+    /// After calling `finish()`, drain remaining output rows:
+    /// ```ignore
+    /// resizer.finish();
+    /// while let Some(row) = resizer.next_output_row() {
+    ///     encoder.write_row(row);
+    /// }
+    /// ```
+    pub fn finish(&mut self) {
+        self.finished = true;
+    }
+
+    // =========================================================================
+    // Output methods — lazy pull-based production
+    // =========================================================================
+
+    /// Pull the next output row as u8. Returns `None` if more input is needed
+    /// or all output rows have been produced.
+    ///
+    /// Lazily produces one output row: V-filter → composite → unpremultiply → u8 convert.
+    /// The returned slice borrows from the resizer's internal buffer and is valid
+    /// until the next method call on this resizer.
+    pub fn next_output_row(&mut self) -> Option<&[u8]> {
+        if !self.can_produce_next_output() {
+            return None;
+        }
+        self.produce_next_into_temp();
+        let row_len = self.config.out_width as usize * self.channels;
+        if self.config.needs_linearization() {
+            color::linear_f32_to_srgb_u8(
+                &self.temp_output_f32[..row_len],
+                &mut self.output_buf_u8[..row_len],
+                self.channels,
+                self.alpha_is_last,
             );
-            total += self.push_row_u16(&data[start..end]);
+        } else {
+            simd::f32_to_u8_row(
+                &self.temp_output_f32[..row_len],
+                &mut self.output_buf_u8[..row_len],
+            );
         }
-        total
+        Some(&self.output_buf_u8[..row_len])
     }
 
-    /// Internal: process the row in temp_input_f32.
-    fn push_row_internal(&mut self) -> u32 {
-        let cache_slot = self.cache_write_idx % self.cache_size;
-        simd::filter_h_row_f32(
-            &self.temp_input_f32,
-            &mut self.h_cache[cache_slot],
-            &self.h_weights,
+    /// Pull the next output row directly into a caller-provided u8 buffer.
+    /// Returns `true` if a row was produced, `false` if more input is needed.
+    ///
+    /// `dst` must be at least `output_row_len()` elements long.
+    /// Skips the internal `output_buf_u8` — writes directly to the caller's buffer.
+    pub fn next_output_row_into(&mut self, dst: &mut [u8]) -> bool {
+        if !self.can_produce_next_output() {
+            return false;
+        }
+        self.produce_next_into_temp();
+        let row_len = self.config.out_width as usize * self.channels;
+        if self.config.needs_linearization() {
+            color::linear_f32_to_srgb_u8(
+                &self.temp_output_f32[..row_len],
+                &mut dst[..row_len],
+                self.channels,
+                self.alpha_is_last,
+            );
+        } else {
+            simd::f32_to_u8_row(&self.temp_output_f32[..row_len], &mut dst[..row_len]);
+        }
+        true
+    }
+
+    /// Pull the next output row as f32. Returns `None` if more input is needed.
+    ///
+    /// Returns a reference to the V-filter output directly (no format conversion).
+    /// The returned slice borrows from the resizer's internal buffer.
+    pub fn next_output_row_f32(&mut self) -> Option<&[f32]> {
+        if !self.can_produce_next_output() {
+            return None;
+        }
+        self.produce_next_into_temp();
+        let row_len = self.config.out_width as usize * self.channels;
+        Some(&self.temp_output_f32[..row_len])
+    }
+
+    /// Pull the next output row as u16. Returns `None` if more input is needed.
+    ///
+    /// Uses the sRGB transfer function to convert from linear f32 to encoded u16.
+    pub fn next_output_row_u16(&mut self) -> Option<&[u16]> {
+        if !self.can_produce_next_output() {
+            return None;
+        }
+        self.produce_next_into_temp();
+        let row_len = self.config.out_width as usize * self.channels;
+        let tf = Srgb;
+        tf.linear_f32_to_u16(
+            &self.temp_output_f32[..row_len],
+            &mut self.output_buf_u16[..row_len],
+            &(),
             self.channels,
+            self.alpha_is_last,
+            false, // unpremultiply already happened in produce_next_into_temp
         );
-
-        self.cache_write_idx += 1;
-        self.input_rows_received += 1;
-
-        self.produce_output_rows()
+        Some(&self.output_buf_u16[..row_len])
     }
 
-    /// Signal end of input. Returns number of additional output rows produced.
-    pub fn finish(&mut self) -> u32 {
-        let mut count = 0;
-        while self.output_rows_produced < self.config.out_height {
-            if self.try_produce_one_output_row() {
-                count += 1;
-            } else {
-                break;
-            }
+    /// Pull the next output row directly into a caller-provided u16 buffer.
+    /// Returns `true` if a row was produced, `false` if more input is needed.
+    ///
+    /// `dst` must be at least `output_row_len()` elements long.
+    pub fn next_output_row_u16_into(&mut self, dst: &mut [u16]) -> bool {
+        if !self.can_produce_next_output() {
+            return false;
         }
-        count
-    }
-
-    /// Pull the next available u8 output row. Returns None if more input needed.
-    pub fn next_output_row(&mut self) -> Option<Vec<u8>> {
-        self.output_queue.pop()
-    }
-
-    /// Pull the next available f32 output row.
-    pub fn next_output_row_f32(&mut self) -> Option<Vec<f32>> {
-        self.output_queue_f32.pop()
-    }
-
-    /// Pull the next available u16 output row.
-    pub fn next_output_row_u16(&mut self) -> Option<Vec<u16>> {
-        self.output_queue_u16.pop()
-    }
-
-    /// Total output rows produced so far.
-    pub fn output_rows_produced(&self) -> u32 {
-        self.output_rows_produced
-    }
-
-    /// Check if all output rows have been produced.
-    pub fn is_complete(&self) -> bool {
-        self.output_rows_produced >= self.config.out_height
+        self.produce_next_into_temp();
+        let row_len = self.config.out_width as usize * self.channels;
+        let tf = Srgb;
+        tf.linear_f32_to_u16(
+            &self.temp_output_f32[..row_len],
+            &mut dst[..row_len],
+            &(),
+            self.channels,
+            self.alpha_is_last,
+            false,
+        );
+        true
     }
 
     // =========================================================================
@@ -347,15 +457,8 @@ impl<B: Background> StreamingResize<B> {
         right.max(0) as u32
     }
 
-    fn produce_output_rows(&mut self) -> u32 {
-        let mut count = 0;
-        while self.try_produce_one_output_row() {
-            count += 1;
-        }
-        count
-    }
-
-    fn try_produce_one_output_row(&mut self) -> bool {
+    /// Check if the next output row can be produced (enough input rows available).
+    fn can_produce_next_output(&self) -> bool {
         let out_y = self.output_rows_produced;
         if out_y >= self.config.out_height {
             return false;
@@ -366,14 +469,20 @@ impl<B: Background> StreamingResize<B> {
         let right = left + tap_count as i32 - 1;
 
         let needed_max = right.min(self.config.in_height as i32 - 1).max(0) as u32;
-        if needed_max >= self.input_rows_received {
-            return false;
-        }
+        needed_max < self.input_rows_received
+    }
 
+    /// V-filter one output row into `temp_output_f32`, apply composite and unpremultiply.
+    /// Increments `output_rows_produced`. Caller must check `can_produce_next_output` first.
+    fn produce_next_into_temp(&mut self) {
+        let out_y = self.output_rows_produced;
+
+        let left = self.v_weights.left[out_y as usize];
+        let tap_count = self.v_weights.tap_count(out_y as usize);
         let weights = self.v_weights.weights(out_y as usize);
         let row_len = self.config.out_width as usize * self.channels;
-        let mut rows: Vec<&[f32]> = Vec::with_capacity(tap_count);
 
+        let mut rows: Vec<&[f32]> = Vec::with_capacity(tap_count);
         for t in 0..tap_count {
             let input_y = (left + t as i32).clamp(0, self.config.in_height as i32 - 1) as u32;
             let cache_idx = input_y as usize % self.cache_size;
@@ -395,39 +504,36 @@ impl<B: Background> StreamingResize<B> {
             simd::unpremultiply_alpha_row(&mut self.temp_output_f32[..row_len]);
         }
 
-        if self.config.output_format.is_u8() {
-            let mut out_row = vec![0u8; row_len];
-            if self.config.needs_linearization() {
-                color::linear_f32_to_srgb_u8(
-                    &self.temp_output_f32[..row_len],
-                    &mut out_row,
-                    self.channels,
-                    self.alpha_is_last,
-                );
-            } else {
-                simd::f32_to_u8_row(&self.temp_output_f32[..row_len], &mut out_row);
-            }
-            self.output_queue.insert(0, out_row);
-        } else if self.config.output_format.is_u16() {
-            // Unpremultiply already happened above, so pass false here
-            let tf = Srgb;
-            let mut out_row = vec![0u16; row_len];
-            tf.linear_f32_to_u16(
-                &self.temp_output_f32[..row_len],
-                &mut out_row,
-                &(),
-                self.channels,
-                self.alpha_is_last,
-                false,
+        self.output_rows_produced += 1;
+    }
+
+    /// Internal: H-filter the row in `temp_input_f32` and cache it.
+    fn push_row_internal(&mut self) {
+        // Verify ring buffer safety before writing
+        if self.output_rows_produced < self.config.out_height {
+            let oldest_needed =
+                self.v_weights.left[self.output_rows_produced as usize].max(0) as usize;
+            debug_assert!(
+                self.cache_write_idx <= oldest_needed
+                    || self.cache_write_idx - oldest_needed < self.cache_size,
+                "Ring buffer overflow: drain output rows before pushing more input. \
+                 cache_write_idx={}, oldest_needed={}, cache_size={}",
+                self.cache_write_idx,
+                oldest_needed,
+                self.cache_size
             );
-            self.output_queue_u16.insert(0, out_row);
-        } else {
-            let out_row = self.temp_output_f32[..row_len].to_vec();
-            self.output_queue_f32.insert(0, out_row);
         }
 
-        self.output_rows_produced += 1;
-        true
+        let cache_slot = self.cache_write_idx % self.cache_size;
+        simd::filter_h_row_f32(
+            &self.temp_input_f32,
+            &mut self.h_cache[cache_slot],
+            &self.h_weights,
+            self.channels,
+        );
+
+        self.cache_write_idx += 1;
+        self.input_rows_received += 1;
     }
 }
 
@@ -445,17 +551,45 @@ mod tests {
             .build()
     }
 
+    /// Helper: push all input rows with interleaved drain, collect u8 output.
+    fn push_drain_collect_u8(
+        resizer: &mut StreamingResize<impl Background>,
+        input_row: &[u8],
+        in_h: u32,
+    ) -> Vec<Vec<u8>> {
+        let mut rows = Vec::new();
+        for _ in 0..in_h {
+            resizer.push_row(input_row);
+            while let Some(out) = resizer.next_output_row() {
+                rows.push(out.to_vec());
+            }
+        }
+        resizer.finish();
+        while let Some(out) = resizer.next_output_row() {
+            rows.push(out.to_vec());
+        }
+        rows
+    }
+
     #[test]
     fn test_streaming_produces_correct_row_count() {
         let config = make_config(100, 100, 50, 50);
         let mut resizer = StreamingResize::new(&config);
 
         let row = vec![128u8; 100 * 4];
+        let mut output_count = 0;
         for _ in 0..100 {
             resizer.push_row(&row);
+            while resizer.next_output_row().is_some() {
+                output_count += 1;
+            }
         }
         resizer.finish();
+        while resizer.next_output_row().is_some() {
+            output_count += 1;
+        }
 
+        assert_eq!(output_count, 50);
         assert_eq!(resizer.output_rows_produced(), 50);
     }
 
@@ -472,12 +606,26 @@ mod tests {
             pixel[3] = 255;
         }
 
+        let mut total_rows = 0;
         for _ in 0..20 {
             resizer.push_row(&row);
+            while let Some(out_row) = resizer.next_output_row() {
+                total_rows += 1;
+                for pixel in out_row.chunks_exact(4) {
+                    assert!(
+                        (pixel[0] as i16 - 128).unsigned_abs() <= 2,
+                        "R channel off: {}",
+                        pixel[0]
+                    );
+                    assert!(
+                        (pixel[3] as i16 - 255).unsigned_abs() <= 1,
+                        "A channel off: {}",
+                        pixel[3]
+                    );
+                }
+            }
         }
         resizer.finish();
-
-        let mut total_rows = 0;
         while let Some(out_row) = resizer.next_output_row() {
             total_rows += 1;
             for pixel in out_row.chunks_exact(4) {
@@ -502,11 +650,19 @@ mod tests {
         let mut resizer = StreamingResize::new(&config);
 
         let row = vec![200u8; 10 * 4];
+        let mut count = 0;
         for _ in 0..10 {
             resizer.push_row(&row);
+            while resizer.next_output_row().is_some() {
+                count += 1;
+            }
         }
         resizer.finish();
+        while resizer.next_output_row().is_some() {
+            count += 1;
+        }
 
+        assert_eq!(count, 20);
         assert_eq!(resizer.output_rows_produced(), 20);
     }
 
@@ -516,27 +672,20 @@ mod tests {
         let mut resizer = StreamingResize::new(&config);
 
         let row = vec![100u8; 10 * 4];
+        let mut count = 0;
         for _ in 0..10 {
             resizer.push_row(&row);
+            while resizer.next_output_row().is_some() {
+                count += 1;
+            }
         }
         resizer.finish();
+        while resizer.next_output_row().is_some() {
+            count += 1;
+        }
 
+        assert_eq!(count, 10);
         assert_eq!(resizer.output_rows_produced(), 10);
-    }
-
-    #[test]
-    fn test_push_rows_batch() {
-        let config = make_config(10, 10, 5, 5);
-        let mut resizer = StreamingResize::new(&config);
-
-        // Create a 10-row buffer
-        let stride = 10 * 4;
-        let data = vec![128u8; 10 * stride];
-
-        resizer.push_rows(&data, stride, 10);
-        resizer.finish();
-
-        assert_eq!(resizer.output_rows_produced(), 5);
     }
 
     #[test]
@@ -548,6 +697,81 @@ mod tests {
         assert_eq!(config.sharpen, 0.0);
         assert_eq!(config.in_stride, 0);
         assert_eq!(config.out_stride, 0);
+    }
+
+    #[test]
+    fn test_input_output_row_len() {
+        let config = ResizeConfig::builder(100, 100, 50, 50)
+            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .build();
+        let resizer = StreamingResize::new(&config);
+        assert_eq!(resizer.input_row_len(), 100 * 4);
+        assert_eq!(resizer.output_row_len(), 50 * 4);
+    }
+
+    #[test]
+    fn test_next_output_row_into() {
+        let config = make_config(20, 20, 10, 10);
+        let mut resizer = StreamingResize::new(&config);
+
+        let mut row = vec![0u8; 20 * 4];
+        for pixel in row.chunks_exact_mut(4) {
+            pixel[0] = 128;
+            pixel[1] = 128;
+            pixel[2] = 128;
+            pixel[3] = 255;
+        }
+
+        let row_len = resizer.output_row_len();
+        let mut output_buf = vec![0u8; row_len];
+        let mut total_rows = 0;
+
+        for _ in 0..20 {
+            resizer.push_row(&row);
+            while resizer.next_output_row_into(&mut output_buf) {
+                total_rows += 1;
+                for pixel in output_buf.chunks_exact(4) {
+                    assert!(
+                        (pixel[0] as i16 - 128).unsigned_abs() <= 2,
+                        "R channel off: {}",
+                        pixel[0]
+                    );
+                }
+            }
+        }
+        resizer.finish();
+        while resizer.next_output_row_into(&mut output_buf) {
+            total_rows += 1;
+        }
+        assert_eq!(total_rows, 10);
+    }
+
+    #[test]
+    fn test_push_row_f32_with() {
+        let config = ResizeConfig::builder(10, 10, 5, 5)
+            .format(PixelFormat::LinearF32(PixelLayout::Rgba))
+            .build();
+        let mut resizer = StreamingResize::new(&config);
+
+        let mut count = 0;
+        for _ in 0..10 {
+            resizer.push_row_f32_with(|buf| {
+                for pixel in buf.chunks_exact_mut(4) {
+                    pixel[0] = 0.5;
+                    pixel[1] = 0.5;
+                    pixel[2] = 0.5;
+                    pixel[3] = 1.0;
+                }
+            });
+            while resizer.next_output_row_f32().is_some() {
+                count += 1;
+            }
+        }
+        resizer.finish();
+        while resizer.next_output_row_f32().is_some() {
+            count += 1;
+        }
+        assert_eq!(count, 5);
     }
 
     // === Composite tests ===
@@ -565,26 +789,12 @@ mod tests {
 
         // Path A: new()
         let mut r1 = StreamingResize::new(&config);
-        for _ in 0..20 {
-            r1.push_row(&row);
-        }
-        r1.finish();
+        let rows1 = push_drain_collect_u8(&mut r1, &row, 20);
 
         // Path B: with_background(NoBackground)
         let mut r2 = StreamingResize::with_background(&config, NoBackground).unwrap();
-        for _ in 0..20 {
-            r2.push_row(&row);
-        }
-        r2.finish();
+        let rows2 = push_drain_collect_u8(&mut r2, &row, 20);
 
-        let mut rows1 = Vec::new();
-        let mut rows2 = Vec::new();
-        while let Some(r) = r1.next_output_row() {
-            rows1.push(r);
-        }
-        while let Some(r) = r2.next_output_row() {
-            rows2.push(r);
-        }
         assert_eq!(rows1, rows2);
     }
 
@@ -600,26 +810,12 @@ mod tests {
         }
 
         let mut r1 = StreamingResize::new(&config);
-        for _ in 0..20 {
-            r1.push_row(&row);
-        }
-        r1.finish();
+        let rows1 = push_drain_collect_u8(&mut r1, &row, 20);
 
         let bg = SolidBackground::transparent(PixelLayout::Rgba);
         let mut r2 = StreamingResize::with_background(&config, bg).unwrap();
-        for _ in 0..20 {
-            r2.push_row(&row);
-        }
-        r2.finish();
+        let rows2 = push_drain_collect_u8(&mut r2, &row, 20);
 
-        let mut rows1 = Vec::new();
-        let mut rows2 = Vec::new();
-        while let Some(r) = r1.next_output_row() {
-            rows1.push(r);
-        }
-        while let Some(r) = r2.next_output_row() {
-            rows2.push(r);
-        }
         assert_eq!(rows1, rows2);
     }
 
@@ -641,16 +837,22 @@ mod tests {
 
         let bg = SolidBackground::white(PixelLayout::Rgba);
         let mut resizer = StreamingResize::with_background(&config, bg).unwrap();
+
         for _ in 0..10 {
             resizer.push_row(&row);
+            while let Some(out_row) = resizer.next_output_row() {
+                for pixel in out_row.chunks_exact(4) {
+                    // Alpha must be 255 (opaque bg → opaque output)
+                    assert_eq!(pixel[3], 255, "output alpha must be 255 with opaque bg");
+                    // RGB should be blended: semi-transparent color over white
+                    assert!(pixel[0] > 0, "R should have content");
+                }
+            }
         }
         resizer.finish();
-
         while let Some(out_row) = resizer.next_output_row() {
             for pixel in out_row.chunks_exact(4) {
-                // Alpha must be 255 (opaque bg → opaque output)
                 assert_eq!(pixel[3], 255, "output alpha must be 255 with opaque bg");
-                // RGB should be blended: semi-transparent color over white
                 assert!(pixel[0] > 0, "R should have content");
             }
         }
@@ -689,12 +891,26 @@ mod tests {
             pixel[3] = 65535;
         }
 
+        let mut total_rows = 0;
         for _ in 0..20 {
             resizer.push_row_u16(&row);
+            while let Some(out_row) = resizer.next_output_row_u16() {
+                total_rows += 1;
+                for pixel in out_row.chunks_exact(4) {
+                    assert!(
+                        (pixel[0] as i32 - 32768).unsigned_abs() <= 100,
+                        "R off: {} (expected ~32768)",
+                        pixel[0]
+                    );
+                    assert!(
+                        (pixel[3] as i32 - 65535).unsigned_abs() <= 1,
+                        "A off: {} (expected 65535)",
+                        pixel[3]
+                    );
+                }
+            }
         }
         resizer.finish();
-
-        let mut total_rows = 0;
         while let Some(out_row) = resizer.next_output_row_u16() {
             total_rows += 1;
             for pixel in out_row.chunks_exact(4) {
@@ -738,18 +954,20 @@ mod tests {
             Resizer::new(&config).resize_u16(&input)
         };
 
-        // Streaming
+        // Streaming with interleaved drain
         let mut resizer = StreamingResize::new(&config);
+        let mut streaming = Vec::new();
         for y in 0..40 {
             let start = y * 40 * 4;
             let end = start + 40 * 4;
             resizer.push_row_u16(&input[start..end]);
+            while let Some(row) = resizer.next_output_row_u16() {
+                streaming.extend_from_slice(row);
+            }
         }
         resizer.finish();
-
-        let mut streaming = Vec::new();
         while let Some(row) = resizer.next_output_row_u16() {
-            streaming.extend_from_slice(&row);
+            streaming.extend_from_slice(row);
         }
 
         assert_eq!(fullframe.len(), streaming.len());
@@ -780,12 +998,21 @@ mod tests {
             pixel[2] = 60000;
         }
 
+        let mut total_rows = 0;
         for _ in 0..16 {
             resizer.push_row_u16(&row);
+            while let Some(out_row) = resizer.next_output_row_u16() {
+                total_rows += 1;
+                for pixel in out_row.chunks_exact(3) {
+                    assert!(
+                        (pixel[0] as i32 - 40000).unsigned_abs() <= 200,
+                        "R off: {}",
+                        pixel[0]
+                    );
+                }
+            }
         }
         resizer.finish();
-
-        let mut total_rows = 0;
         while let Some(out_row) = resizer.next_output_row_u16() {
             total_rows += 1;
             for pixel in out_row.chunks_exact(3) {

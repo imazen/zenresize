@@ -33,6 +33,28 @@ fn gradient_image(w: u32, h: u32) -> Vec<u8> {
     buf
 }
 
+/// Helper: run streaming resize with interleaved push/drain, collect u8 output.
+fn streaming_collect(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
+    let in_w = config.in_width as usize;
+    let in_h = config.in_height as usize;
+    let channels = config.input_format.channels() as usize;
+    let row_len = in_w * channels;
+
+    let mut resizer = StreamingResize::new(config);
+    let mut output = Vec::new();
+    for y in 0..in_h {
+        resizer.push_row(&input[y * row_len..(y + 1) * row_len]);
+        while let Some(row) = resizer.next_output_row() {
+            output.extend_from_slice(row);
+        }
+    }
+    resizer.finish();
+    while let Some(row) = resizer.next_output_row() {
+        output.extend_from_slice(row);
+    }
+    output
+}
+
 // =============================================================================
 // Streaming vs full-frame parity
 // =============================================================================
@@ -46,20 +68,7 @@ fn streaming_matches_fullframe_downscale() {
     let full_output = Resizer::new(&config).resize(&input);
 
     // Streaming
-    let mut resizer = StreamingResize::new(&config);
-    let row_len = 40 * 4;
-    for y in 0..40 {
-        resizer.push_row(&input[y * row_len..(y + 1) * row_len]);
-    }
-    resizer.finish();
-
-    let mut stream_output = vec![0u8; 20 * 20 * 4];
-    let out_row_len = 20 * 4;
-    let mut idx = 0;
-    while let Some(row) = resizer.next_output_row() {
-        stream_output[idx * out_row_len..(idx + 1) * out_row_len].copy_from_slice(&row);
-        idx += 1;
-    }
+    let stream_output = streaming_collect(&config, &input);
 
     // Streaming uses f32 weights, fullframe uses i16 for sRGB+4ch.
     // Different numeric precision gives ±1-2 per channel.
@@ -82,21 +91,7 @@ fn streaming_matches_fullframe_upscale() {
     let input = gradient_image(10, 10);
 
     let full_output = Resizer::new(&config).resize(&input);
-
-    let mut resizer = StreamingResize::new(&config);
-    let row_len = 10 * 4;
-    for y in 0..10 {
-        resizer.push_row(&input[y * row_len..(y + 1) * row_len]);
-    }
-    resizer.finish();
-
-    let mut stream_output = vec![0u8; 30 * 30 * 4];
-    let out_row_len = 30 * 4;
-    let mut idx = 0;
-    while let Some(row) = resizer.next_output_row() {
-        stream_output[idx * out_row_len..(idx + 1) * out_row_len].copy_from_slice(&row);
-        idx += 1;
-    }
+    let stream_output = streaming_collect(&config, &input);
 
     // Streaming uses f32 weights, fullframe uses i16 for sRGB+4ch.
     let max_diff: u8 = full_output
@@ -118,21 +113,7 @@ fn streaming_matches_fullframe_linear() {
     let input = gradient_image(30, 30);
 
     let full_output = Resizer::new(&config).resize(&input);
-
-    let mut resizer = StreamingResize::new(&config);
-    let row_len = 30 * 4;
-    for y in 0..30 {
-        resizer.push_row(&input[y * row_len..(y + 1) * row_len]);
-    }
-    resizer.finish();
-
-    let mut stream_output = vec![0u8; 15 * 15 * 4];
-    let out_row_len = 15 * 4;
-    let mut idx = 0;
-    while let Some(row) = resizer.next_output_row() {
-        stream_output[idx * out_row_len..(idx + 1) * out_row_len].copy_from_slice(&row);
-        idx += 1;
-    }
+    let stream_output = streaming_collect(&config, &input);
 
     // Full-frame may use i16 linear path; streaming always uses f32.
     // Allow ±2 for quantization differences.
@@ -482,40 +463,30 @@ fn strided_input_matches_tight() {
 }
 
 // =============================================================================
-// push_rows batch method
+// Interleaved push/drain matches batch-then-drain (via streaming_collect)
 // =============================================================================
 
 #[test]
-fn push_rows_matches_individual() {
+fn interleaved_push_drain_produces_correct_output() {
     let config = config_srgb(20, 20, 10, 10);
     let input = gradient_image(20, 20);
-    let row_len = 20 * 4;
 
-    // Individual pushes
-    let mut resizer1 = StreamingResize::new(&config);
-    for y in 0..20 {
-        resizer1.push_row(&input[y * row_len..(y + 1) * row_len]);
-    }
-    resizer1.finish();
+    // Use streaming_collect helper (interleaved push/drain)
+    let output = streaming_collect(&config, &input);
+    assert_eq!(output.len(), 10 * 10 * 4);
 
-    let mut out1 = Vec::new();
-    while let Some(row) = resizer1.next_output_row() {
-        out1.extend_from_slice(&row);
-    }
-
-    // Batch push
-    let mut resizer2 = StreamingResize::new(&config);
-    resizer2.push_rows(&input, row_len, 20);
-    resizer2.finish();
-
-    let mut out2 = Vec::new();
-    while let Some(row) = resizer2.next_output_row() {
-        out2.extend_from_slice(&row);
-    }
-
-    assert_eq!(
-        out1, out2,
-        "push_rows batch should match individual push_row"
+    // Compare with fullframe (allow ±2 for i16 vs f32 difference)
+    let fullframe = Resizer::new(&config).resize(&input);
+    let max_diff: u8 = fullframe
+        .iter()
+        .zip(output.iter())
+        .map(|(&a, &b)| (a as i16 - b as i16).unsigned_abs() as u8)
+        .max()
+        .unwrap_or(0);
+    assert!(
+        max_diff <= 2,
+        "interleaved push/drain vs fullframe max diff {} exceeds tolerance 2",
+        max_diff
     );
 }
 
@@ -539,20 +510,7 @@ fn linear_i16_matches_f32_downscale() {
     let i16_output = Resizer::new(&config).resize(&input);
 
     // Streaming: always uses f32 path
-    let mut resizer = StreamingResize::new(&config);
-    let row_len = 64 * 4;
-    for y in 0..64 {
-        resizer.push_row(&input[y * row_len..(y + 1) * row_len]);
-    }
-    resizer.finish();
-
-    let mut f32_output = vec![0u8; 32 * 32 * 4];
-    let out_row_len = 32 * 4;
-    let mut idx = 0;
-    while let Some(row) = resizer.next_output_row() {
-        f32_output[idx * out_row_len..(idx + 1) * out_row_len].copy_from_slice(&row);
-        idx += 1;
-    }
+    let f32_output = streaming_collect(&config, &input);
 
     let max_diff: u8 = i16_output
         .iter()
@@ -579,21 +537,7 @@ fn linear_i16_matches_f32_upscale() {
     let input = gradient_image(16, 16);
 
     let i16_output = Resizer::new(&config).resize(&input);
-
-    let mut resizer = StreamingResize::new(&config);
-    let row_len = 16 * 4;
-    for y in 0..16 {
-        resizer.push_row(&input[y * row_len..(y + 1) * row_len]);
-    }
-    resizer.finish();
-
-    let mut f32_output = vec![0u8; 48 * 48 * 4];
-    let out_row_len = 48 * 4;
-    let mut idx = 0;
-    while let Some(row) = resizer.next_output_row() {
-        f32_output[idx * out_row_len..(idx + 1) * out_row_len].copy_from_slice(&row);
-        idx += 1;
-    }
+    let f32_output = streaming_collect(&config, &input);
 
     let max_diff: u8 = i16_output
         .iter()
@@ -660,21 +604,7 @@ fn no_catastrophic_errors_across_all_combinations() {
                 let full_output = Resizer::new(&config).resize(&input);
 
                 // Streaming (always f32 weights with f64 normalization)
-                let mut resizer = StreamingResize::new(&config);
-                let row_len = in_size as usize * 4;
-                for y in 0..in_size as usize {
-                    resizer.push_row(&input[y * row_len..(y + 1) * row_len]);
-                }
-                resizer.finish();
-
-                let out_pixels = out_size as usize * out_size as usize * 4;
-                let mut stream_output = vec![0u8; out_pixels];
-                let out_row_len = out_size as usize * 4;
-                let mut idx = 0;
-                while let Some(row) = resizer.next_output_row() {
-                    stream_output[idx * out_row_len..(idx + 1) * out_row_len].copy_from_slice(&row);
-                    idx += 1;
-                }
+                let stream_output = streaming_collect(&config, &input);
 
                 assert_eq!(
                     full_output.len(),
