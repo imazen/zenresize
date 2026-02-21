@@ -30,6 +30,23 @@ Window-slicing eliminates ALL inner-loop bounds checks without unsafe.
 Pre-slice input per output pixel, `as_chunks::<16>()` gives exact chunk count,
 zip iterator proves bounds at compile time. `unsafe_kernels` feature removed.
 
+## V-first streaming pipeline — DONE
+
+Switched `StreamingResize` from H-first to V-first pipeline order:
+- **Before**: `push_row` ran H-filter on every input row, cached `out_width`-wide results
+- **After**: `push_row` caches `in_width`-wide linearized/premultiplied rows; output production runs V-filter → H-filter → composite → unpremul
+
+For 2x downscale, H-filter runs 512 times (output rows) instead of 1024 times (input rows).
+Streaming linear path: 30% faster than fullframe (4.53ms vs 5.90ms, 1024→512 Lanczos RGBA).
+
+## AVX2 256-bit horizontal f32 filter — DONE
+
+Widened `filter_h_4ch` from SSE 128-bit (4 taps/iteration) to AVX2 256-bit (8 taps/iteration):
+- Each 256-bit accumulator processes 2 taps: lower 128 = pixel[t] * w[t], upper 128 = pixel[t+1] * w[t+1]
+- Uses `vpermps` (`_mm256_permutevar8x32_ps`) for weight broadcasting: loads 8 weights at once, permutes to create per-tap lane broadcasts (4 port-5 uops vs 12 with individual vbroadcastss+vinsertf128)
+- SSE 128-bit remainder loop handles 0-7 leftover taps
+- `zenresize_f32` fullframe: 4.86ms → 4.35ms (12% faster, now beats `fir_f32`)
+
 ## Pending
 
 ### NEON and WASM128 via `wide` crate — DONE

@@ -29,7 +29,7 @@ assert_eq!(output.len(), 512 * 384 * 4);
 - Channel-order-agnostic: RGBA, BGRA, ARGB, BGRX all work without swizzling
 - u8 and f32 pixel format support
 - `no_std` + `alloc` compatible (std optional)
-- SIMD-accelerated via [archmage](https://github.com/imazen/archmage) (AVX2+FMA on x86, NEON on ARM, scalar fallback)
+- SIMD-accelerated via [archmage](https://github.com/imazen/archmage) (AVX2+FMA 256-bit on x86, NEON on ARM, scalar fallback)
 
 ## Resizer
 
@@ -71,7 +71,7 @@ resizer.resize_f32_into(&input_f32, &mut buf_f32);
 
 ## StreamingResize
 
-Push input rows one at a time, pull output rows as they become available. Useful for pipeline integration where the full image isn't in memory, or for interleaving resize with decode/encode.
+Push input rows one at a time, pull output rows as they become available. Uses a V-first pipeline: input rows are cached in the ring buffer, then V-filter and H-filter run on demand when output rows are pulled. For downscaling, this runs the H-filter only `out_height` times instead of `in_height` times, making streaming ~30% faster than fullframe for the f32 linear path.
 
 ```rust
 use zenresize::{StreamingResize, ResizeConfig, Filter, PixelFormat, PixelLayout};

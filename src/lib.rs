@@ -4,7 +4,7 @@
 //! image processing pipeline. It supports:
 //!
 //! - All 31 resampling filters from imageflow (Lanczos, Robidoux, Mitchell, etc.)
-//! - Row-at-a-time streaming API for pipeline integration
+//! - Row-at-a-time streaming API with V-first pipeline for pipeline integration
 //! - Built-in sRGB/linear conversion and alpha premultiply/unpremultiply
 //! - u8, i16, and f32 pixel format support
 //! - archmage-based SIMD (AVX2+FMA on x86, NEON on ARM)
