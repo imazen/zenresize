@@ -55,7 +55,12 @@ fn decode_u16_row(
         Transfer::Srgb => Srgb.u16_to_linear_f32(src, dst, &(), channels, has_alpha, premul),
         Transfer::None => {
             crate::transfer::NoTransfer.u16_to_linear_f32(
-                src, dst, &(), channels, has_alpha, premul,
+                src,
+                dst,
+                &(),
+                channels,
+                has_alpha,
+                premul,
             );
         }
         Transfer::Bt709 => Bt709.u16_to_linear_f32(src, dst, &(), channels, has_alpha, premul),
@@ -77,7 +82,12 @@ fn encode_u16_row(
         Transfer::Srgb => Srgb.linear_f32_to_u16(src, dst, &(), channels, has_alpha, unpremul),
         Transfer::None => {
             crate::transfer::NoTransfer.linear_f32_to_u16(
-                src, dst, &(), channels, has_alpha, unpremul,
+                src,
+                dst,
+                &(),
+                channels,
+                has_alpha,
+                unpremul,
             );
         }
         Transfer::Bt709 => Bt709.linear_f32_to_u16(src, dst, &(), channels, has_alpha, unpremul),

@@ -607,8 +607,7 @@ impl TransferFunction for Bt709 {
                 for i in 0..channels - 1 {
                     dst_px[i] = (self.from_linear(src_px[i]) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
                 }
-                dst_px[channels - 1] =
-                    (src_px[channels - 1] * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+                dst_px[channels - 1] = (src_px[channels - 1] * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
             }
         } else {
             for (s, d) in src.iter().zip(dst.iter_mut()) {
@@ -760,6 +759,7 @@ impl TransferFunction for Bt709 {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Pq;
 
+#[allow(clippy::excessive_precision)] // These are exact binary fractions from the PQ spec.
 impl Pq {
     const M1: f32 = 0.1593017578125; // 2610/16384
     const M2: f32 = 78.84375; // 2523/32 * 128
@@ -856,8 +856,7 @@ impl TransferFunction for Pq {
                 for i in 0..channels - 1 {
                     dst_px[i] = (self.from_linear(src_px[i]) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
                 }
-                dst_px[channels - 1] =
-                    (src_px[channels - 1] * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+                dst_px[channels - 1] = (src_px[channels - 1] * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
             }
         } else {
             for (s, d) in src.iter().zip(dst.iter_mut()) {
@@ -1008,6 +1007,7 @@ impl TransferFunction for Pq {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Hlg;
 
+#[allow(clippy::excessive_precision)] // Spec constants from ARIB STD-B67.
 impl Hlg {
     const A: f32 = 0.17883277;
     const B: f32 = 0.28466892; // 1 - 4 * A
@@ -1101,8 +1101,7 @@ impl TransferFunction for Hlg {
                 for i in 0..channels - 1 {
                     dst_px[i] = (self.from_linear(src_px[i]) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
                 }
-                dst_px[channels - 1] =
-                    (src_px[channels - 1] * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+                dst_px[channels - 1] = (src_px[channels - 1] * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
             }
         } else {
             for (s, d) in src.iter().zip(dst.iter_mut()) {
@@ -1433,5 +1432,191 @@ mod tests {
                 out[i]
             );
         }
+    }
+
+    // === BT.709 tests ===
+
+    #[test]
+    fn bt709_roundtrip_u8() {
+        let tf = Bt709;
+        let luts = tf.build_luts();
+        let src: Vec<u8> = (0..=255).collect();
+        let mut f32_buf = vec![0.0f32; 256];
+        let mut out = vec![0u8; 256];
+
+        tf.u8_to_linear_f32(&src, &mut f32_buf, &luts, 1, false, false);
+        tf.linear_f32_to_u8(&f32_buf, &mut out, &luts, 1, false, false);
+
+        for i in 0..256 {
+            let diff = (src[i] as i16 - out[i] as i16).unsigned_abs();
+            assert!(diff <= 1, "BT.709 roundtrip off by {} at {}", diff, i);
+        }
+    }
+
+    #[test]
+    fn bt709_monotonic() {
+        let tf = Bt709;
+        let mut prev = 0.0f32;
+        for i in 0..=255u8 {
+            let linear = tf.to_linear(i as f32 / 255.0);
+            assert!(
+                linear >= prev,
+                "BT.709 to_linear not monotonic at {}: {} < {}",
+                i,
+                linear,
+                prev
+            );
+            prev = linear;
+        }
+    }
+
+    #[test]
+    fn bt709_endpoints() {
+        let tf = Bt709;
+        assert!((tf.to_linear(0.0)).abs() < 1e-7);
+        assert!((tf.to_linear(1.0) - 1.0).abs() < 1e-5);
+        assert!((tf.from_linear(0.0)).abs() < 1e-7);
+        assert!((tf.from_linear(1.0) - 1.0).abs() < 1e-5);
+    }
+
+    // === PQ tests ===
+
+    #[test]
+    fn pq_roundtrip_u8() {
+        let tf = Pq;
+        let luts = tf.build_luts();
+        let src: Vec<u8> = (0..=255).collect();
+        let mut f32_buf = vec![0.0f32; 256];
+        let mut out = vec![0u8; 256];
+
+        tf.u8_to_linear_f32(&src, &mut f32_buf, &luts, 1, false, false);
+        tf.linear_f32_to_u8(&f32_buf, &mut out, &luts, 1, false, false);
+
+        for i in 0..256 {
+            let diff = (src[i] as i16 - out[i] as i16).unsigned_abs();
+            assert!(diff <= 1, "PQ roundtrip off by {} at {}", diff, i);
+        }
+    }
+
+    #[test]
+    fn pq_monotonic() {
+        let tf = Pq;
+        let mut prev = 0.0f32;
+        for i in 0..=255u8 {
+            let linear = tf.to_linear(i as f32 / 255.0);
+            assert!(
+                linear >= prev,
+                "PQ to_linear not monotonic at {}: {} < {}",
+                i,
+                linear,
+                prev
+            );
+            prev = linear;
+        }
+    }
+
+    #[test]
+    fn pq_endpoints() {
+        let tf = Pq;
+        assert!((tf.to_linear(0.0)).abs() < 1e-7);
+        assert!((tf.to_linear(1.0) - 1.0).abs() < 1e-4);
+        assert!((tf.from_linear(0.0)).abs() < 1e-7);
+        assert!((tf.from_linear(1.0) - 1.0).abs() < 1e-4);
+    }
+
+    // === HLG tests ===
+
+    #[test]
+    fn hlg_roundtrip_u8() {
+        let tf = Hlg;
+        let luts = tf.build_luts();
+        let src: Vec<u8> = (0..=255).collect();
+        let mut f32_buf = vec![0.0f32; 256];
+        let mut out = vec![0u8; 256];
+
+        tf.u8_to_linear_f32(&src, &mut f32_buf, &luts, 1, false, false);
+        tf.linear_f32_to_u8(&f32_buf, &mut out, &luts, 1, false, false);
+
+        for i in 0..256 {
+            let diff = (src[i] as i16 - out[i] as i16).unsigned_abs();
+            assert!(diff <= 1, "HLG roundtrip off by {} at {}", diff, i);
+        }
+    }
+
+    #[test]
+    fn hlg_monotonic() {
+        let tf = Hlg;
+        let mut prev = 0.0f32;
+        for i in 0..=255u8 {
+            let linear = tf.to_linear(i as f32 / 255.0);
+            assert!(
+                linear >= prev,
+                "HLG to_linear not monotonic at {}: {} < {}",
+                i,
+                linear,
+                prev
+            );
+            prev = linear;
+        }
+    }
+
+    #[test]
+    fn hlg_endpoints() {
+        let tf = Hlg;
+        assert!((tf.to_linear(0.0)).abs() < 1e-7);
+        // HLG OETF inverse at 1.0 should give ~1/3 (since HLG maps [0,1/3] scene linear)
+        // Actually at signal=1.0, scene linear = (exp((1.0 - C)/A) + B) / 12
+        let at_one = tf.to_linear(1.0);
+        assert!(at_one > 0.0, "HLG(1.0) should be positive: {}", at_one);
+        // And from_linear should round-trip
+        let back = tf.from_linear(at_one);
+        assert!(
+            (back - 1.0).abs() < 1e-5,
+            "HLG roundtrip at 1.0: {} -> {} -> {}",
+            1.0,
+            at_one,
+            back
+        );
+    }
+
+    // === CICP constructor tests ===
+
+    #[test]
+    fn cicp_transfer_known_codes() {
+        use crate::pixel::Transfer;
+        assert_eq!(Transfer::from_cicp_transfer(1), Some(Transfer::Bt709));
+        assert_eq!(Transfer::from_cicp_transfer(6), Some(Transfer::Bt709));
+        assert_eq!(Transfer::from_cicp_transfer(8), Some(Transfer::None));
+        assert_eq!(Transfer::from_cicp_transfer(13), Some(Transfer::Srgb));
+        assert_eq!(Transfer::from_cicp_transfer(16), Some(Transfer::Pq));
+        assert_eq!(Transfer::from_cicp_transfer(18), Some(Transfer::Hlg));
+    }
+
+    #[test]
+    fn cicp_transfer_unknown_codes() {
+        use crate::pixel::Transfer;
+        assert_eq!(Transfer::from_cicp_transfer(0), None);
+        assert_eq!(Transfer::from_cicp_transfer(2), None);
+        assert_eq!(Transfer::from_cicp_transfer(255), None);
+    }
+
+    #[test]
+    fn transfer_requires_f32() {
+        use crate::pixel::Transfer;
+        assert!(!Transfer::Srgb.requires_f32());
+        assert!(!Transfer::None.requires_f32());
+        assert!(!Transfer::Bt709.requires_f32());
+        assert!(Transfer::Pq.requires_f32());
+        assert!(Transfer::Hlg.requires_f32());
+    }
+
+    #[test]
+    fn transfer_is_identity() {
+        use crate::pixel::Transfer;
+        assert!(Transfer::None.is_identity());
+        assert!(!Transfer::Srgb.is_identity());
+        assert!(!Transfer::Bt709.is_identity());
+        assert!(!Transfer::Pq.is_identity());
+        assert!(!Transfer::Hlg.is_identity());
     }
 }

@@ -221,23 +221,25 @@ impl<B: Background> StreamingResize<B> {
         let needs_premul = layout.needs_premultiply();
         let alpha_is_last = layout.alpha_is_last_channel();
 
-        // Path selection: mirrors fullframe Resizer paths 0/1
+        // Path selection: mirrors fullframe Resizer paths 0/1.
+        // I16Srgb: identity transfer (no linearization), u8 4ch.
+        // I16Linear: sRGB→linear via compile-time LUTs, u8 4ch, no premul.
+        // Both i16 paths hardcode their transfer functions, so they require
+        // exact match — any other transfer (BT.709, PQ, HLG) goes to f32.
         let input_tf = config.effective_input_transfer();
         let output_tf = config.effective_output_transfer();
-        let linearize = input_tf == Transfer::Srgb;
         let is_u8_format = matches!(config.input_format, PixelFormat::Srgb8(_));
-        let transfer_needs_f32 = input_tf.requires_f32() || output_tf.requires_f32();
         let path = if !active_composite
-            && !transfer_needs_f32
             && is_u8_format
-            && !linearize
+            && input_tf.is_identity()
+            && output_tf.is_identity()
             && channels == 4
         {
             StreamingPath::I16Srgb
         } else if !active_composite
-            && !transfer_needs_f32
             && is_u8_format
-            && linearize
+            && input_tf == Transfer::Srgb
+            && output_tf == Transfer::Srgb
             && channels == 4
             && !needs_premul
         {
@@ -708,10 +710,7 @@ impl<B: Background> StreamingResize<B> {
     /// Panics if `working_format()` is [`WorkingFormat::F32`].
     pub fn push_row_i16(&mut self, row: &[i16]) -> Result<(), StreamingError> {
         debug_assert!(
-            matches!(
-                self.path,
-                StreamingPath::I16Srgb | StreamingPath::I16Linear
-            ),
+            matches!(self.path, StreamingPath::I16Srgb | StreamingPath::I16Linear),
             "push_row_i16 requires an i16 path"
         );
         if self.finished {
@@ -940,7 +939,9 @@ impl<B: Background> StreamingResize<B> {
         match tf {
             Transfer::Srgb => color::linear_f32_to_srgb_u8(src, dst, channels, alpha_is_last),
             Transfer::None => simd::f32_to_u8_row(src, dst),
-            Transfer::Bt709 => Bt709.linear_f32_to_u8(src, dst, &(), channels, alpha_is_last, false),
+            Transfer::Bt709 => {
+                Bt709.linear_f32_to_u8(src, dst, &(), channels, alpha_is_last, false)
+            }
             Transfer::Pq => Pq.linear_f32_to_u8(src, dst, &(), channels, alpha_is_last, false),
             Transfer::Hlg => Hlg.linear_f32_to_u8(src, dst, &(), channels, alpha_is_last, false),
         }
@@ -955,14 +956,15 @@ impl<B: Background> StreamingResize<B> {
         alpha_is_last: bool,
     ) {
         match tf {
-            Transfer::Srgb => {
-                Srgb.linear_f32_to_u16(src, dst, &(), channels, alpha_is_last, false)
-            }
-            Transfer::None => {
-                crate::transfer::NoTransfer.linear_f32_to_u16(
-                    src, dst, &(), channels, alpha_is_last, false,
-                )
-            }
+            Transfer::Srgb => Srgb.linear_f32_to_u16(src, dst, &(), channels, alpha_is_last, false),
+            Transfer::None => crate::transfer::NoTransfer.linear_f32_to_u16(
+                src,
+                dst,
+                &(),
+                channels,
+                alpha_is_last,
+                false,
+            ),
             Transfer::Bt709 => {
                 Bt709.linear_f32_to_u16(src, dst, &(), channels, alpha_is_last, false)
             }
@@ -1910,5 +1912,319 @@ mod tests {
             "i16_linear streaming vs fullframe max diff {} exceeds tolerance 2",
             max_diff
         );
+    }
+
+    // === WorkingFormat tests ===
+
+    #[test]
+    fn test_working_format_i16_srgb() {
+        let config = make_config(20, 20, 10, 10); // srgb() + Rgba = I16Srgb
+        let resizer = StreamingResize::new(&config);
+        assert_eq!(resizer.working_format(), super::WorkingFormat::I16Srgb);
+    }
+
+    #[test]
+    fn test_working_format_i16_linear() {
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
+            .linear()
+            .build();
+        let resizer = StreamingResize::new(&config);
+        assert_eq!(resizer.working_format(), super::WorkingFormat::I16Linear);
+    }
+
+    #[test]
+    fn test_working_format_f32() {
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .linear()
+            .build();
+        let resizer = StreamingResize::new(&config);
+        assert_eq!(resizer.working_format(), super::WorkingFormat::F32);
+    }
+
+    #[test]
+    fn test_pq_forces_f32_path() {
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .srgb()
+            .input_transfer(Transfer::Pq)
+            .output_transfer(Transfer::Pq)
+            .build();
+        let resizer = StreamingResize::new(&config);
+        assert_eq!(resizer.working_format(), super::WorkingFormat::F32);
+    }
+
+    #[test]
+    fn test_hlg_forces_f32_path() {
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
+            .linear()
+            .input_transfer(Transfer::Hlg)
+            .output_transfer(Transfer::Hlg)
+            .build();
+        let resizer = StreamingResize::new(&config);
+        assert_eq!(resizer.working_format(), super::WorkingFormat::F32);
+    }
+
+    #[test]
+    fn test_bt709_allows_f32_path() {
+        // BT.709 doesn't require f32 on its own, but having an explicit transfer
+        // forces f32 through the has_explicit_transfer path in fullframe Resizer.
+        // In streaming, BT.709 is not identity/srgb so it goes to F32 anyway.
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .input_transfer(Transfer::Bt709)
+            .output_transfer(Transfer::Bt709)
+            .build();
+        let resizer = StreamingResize::new(&config);
+        assert_eq!(resizer.working_format(), super::WorkingFormat::F32);
+    }
+
+    // === push_row_i16 tests ===
+
+    #[test]
+    fn test_push_row_i16_srgb_matches_push_row() {
+        let config = make_config(20, 20, 10, 10); // I16Srgb path
+        let mut row_u8 = vec![0u8; 20 * 4];
+        for pixel in row_u8.chunks_exact_mut(4) {
+            pixel[0] = 128;
+            pixel[1] = 64;
+            pixel[2] = 32;
+            pixel[3] = 255;
+        }
+
+        // Via push_row (u8)
+        let mut r1 = StreamingResize::new(&config);
+        let rows1 = push_drain_collect_u8(&mut r1, &row_u8, 20);
+
+        // Via push_row_i16 (zero-extend u8 to i16)
+        let row_i16: Vec<i16> = row_u8.iter().map(|&v| v as i16).collect();
+        let mut r2 = StreamingResize::new(&config);
+        assert_eq!(r2.working_format(), super::WorkingFormat::I16Srgb);
+        let mut rows2 = Vec::new();
+        for _ in 0..20 {
+            r2.push_row_i16(&row_i16).unwrap();
+            while let Some(out) = r2.next_output_row() {
+                rows2.push(out.to_vec());
+            }
+        }
+        r2.finish();
+        while let Some(out) = r2.next_output_row() {
+            rows2.push(out.to_vec());
+        }
+
+        assert_eq!(rows1, rows2);
+    }
+
+    #[test]
+    fn test_push_row_i16_linear_matches_push_row() {
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
+            .linear()
+            .build();
+
+        let mut row_u8 = vec![0u8; 20 * 4];
+        for pixel in row_u8.chunks_exact_mut(4) {
+            pixel[0] = 128;
+            pixel[1] = 64;
+            pixel[2] = 32;
+            pixel[3] = 255;
+        }
+
+        // Via push_row (u8 → sRGB LUT → i12)
+        let mut r1 = StreamingResize::new(&config);
+        assert_eq!(r1.working_format(), super::WorkingFormat::I16Linear);
+        let rows1 = push_drain_collect_u8(&mut r1, &row_u8, 20);
+
+        // Via push_row_i16 (pre-convert u8 → i12, push directly)
+        let mut row_i16 = vec![0i16; 20 * 4];
+        crate::color::srgb_u8_to_linear_i12_row(&row_u8, &mut row_i16);
+
+        let mut r2 = StreamingResize::new(&config);
+        let mut rows2 = Vec::new();
+        for _ in 0..20 {
+            r2.push_row_i16(&row_i16).unwrap();
+            while let Some(out) = r2.next_output_row() {
+                rows2.push(out.to_vec());
+            }
+        }
+        r2.finish();
+        while let Some(out) = r2.next_output_row() {
+            rows2.push(out.to_vec());
+        }
+
+        assert_eq!(rows1, rows2);
+    }
+
+    // === push_row_linear_f32 tests ===
+
+    #[test]
+    fn test_push_row_linear_f32_matches_push_row() {
+        // Use F32 path: Srgb8 + linear + Rgba
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .linear()
+            .build();
+
+        let mut row_u8 = vec![0u8; 20 * 4];
+        for pixel in row_u8.chunks_exact_mut(4) {
+            pixel[0] = 128;
+            pixel[1] = 64;
+            pixel[2] = 32;
+            pixel[3] = 255;
+        }
+
+        // Via push_row (u8 → sRGB linearize → f32)
+        let mut r1 = StreamingResize::new(&config);
+        assert_eq!(r1.working_format(), super::WorkingFormat::F32);
+        let rows1 = push_drain_collect_u8(&mut r1, &row_u8, 20);
+
+        // Via push_row_linear_f32 (pre-linearize, push directly)
+        let mut row_f32 = vec![0.0f32; 20 * 4];
+        crate::color::srgb_u8_to_linear_f32(&row_u8, &mut row_f32, 4, true);
+
+        let mut r2 = StreamingResize::new(&config);
+        let mut rows2 = Vec::new();
+        for _ in 0..20 {
+            r2.push_row_linear_f32(&row_f32).unwrap();
+            while let Some(out) = r2.next_output_row() {
+                rows2.push(out.to_vec());
+            }
+        }
+        r2.finish();
+        while let Some(out) = r2.next_output_row() {
+            rows2.push(out.to_vec());
+        }
+
+        assert_eq!(rows1, rows2);
+    }
+
+    // === Resize with new transfer functions ===
+
+    #[test]
+    fn test_bt709_resize_constant_color() {
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .input_transfer(Transfer::Bt709)
+            .output_transfer(Transfer::Bt709)
+            .build();
+
+        let mut resizer = StreamingResize::new(&config);
+        let mut row = vec![0u8; 20 * 4];
+        for pixel in row.chunks_exact_mut(4) {
+            pixel[0] = 128;
+            pixel[1] = 128;
+            pixel[2] = 128;
+            pixel[3] = 255;
+        }
+
+        let mut total_rows = 0;
+        for _ in 0..20 {
+            resizer.push_row(&row).unwrap();
+            while let Some(out_row) = resizer.next_output_row() {
+                total_rows += 1;
+                for pixel in out_row.chunks_exact(4) {
+                    assert!(
+                        (pixel[0] as i16 - 128).unsigned_abs() <= 2,
+                        "BT.709 R off: {}",
+                        pixel[0]
+                    );
+                }
+            }
+        }
+        resizer.finish();
+        while resizer.next_output_row().is_some() {
+            total_rows += 1;
+        }
+        assert_eq!(total_rows, 10);
+    }
+
+    #[test]
+    fn test_pq_resize_streaming_matches_fullframe() {
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .input_transfer(Transfer::Pq)
+            .output_transfer(Transfer::Pq)
+            .build();
+
+        let mut input = vec![0u8; 20 * 20 * 4];
+        for pixel in input.chunks_exact_mut(4) {
+            pixel[0] = 128;
+            pixel[1] = 64;
+            pixel[2] = 32;
+            pixel[3] = 255;
+        }
+
+        // Fullframe
+        let fullframe = {
+            use crate::resize::Resizer;
+            Resizer::new(&config).resize(&input)
+        };
+
+        // Streaming
+        let mut resizer = StreamingResize::new(&config);
+        let mut streaming = Vec::new();
+        for y in 0..20 {
+            let start = y * 20 * 4;
+            let end = start + 20 * 4;
+            resizer.push_row(&input[start..end]).unwrap();
+            while let Some(row) = resizer.next_output_row() {
+                streaming.extend_from_slice(row);
+            }
+        }
+        resizer.finish();
+        while let Some(row) = resizer.next_output_row() {
+            streaming.extend_from_slice(row);
+        }
+
+        assert_eq!(fullframe.len(), streaming.len());
+        for (i, (&a, &b)) in fullframe.iter().zip(streaming.iter()).enumerate() {
+            assert!(
+                (a as i16 - b as i16).unsigned_abs() <= 2,
+                "PQ mismatch at {}: fullframe={}, streaming={}",
+                i,
+                a,
+                b
+            );
+        }
+    }
+
+    #[test]
+    fn test_hlg_resize_constant_color() {
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .input_transfer(Transfer::Hlg)
+            .output_transfer(Transfer::Hlg)
+            .build();
+
+        let mut resizer = StreamingResize::new(&config);
+        let mut row = vec![0u8; 20 * 4];
+        for pixel in row.chunks_exact_mut(4) {
+            pixel[0] = 128;
+            pixel[1] = 128;
+            pixel[2] = 128;
+            pixel[3] = 255;
+        }
+
+        let mut total_rows = 0;
+        for _ in 0..20 {
+            resizer.push_row(&row).unwrap();
+            while let Some(out_row) = resizer.next_output_row() {
+                total_rows += 1;
+                for pixel in out_row.chunks_exact(4) {
+                    assert!(
+                        (pixel[0] as i16 - 128).unsigned_abs() <= 2,
+                        "HLG R off: {}",
+                        pixel[0]
+                    );
+                }
+            }
+        }
+        resizer.finish();
+        while resizer.next_output_row().is_some() {
+            total_rows += 1;
+        }
+        assert_eq!(total_rows, 10);
     }
 }
