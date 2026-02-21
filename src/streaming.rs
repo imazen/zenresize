@@ -46,6 +46,40 @@ use crate::simd;
 use crate::transfer::{Bt709, Hlg, Pq, Srgb, TransferFunction};
 use crate::weights::{F32WeightTable, I16WeightTable};
 
+/// Build V-filter row references from a ring buffer cache, using a stack array
+/// for the common case (≤64 taps) and Vec fallback for extreme downscale ratios.
+/// Eliminates per-output-row allocation in `produce_next_*` methods.
+fn with_v_rows<T: Copy, R>(
+    cache: &[Vec<T>],
+    cache_size: usize,
+    left: i32,
+    tap_count: usize,
+    in_height: u32,
+    in_row_len: usize,
+    f: impl FnOnce(&[&[T]]) -> R,
+) -> R {
+    const STACK_LIMIT: usize = 64;
+    let clamp_max = in_height as i32 - 1;
+
+    if tap_count <= STACK_LIMIT {
+        let empty: &[T] = &[];
+        let mut rows = [empty; STACK_LIMIT];
+        for (t, slot) in rows.iter_mut().enumerate().take(tap_count) {
+            let input_y = (left + t as i32).clamp(0, clamp_max) as usize;
+            *slot = &cache[input_y % cache_size][..in_row_len];
+        }
+        f(&rows[..tap_count])
+    } else {
+        let rows: Vec<&[T]> = (0..tap_count)
+            .map(|t| {
+                let input_y = (left + t as i32).clamp(0, clamp_max) as usize;
+                &cache[input_y % cache_size][..in_row_len] as &[T]
+            })
+            .collect();
+        f(&rows)
+    }
+}
+
 /// Internal path selection for streaming resize.
 ///
 /// Matches the fullframe Resizer's path 0/1/2 selection, adapted for
@@ -1100,14 +1134,15 @@ impl<B: Background> StreamingResize<B> {
         let out_row_len = self.config.out_width as usize * self.channels;
 
         // Step 1: V-filter from v_cache into temp_v_output (in_width-wide)
-        let mut rows: Vec<&[f32]> = Vec::with_capacity(tap_count);
-        for t in 0..tap_count {
-            let input_y = (left + t as i32).clamp(0, self.config.in_height as i32 - 1) as u32;
-            let cache_idx = input_y as usize % self.cache_size;
-            rows.push(&self.v_cache[cache_idx][..in_row_len]);
-        }
-
-        simd::filter_v_row_f32(&rows, &mut self.temp_v_output[..in_row_len], weights);
+        with_v_rows(
+            &self.v_cache,
+            self.cache_size,
+            left,
+            tap_count,
+            self.config.in_height,
+            in_row_len,
+            |rows| simd::filter_v_row_f32(rows, &mut self.temp_v_output[..in_row_len], weights),
+        );
 
         // Step 2: H-filter from temp_v_output into temp_output_f32 (out_width-wide)
         // temp_v_output has h_padding zeros beyond in_row_len for SIMD safety
@@ -1148,14 +1183,17 @@ impl<B: Background> StreamingResize<B> {
         let out_row_len = self.config.out_width as usize * self.channels;
 
         // Step 1: V-filter from u8_v_cache into temp_v_output_u8
-        let mut rows: Vec<&[u8]> = Vec::with_capacity(tap_count);
-        for t in 0..tap_count {
-            let input_y = (left + t as i32).clamp(0, self.config.in_height as i32 - 1) as u32;
-            let cache_idx = input_y as usize % self.cache_size;
-            rows.push(&self.u8_v_cache[cache_idx][..in_row_len]);
-        }
-
-        simd::filter_v_row_u8_i16(&rows, &mut self.temp_v_output_u8[..in_row_len], weights);
+        with_v_rows(
+            &self.u8_v_cache,
+            self.cache_size,
+            left,
+            tap_count,
+            self.config.in_height,
+            in_row_len,
+            |rows| {
+                simd::filter_v_row_u8_i16(rows, &mut self.temp_v_output_u8[..in_row_len], weights)
+            },
+        );
 
         // Step 2: H-filter u8 → u8 (via i16 weights)
         let i16_h_weights = self.i16_h_weights.as_ref().unwrap();
@@ -1187,14 +1225,15 @@ impl<B: Background> StreamingResize<B> {
         let out_row_len = self.config.out_width as usize * self.channels;
 
         // Step 1: V-filter from i16_v_cache into temp_v_output_i16
-        let mut rows: Vec<&[i16]> = Vec::with_capacity(tap_count);
-        for t in 0..tap_count {
-            let input_y = (left + t as i32).clamp(0, self.config.in_height as i32 - 1) as u32;
-            let cache_idx = input_y as usize % self.cache_size;
-            rows.push(&self.i16_v_cache[cache_idx][..in_row_len]);
-        }
-
-        simd::filter_v_row_i16(&rows, &mut self.temp_v_output_i16[..in_row_len], weights);
+        with_v_rows(
+            &self.i16_v_cache,
+            self.cache_size,
+            left,
+            tap_count,
+            self.config.in_height,
+            in_row_len,
+            |rows| simd::filter_v_row_i16(rows, &mut self.temp_v_output_i16[..in_row_len], weights),
+        );
 
         // Step 2: H-filter i16 → i16 (via i16 weights)
         let i16_h_weights = self.i16_h_weights.as_ref().unwrap();

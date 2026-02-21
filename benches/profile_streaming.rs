@@ -40,8 +40,7 @@ fn main() {
         .collect();
 
     for round in 0..5 {
-        let mut resizer =
-            zenresize::StreamingResize::with_batch_hint(&config, batch as u32);
+        let mut resizer = zenresize::StreamingResize::with_batch_hint(&config, batch as u32);
 
         let mut output_rows = 0u32;
         let mut input_pushed = 0u32;
