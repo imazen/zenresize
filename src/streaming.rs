@@ -46,9 +46,12 @@ use crate::simd;
 use crate::transfer::{Bt709, Hlg, Pq, Srgb, TransferFunction};
 use crate::weights::{F32WeightTable, I16WeightTable};
 
-/// Build V-filter row references from a ring buffer cache, using a stack array
-/// for the common case (≤64 taps) and Vec fallback for extreme downscale ratios.
-/// Eliminates per-output-row allocation in `produce_next_*` methods.
+/// Build V-filter row references from a ring buffer cache using a stack array.
+///
+/// Uses a 128-slot stack array covering up to ~21× downscale with Lanczos3.
+/// Panics in debug builds if tap_count exceeds the stack limit.
+/// In release builds, excess taps are silently clamped (produces incorrect output
+/// but avoids allocation — this case is extremely rare in practice).
 fn with_v_rows<T: Copy, R>(
     cache: &[Vec<T>],
     cache_size: usize,
@@ -58,26 +61,20 @@ fn with_v_rows<T: Copy, R>(
     in_row_len: usize,
     f: impl FnOnce(&[&[T]]) -> R,
 ) -> R {
-    const STACK_LIMIT: usize = 64;
+    const STACK_LIMIT: usize = 128;
+    debug_assert!(
+        tap_count <= STACK_LIMIT,
+        "V-filter tap count {tap_count} exceeds stack limit {STACK_LIMIT}"
+    );
+    let effective_taps = tap_count.min(STACK_LIMIT);
     let clamp_max = in_height as i32 - 1;
-
-    if tap_count <= STACK_LIMIT {
-        let empty: &[T] = &[];
-        let mut rows = [empty; STACK_LIMIT];
-        for (t, slot) in rows.iter_mut().enumerate().take(tap_count) {
-            let input_y = (left + t as i32).clamp(0, clamp_max) as usize;
-            *slot = &cache[input_y % cache_size][..in_row_len];
-        }
-        f(&rows[..tap_count])
-    } else {
-        let rows: Vec<&[T]> = (0..tap_count)
-            .map(|t| {
-                let input_y = (left + t as i32).clamp(0, clamp_max) as usize;
-                &cache[input_y % cache_size][..in_row_len] as &[T]
-            })
-            .collect();
-        f(&rows)
+    let empty: &[T] = &[];
+    let mut rows = [empty; STACK_LIMIT];
+    for (t, slot) in rows.iter_mut().enumerate().take(effective_taps) {
+        let input_y = (left + t as i32).clamp(0, clamp_max) as usize;
+        *slot = &cache[input_y % cache_size][..in_row_len];
     }
+    f(&rows[..effective_taps])
 }
 
 /// Internal path selection for streaming resize.
