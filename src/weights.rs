@@ -190,6 +190,11 @@ impl I16WeightTable {
         let mut all_tap_counts: Vec<u16> = Vec::with_capacity(out_size as usize);
         let mut max_taps = 0;
 
+        // Reusable buffers for fixed-point conversion (avoid per-pixel allocation)
+        let mut scaled: Vec<f64> = Vec::new();
+        let mut fixed: Vec<i16> = Vec::new();
+        let mut indices: Vec<usize> = Vec::new();
+
         for out_pixel in 0..out_size {
             temp_weights.clear();
             let (left, tap_count) = compute_pixel_weights(
@@ -208,15 +213,18 @@ impl I16WeightTable {
             // dumping it all on the center weight, which caused catastrophic
             // errors (max=255) at high tap counts (e.g. Jinc at 8x downscale).
             let scale_factor = (1 << I16_PRECISION) as f64;
-            let scaled: Vec<f64> = temp_weights.iter().map(|&w| w * scale_factor).collect();
-            let mut fixed: Vec<i16> = scaled.iter().map(|&s| s.round() as i16).collect();
+            scaled.clear();
+            scaled.extend(temp_weights.iter().map(|&w| w * scale_factor));
+            fixed.clear();
+            fixed.extend(scaled.iter().map(|&s| s.round() as i16));
 
             let sum: i32 = fixed.iter().map(|&w| w as i32).sum();
             let error = (1 << I16_PRECISION) - sum;
             if error != 0 {
                 // Compute rounding residuals: how much was lost by rounding each weight.
                 // residual > 0 means we rounded down, < 0 means we rounded up.
-                let mut indices: Vec<usize> = (0..fixed.len()).collect();
+                indices.clear();
+                indices.extend(0..fixed.len());
                 if error > 0 {
                     // Need to add +1 to some weights. Prioritize those that were
                     // rounded down the most (largest positive residual).
@@ -244,7 +252,7 @@ impl I16WeightTable {
 
             left_vec.push(left);
             all_tap_counts.push(tap_count as u16);
-            all_weights.push(fixed);
+            all_weights.push(fixed.clone());
         }
 
         // Pad max_taps to even for madd_epi16 (processes pairs)
