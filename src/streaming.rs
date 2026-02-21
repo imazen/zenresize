@@ -10,12 +10,11 @@
 //! # Backpressure Contract
 //!
 //! The H-cache ring buffer has `max_taps + 2` slots. The caller MUST drain all
-//! available output rows between `push_row` calls. A `debug_assert!` fires if
-//! the ring buffer would overflow due to undrained output.
+//! available output rows between `push_row` calls.
 //!
 //! ```ignore
 //! for row in input_rows {
-//!     resizer.push_row(row);
+//!     resizer.push_row(row)?;
 //!     while let Some(output) = resizer.next_output_row() {
 //!         encoder.write_row(output);
 //!     }
@@ -36,6 +35,35 @@ use crate::pixel::ResizeConfig;
 use crate::simd;
 use crate::transfer::{Srgb, TransferFunction};
 use crate::weights::F32WeightTable;
+
+/// Errors from streaming resize push operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamingError {
+    /// `push_row` was called after `finish()`.
+    AlreadyFinished,
+    /// Input row is too short for the configured width and channel count.
+    InputTooShort,
+    /// Ring buffer overflow: output rows were not drained between pushes.
+    RingBufferOverflow,
+}
+
+impl core::fmt::Display for StreamingError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::AlreadyFinished => write!(f, "push_row called after finish()"),
+            Self::InputTooShort => write!(f, "input row too short for configured dimensions"),
+            Self::RingBufferOverflow => {
+                write!(
+                    f,
+                    "ring buffer overflow: drain output rows before pushing more input"
+                )
+            }
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for StreamingError {}
 
 /// Streaming resize state machine.
 ///
@@ -79,7 +107,7 @@ pub struct StreamingResize<B: Background = NoBackground> {
     input_rows_received: u32,
     /// Number of output rows produced.
     output_rows_produced: u32,
-    /// End-of-input marker. Asserts on future pushes.
+    /// End-of-input marker. Returns error on future pushes.
     finished: bool,
 
     /// Background for compositing.
@@ -226,11 +254,21 @@ impl<B: Background> StreamingResize<B> {
     /// `next_output_row_into`) before pushing the next input row.
     ///
     /// `row` must contain at least `input_row_len()` elements.
-    pub fn push_row(&mut self, row: &[u8]) {
-        debug_assert!(!self.finished, "push_row called after finish()");
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StreamingError::AlreadyFinished`] if called after `finish()`.
+    /// Returns [`StreamingError::InputTooShort`] if `row` is shorter than required.
+    /// Returns [`StreamingError::RingBufferOverflow`] if output was not drained.
+    pub fn push_row(&mut self, row: &[u8]) -> Result<(), StreamingError> {
+        if self.finished {
+            return Err(StreamingError::AlreadyFinished);
+        }
         let pixel_len = self.config.input_row_len();
         let stride = self.config.effective_in_stride();
-        assert!(row.len() >= pixel_len.min(stride), "input row too short");
+        if row.len() < pixel_len.min(stride) {
+            return Err(StreamingError::InputTooShort);
+        }
 
         let pixel_data = &row[..pixel_len];
 
@@ -249,16 +287,26 @@ impl<B: Background> StreamingResize<B> {
             simd::premultiply_alpha_row(&mut self.temp_input_f32[..pixel_len]);
         }
 
-        self.push_row_internal();
+        self.push_row_internal()
     }
 
     /// Push one row of f32 input pixels. H-filters and caches the row.
     ///
     /// Caller MUST drain all available output rows before pushing the next input row.
-    pub fn push_row_f32(&mut self, row: &[f32]) {
-        debug_assert!(!self.finished, "push_row_f32 called after finish()");
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StreamingError::AlreadyFinished`] if called after `finish()`.
+    /// Returns [`StreamingError::InputTooShort`] if `row` is shorter than required.
+    /// Returns [`StreamingError::RingBufferOverflow`] if output was not drained.
+    pub fn push_row_f32(&mut self, row: &[f32]) -> Result<(), StreamingError> {
+        if self.finished {
+            return Err(StreamingError::AlreadyFinished);
+        }
         let pixel_len = self.config.input_row_len();
-        assert!(row.len() >= pixel_len, "f32 input row too short");
+        if row.len() < pixel_len {
+            return Err(StreamingError::InputTooShort);
+        }
 
         self.temp_input_f32[..pixel_len].copy_from_slice(&row[..pixel_len]);
 
@@ -266,7 +314,7 @@ impl<B: Background> StreamingResize<B> {
             simd::premultiply_alpha_row(&mut self.temp_input_f32[..pixel_len]);
         }
 
-        self.push_row_internal();
+        self.push_row_internal()
     }
 
     /// Push one row of f32 input by writing directly into the resizer's internal buffer.
@@ -276,8 +324,15 @@ impl<B: Background> StreamingResize<B> {
     /// H-filter run without a `copy_from_slice` (saves one memcpy vs `push_row_f32`).
     ///
     /// Caller MUST drain all available output rows before pushing the next input row.
-    pub fn push_row_f32_with<F: FnOnce(&mut [f32])>(&mut self, f: F) {
-        debug_assert!(!self.finished, "push_row_f32_with called after finish()");
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StreamingError::AlreadyFinished`] if called after `finish()`.
+    /// Returns [`StreamingError::RingBufferOverflow`] if output was not drained.
+    pub fn push_row_f32_with<F: FnOnce(&mut [f32])>(&mut self, f: F) -> Result<(), StreamingError> {
+        if self.finished {
+            return Err(StreamingError::AlreadyFinished);
+        }
         let pixel_len = self.config.input_row_len();
         f(&mut self.temp_input_f32[..pixel_len]);
 
@@ -285,7 +340,7 @@ impl<B: Background> StreamingResize<B> {
             simd::premultiply_alpha_row(&mut self.temp_input_f32[..pixel_len]);
         }
 
-        self.push_row_internal();
+        self.push_row_internal()
     }
 
     /// Push one row of u16 input pixels. H-filters and caches the row.
@@ -294,14 +349,21 @@ impl<B: Background> StreamingResize<B> {
     /// before filtering in f32 linear-light space.
     ///
     /// Caller MUST drain all available output rows before pushing the next input row.
-    pub fn push_row_u16(&mut self, row: &[u16]) {
-        debug_assert!(!self.finished, "push_row_u16 called after finish()");
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StreamingError::AlreadyFinished`] if called after `finish()`.
+    /// Returns [`StreamingError::InputTooShort`] if `row` is shorter than required.
+    /// Returns [`StreamingError::RingBufferOverflow`] if output was not drained.
+    pub fn push_row_u16(&mut self, row: &[u16]) -> Result<(), StreamingError> {
+        if self.finished {
+            return Err(StreamingError::AlreadyFinished);
+        }
         let pixel_len = self.config.input_row_len();
         let stride = self.config.effective_in_stride();
-        assert!(
-            row.len() >= pixel_len.min(stride),
-            "u16 input row too short"
-        );
+        if row.len() < pixel_len.min(stride) {
+            return Err(StreamingError::InputTooShort);
+        }
 
         let pixel_data = &row[..pixel_len];
         let tf = Srgb;
@@ -315,7 +377,7 @@ impl<B: Background> StreamingResize<B> {
             self.needs_premul,
         );
 
-        self.push_row_internal();
+        self.push_row_internal()
     }
 
     /// Signal end of input. No more rows may be pushed after this call.
@@ -508,20 +570,16 @@ impl<B: Background> StreamingResize<B> {
     }
 
     /// Internal: H-filter the row in `temp_input_f32` and cache it.
-    fn push_row_internal(&mut self) {
+    fn push_row_internal(&mut self) -> Result<(), StreamingError> {
         // Verify ring buffer safety before writing
         if self.output_rows_produced < self.config.out_height {
             let oldest_needed =
                 self.v_weights.left[self.output_rows_produced as usize].max(0) as usize;
-            debug_assert!(
-                self.cache_write_idx <= oldest_needed
-                    || self.cache_write_idx - oldest_needed < self.cache_size,
-                "Ring buffer overflow: drain output rows before pushing more input. \
-                 cache_write_idx={}, oldest_needed={}, cache_size={}",
-                self.cache_write_idx,
-                oldest_needed,
-                self.cache_size
-            );
+            if self.cache_write_idx > oldest_needed
+                && self.cache_write_idx - oldest_needed >= self.cache_size
+            {
+                return Err(StreamingError::RingBufferOverflow);
+            }
         }
 
         let cache_slot = self.cache_write_idx % self.cache_size;
@@ -534,6 +592,7 @@ impl<B: Background> StreamingResize<B> {
 
         self.cache_write_idx += 1;
         self.input_rows_received += 1;
+        Ok(())
     }
 }
 
@@ -559,7 +618,7 @@ mod tests {
     ) -> Vec<Vec<u8>> {
         let mut rows = Vec::new();
         for _ in 0..in_h {
-            resizer.push_row(input_row);
+            resizer.push_row(input_row).unwrap();
             while let Some(out) = resizer.next_output_row() {
                 rows.push(out.to_vec());
             }
@@ -579,7 +638,7 @@ mod tests {
         let row = vec![128u8; 100 * 4];
         let mut output_count = 0;
         for _ in 0..100 {
-            resizer.push_row(&row);
+            resizer.push_row(&row).unwrap();
             while resizer.next_output_row().is_some() {
                 output_count += 1;
             }
@@ -608,7 +667,7 @@ mod tests {
 
         let mut total_rows = 0;
         for _ in 0..20 {
-            resizer.push_row(&row);
+            resizer.push_row(&row).unwrap();
             while let Some(out_row) = resizer.next_output_row() {
                 total_rows += 1;
                 for pixel in out_row.chunks_exact(4) {
@@ -652,7 +711,7 @@ mod tests {
         let row = vec![200u8; 10 * 4];
         let mut count = 0;
         for _ in 0..10 {
-            resizer.push_row(&row);
+            resizer.push_row(&row).unwrap();
             while resizer.next_output_row().is_some() {
                 count += 1;
             }
@@ -674,7 +733,7 @@ mod tests {
         let row = vec![100u8; 10 * 4];
         let mut count = 0;
         for _ in 0..10 {
-            resizer.push_row(&row);
+            resizer.push_row(&row).unwrap();
             while resizer.next_output_row().is_some() {
                 count += 1;
             }
@@ -727,7 +786,7 @@ mod tests {
         let mut total_rows = 0;
 
         for _ in 0..20 {
-            resizer.push_row(&row);
+            resizer.push_row(&row).unwrap();
             while resizer.next_output_row_into(&mut output_buf) {
                 total_rows += 1;
                 for pixel in output_buf.chunks_exact(4) {
@@ -755,14 +814,16 @@ mod tests {
 
         let mut count = 0;
         for _ in 0..10 {
-            resizer.push_row_f32_with(|buf| {
-                for pixel in buf.chunks_exact_mut(4) {
-                    pixel[0] = 0.5;
-                    pixel[1] = 0.5;
-                    pixel[2] = 0.5;
-                    pixel[3] = 1.0;
-                }
-            });
+            resizer
+                .push_row_f32_with(|buf| {
+                    for pixel in buf.chunks_exact_mut(4) {
+                        pixel[0] = 0.5;
+                        pixel[1] = 0.5;
+                        pixel[2] = 0.5;
+                        pixel[3] = 1.0;
+                    }
+                })
+                .unwrap();
             while resizer.next_output_row_f32().is_some() {
                 count += 1;
             }
@@ -772,6 +833,28 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 5);
+    }
+
+    #[test]
+    fn test_push_after_finish_returns_error() {
+        let config = make_config(10, 10, 5, 5);
+        let mut resizer = StreamingResize::new(&config);
+        resizer.finish();
+
+        let row = vec![128u8; 10 * 4];
+        assert_eq!(resizer.push_row(&row), Err(StreamingError::AlreadyFinished));
+    }
+
+    #[test]
+    fn test_input_too_short_returns_error() {
+        let config = make_config(10, 10, 5, 5);
+        let mut resizer = StreamingResize::new(&config);
+
+        let short_row = vec![128u8; 10]; // needs 10*4=40
+        assert_eq!(
+            resizer.push_row(&short_row),
+            Err(StreamingError::InputTooShort)
+        );
     }
 
     // === Composite tests ===
@@ -839,12 +922,10 @@ mod tests {
         let mut resizer = StreamingResize::with_background(&config, bg).unwrap();
 
         for _ in 0..10 {
-            resizer.push_row(&row);
+            resizer.push_row(&row).unwrap();
             while let Some(out_row) = resizer.next_output_row() {
                 for pixel in out_row.chunks_exact(4) {
-                    // Alpha must be 255 (opaque bg → opaque output)
                     assert_eq!(pixel[3], 255, "output alpha must be 255 with opaque bg");
-                    // RGB should be blended: semi-transparent color over white
                     assert!(pixel[0] > 0, "R should have content");
                 }
             }
@@ -893,7 +974,7 @@ mod tests {
 
         let mut total_rows = 0;
         for _ in 0..20 {
-            resizer.push_row_u16(&row);
+            resizer.push_row_u16(&row).unwrap();
             while let Some(out_row) = resizer.next_output_row_u16() {
                 total_rows += 1;
                 for pixel in out_row.chunks_exact(4) {
@@ -960,7 +1041,7 @@ mod tests {
         for y in 0..40 {
             let start = y * 40 * 4;
             let end = start + 40 * 4;
-            resizer.push_row_u16(&input[start..end]);
+            resizer.push_row_u16(&input[start..end]).unwrap();
             while let Some(row) = resizer.next_output_row_u16() {
                 streaming.extend_from_slice(row);
             }
@@ -1000,7 +1081,7 @@ mod tests {
 
         let mut total_rows = 0;
         for _ in 0..16 {
-            resizer.push_row_u16(&row);
+            resizer.push_row_u16(&row).unwrap();
             while let Some(out_row) = resizer.next_output_row_u16() {
                 total_rows += 1;
                 for pixel in out_row.chunks_exact(3) {

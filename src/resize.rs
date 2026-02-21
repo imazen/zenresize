@@ -795,7 +795,7 @@ mod imgref_impl {
             for (px, chunk) in row.iter().zip(row_buf.chunks_exact_mut(4)) {
                 chunk.copy_from_slice(px.as_slice());
             }
-            resizer.push_row(&row_buf);
+            resizer.push_row(&row_buf).unwrap();
             while let Some(out_row) = resizer.next_output_row() {
                 debug_assert_eq!(out_row.len(), out_row_len);
                 for chunk in out_row.chunks_exact(4) {
@@ -849,7 +849,7 @@ mod imgref_impl {
             for (px, chunk) in row.iter().zip(row_buf.chunks_exact_mut(3)) {
                 chunk.copy_from_slice(px.as_slice());
             }
-            resizer.push_row(&row_buf);
+            resizer.push_row(&row_buf).unwrap();
             while let Some(out_row) = resizer.next_output_row() {
                 debug_assert_eq!(out_row.len(), out_row_len);
                 for chunk in out_row.chunks_exact(3) {
@@ -892,7 +892,7 @@ mod imgref_impl {
 
         let mut out_buf = Vec::with_capacity(out_width as usize * out_height as usize);
         for row in img.rows() {
-            resizer.push_row(row);
+            resizer.push_row(row).unwrap();
             while let Some(out_row) = resizer.next_output_row() {
                 out_buf.extend_from_slice(out_row);
             }
@@ -1137,7 +1137,7 @@ mod tests {
         for y in 0..20 {
             let start = y * 20 * 4;
             let end = start + 20 * 4;
-            streamer.push_row(&input[start..end]);
+            streamer.push_row(&input[start..end]).unwrap();
             while let Some(row) = streamer.next_output_row() {
                 streaming_output.extend_from_slice(row);
             }

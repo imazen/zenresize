@@ -43,7 +43,9 @@ fn streaming_collect(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
     let mut resizer = StreamingResize::new(config);
     let mut output = Vec::new();
     for y in 0..in_h {
-        resizer.push_row(&input[y * row_len..(y + 1) * row_len]);
+        resizer
+            .push_row(&input[y * row_len..(y + 1) * row_len])
+            .unwrap();
         while let Some(row) = resizer.next_output_row() {
             output.extend_from_slice(row);
         }
