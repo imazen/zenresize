@@ -232,6 +232,56 @@ pub(crate) fn filter_v_all_i16_i16_scalar(
     }
 }
 
+// ============================================================================
+// Streaming single-row V-filter kernels (for StreamingResize i16 paths)
+// ============================================================================
+
+/// Streaming V-filter: u8 rows → u8 output via i16 weights, scalar fallback.
+///
+/// For sRGB gamma i16 streaming path (Path 0). Accumulates weighted u8 rows
+/// into i32, rounds with 14-bit precision, clamps to [0, 255].
+pub(crate) fn filter_v_row_u8_i16_scalar(
+    _token: ScalarToken,
+    rows: &[&[u8]],
+    output: &mut [u8],
+    weights: &[i16],
+) {
+    let width = output.len();
+    debug_assert_eq!(rows.len(), weights.len());
+
+    for x in 0..width {
+        let mut acc: i32 = 0;
+        for (row, &weight) in rows.iter().zip(weights.iter()) {
+            acc += row[x] as i32 * weight as i32;
+        }
+        let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+        output[x] = rounded.clamp(0, 255) as u8;
+    }
+}
+
+/// Streaming V-filter: i16 rows → i16 output via i16 weights, scalar fallback.
+///
+/// For linear i12 streaming path (Path 1). Accumulates weighted i16 rows
+/// into i32, rounds with 14-bit precision, clamps to [0, 4095].
+pub(crate) fn filter_v_row_i16_scalar(
+    _token: ScalarToken,
+    rows: &[&[i16]],
+    output: &mut [i16],
+    weights: &[i16],
+) {
+    let width = output.len();
+    debug_assert_eq!(rows.len(), weights.len());
+
+    for x in 0..width {
+        let mut acc: i32 = 0;
+        for (row, &weight) in rows.iter().zip(weights.iter()) {
+            acc += row[x] as i32 * weight as i32;
+        }
+        let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+        output[x] = rounded.clamp(0, 4095) as i16;
+    }
+}
+
 /// Premultiply alpha on RGBA u8 row: input → output, scalar fallback.
 pub(crate) fn premultiply_u8_row_scalar(_token: ScalarToken, input: &[u8], output: &mut [u8]) {
     debug_assert_eq!(input.len(), output.len());

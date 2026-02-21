@@ -117,7 +117,7 @@ fn streaming_matches_fullframe_linear() {
     let full_output = Resizer::new(&config).resize(&input);
     let stream_output = streaming_collect(&config, &input);
 
-    // Full-frame may use i16 linear path; streaming always uses f32.
+    // Full-frame uses i16 linear path; streaming uses f32 here (Rgba+linear needs premul).
     // Allow ±2 for quantization differences.
     let max_diff: u8 = full_output
         .iter()

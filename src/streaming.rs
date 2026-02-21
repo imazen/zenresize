@@ -34,10 +34,26 @@ use alloc::{vec, vec::Vec};
 use crate::color;
 use crate::composite::{self, Background, CompositeError, NoBackground};
 use crate::filter::InterpolationDetails;
-use crate::pixel::{ResizeConfig, Transfer};
+use crate::pixel::{PixelFormat, ResizeConfig, Transfer};
 use crate::simd;
 use crate::transfer::{Srgb, TransferFunction};
-use crate::weights::F32WeightTable;
+use crate::weights::{F32WeightTable, I16WeightTable};
+
+/// Internal path selection for streaming resize.
+///
+/// Matches the fullframe Resizer's path 0/1/2 selection, adapted for
+/// the V-first streaming architecture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StreamingPath {
+    /// f32 path: sRGB u8 → linear f32 → filter → sRGB u8 (or f32 I/O)
+    F32,
+    /// sRGB gamma i16 path: u8 → i16 V-filter → i16 H-filter → u8
+    /// No linearization. 4ch only.
+    I16Srgb,
+    /// Linear i12 i16 path: sRGB u8 → i12 → i16 V-filter → i16 H-filter → sRGB u8
+    /// 4ch, no premul (Rgbx or RgbaPremul).
+    I16Linear,
+}
 
 /// Errors from streaming resize push operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,7 +99,12 @@ impl std::error::Error for StreamingError {}
 /// Use [`with_background()`](Self::with_background) to enable source-over compositing.
 pub struct StreamingResize<B: Background = NoBackground> {
     config: ResizeConfig,
-    h_weights: F32WeightTable,
+    /// Which internal pipeline path to use.
+    path: StreamingPath,
+
+    // === f32 path fields (empty when i16 path is active) ===
+    h_weights: Option<F32WeightTable>,
+    /// V-weights always allocated (used for scheduling even in i16 mode).
     v_weights: F32WeightTable,
     channels: usize,
     needs_premul: bool,
@@ -91,6 +112,7 @@ pub struct StreamingResize<B: Background = NoBackground> {
 
     /// Ring buffer of input rows (f32, linearized + premultiplied).
     /// Each row is `in_width * channels + h_padding` wide (zero-padded for H-filter SIMD).
+    /// Empty when i16 path is active.
     v_cache: Vec<Vec<f32>>,
     /// Which ring buffer slot to write the next input row into.
     cache_write_idx: usize,
@@ -108,6 +130,22 @@ pub struct StreamingResize<B: Background = NoBackground> {
     output_buf_u8: Vec<u8>,
     /// Reusable u16 conversion buffer (allocated once, used by `next_output_row_u16`).
     output_buf_u16: Vec<u16>,
+
+    // === i16 path fields (empty when f32 path is active) ===
+    i16_h_weights: Option<I16WeightTable>,
+    i16_v_weights: Option<I16WeightTable>,
+    /// Ring buffer of u8 input rows (I16Srgb path).
+    u8_v_cache: Vec<Vec<u8>>,
+    /// Ring buffer of i16 input rows (I16Linear path).
+    i16_v_cache: Vec<Vec<i16>>,
+    /// V-filter output buffer for I16Srgb path (u8, with H-filter SIMD padding).
+    temp_v_output_u8: Vec<u8>,
+    /// V-filter output buffer for I16Linear path (i16, with H-filter SIMD padding).
+    temp_v_output_i16: Vec<i16>,
+    /// H-filter output buffer for I16Linear path (i16).
+    temp_h_output_i16: Vec<i16>,
+    /// Linearized i16 row buffer for I16Linear push.
+    linearized_row_i16: Vec<i16>,
 
     /// Number of input rows received.
     input_rows_received: u32,
@@ -152,12 +190,12 @@ impl<B: Background> StreamingResize<B> {
 
         let mut config = config.clone();
         // Compositing requires linear f32 path
-        if has_composite && !background.is_transparent() {
+        let active_composite = has_composite && !background.is_transparent();
+        if active_composite {
             config.linear = true;
         }
 
         let filter = InterpolationDetails::create(config.filter);
-        let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
         let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
 
         let layout = config.input_format.layout();
@@ -165,24 +203,20 @@ impl<B: Background> StreamingResize<B> {
         let needs_premul = layout.needs_premultiply();
         let alpha_is_last = layout.alpha_is_last_channel();
 
+        // Path selection: mirrors fullframe Resizer paths 0/1
+        let linearize = config.effective_input_transfer() == Transfer::Srgb;
+        let is_u8_format = matches!(config.input_format, PixelFormat::Srgb8(_));
+        let path = if !active_composite && is_u8_format && !linearize && channels == 4 {
+            StreamingPath::I16Srgb
+        } else if !active_composite && is_u8_format && linearize && channels == 4 && !needs_premul {
+            StreamingPath::I16Linear
+        } else {
+            StreamingPath::F32
+        };
+
         let cache_size = v_weights.max_taps + 2;
+        let in_row_len = config.in_width as usize * channels;
         let out_row_len = config.out_width as usize * channels;
-        let h_padding = h_weights.max_taps * channels;
-        let v_cache_row_len = config.in_width as usize * channels + h_padding;
-
-        let v_cache = (0..cache_size)
-            .map(|_| vec![0.0f32; v_cache_row_len])
-            .collect();
-
-        // Pad with max_taps extra zero elements so SIMD H-pass reads
-        // beyond the valid input range hit zeros. Zero-padded weights make these inert.
-        let temp_input_f32 = vec![0.0f32; v_cache_row_len];
-        let temp_v_output = vec![0.0f32; v_cache_row_len];
-        let temp_output_f32 = vec![0.0f32; out_row_len];
-
-        // Reusable output conversion buffers (allocated once)
-        let output_buf_u8 = vec![0u8; out_row_len];
-        let output_buf_u16 = vec![0u16; out_row_len];
 
         // Only allocate bg row buffer for non-solid, non-transparent backgrounds
         let needs_bg_row =
@@ -193,26 +227,134 @@ impl<B: Background> StreamingResize<B> {
             Vec::new()
         };
 
-        Self {
-            config,
-            h_weights,
-            v_weights,
-            channels,
-            needs_premul,
-            alpha_is_last,
-            v_cache,
-            cache_write_idx: 0,
-            cache_size,
-            temp_input_f32,
-            temp_v_output,
-            temp_output_f32,
-            output_buf_u8,
-            output_buf_u16,
-            input_rows_received: 0,
-            output_rows_produced: 0,
-            finished: false,
-            background,
-            composite_bg_row,
+        // Reusable output conversion buffers (always needed for u8 output)
+        let output_buf_u8 = vec![0u8; out_row_len];
+
+        match path {
+            StreamingPath::F32 => {
+                let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
+                let h_padding = h_weights.max_taps * channels;
+                let v_cache_row_len = in_row_len + h_padding;
+
+                let v_cache = (0..cache_size)
+                    .map(|_| vec![0.0f32; v_cache_row_len])
+                    .collect();
+
+                Self {
+                    config,
+                    path,
+                    h_weights: Some(h_weights),
+                    v_weights,
+                    channels,
+                    needs_premul,
+                    alpha_is_last,
+                    v_cache,
+                    cache_write_idx: 0,
+                    cache_size,
+                    temp_input_f32: vec![0.0f32; v_cache_row_len],
+                    temp_v_output: vec![0.0f32; v_cache_row_len],
+                    temp_output_f32: vec![0.0f32; out_row_len],
+                    output_buf_u8,
+                    output_buf_u16: vec![0u16; out_row_len],
+                    i16_h_weights: None,
+                    i16_v_weights: None,
+                    u8_v_cache: Vec::new(),
+                    i16_v_cache: Vec::new(),
+                    temp_v_output_u8: Vec::new(),
+                    temp_v_output_i16: Vec::new(),
+                    temp_h_output_i16: Vec::new(),
+                    linearized_row_i16: Vec::new(),
+                    input_rows_received: 0,
+                    output_rows_produced: 0,
+                    finished: false,
+                    background,
+                    composite_bg_row,
+                }
+            }
+            StreamingPath::I16Srgb => {
+                let i16_h_weights = I16WeightTable::new(config.in_width, config.out_width, &filter);
+                let i16_v_weights =
+                    I16WeightTable::new(config.in_height, config.out_height, &filter);
+
+                // V-filter output needs H-filter SIMD padding (zeroed)
+                let h_padding_bytes = i16_h_weights.groups4 * 16;
+                let v_out_len = in_row_len + h_padding_bytes;
+
+                let u8_v_cache = (0..cache_size).map(|_| vec![0u8; in_row_len]).collect();
+
+                Self {
+                    config,
+                    path,
+                    h_weights: None,
+                    v_weights,
+                    channels,
+                    needs_premul,
+                    alpha_is_last,
+                    v_cache: Vec::new(),
+                    cache_write_idx: 0,
+                    cache_size,
+                    temp_input_f32: Vec::new(),
+                    temp_v_output: Vec::new(),
+                    temp_output_f32: Vec::new(),
+                    output_buf_u8,
+                    output_buf_u16: Vec::new(),
+                    i16_h_weights: Some(i16_h_weights),
+                    i16_v_weights: Some(i16_v_weights),
+                    u8_v_cache,
+                    i16_v_cache: Vec::new(),
+                    temp_v_output_u8: vec![0u8; v_out_len],
+                    temp_v_output_i16: Vec::new(),
+                    temp_h_output_i16: Vec::new(),
+                    linearized_row_i16: Vec::new(),
+                    input_rows_received: 0,
+                    output_rows_produced: 0,
+                    finished: false,
+                    background,
+                    composite_bg_row,
+                }
+            }
+            StreamingPath::I16Linear => {
+                let i16_h_weights = I16WeightTable::new(config.in_width, config.out_width, &filter);
+                let i16_v_weights =
+                    I16WeightTable::new(config.in_height, config.out_height, &filter);
+
+                // H-filter SIMD padding for i16 data (in i16 elements)
+                let h_padding_i16 = i16_h_weights.groups4 * 16;
+                let v_out_i16_len = in_row_len + h_padding_i16;
+
+                let i16_v_cache = (0..cache_size).map(|_| vec![0i16; in_row_len]).collect();
+
+                Self {
+                    config,
+                    path,
+                    h_weights: None,
+                    v_weights,
+                    channels,
+                    needs_premul,
+                    alpha_is_last,
+                    v_cache: Vec::new(),
+                    cache_write_idx: 0,
+                    cache_size,
+                    temp_input_f32: Vec::new(),
+                    temp_v_output: Vec::new(),
+                    temp_output_f32: Vec::new(),
+                    output_buf_u8,
+                    output_buf_u16: Vec::new(),
+                    i16_h_weights: Some(i16_h_weights),
+                    i16_v_weights: Some(i16_v_weights),
+                    u8_v_cache: Vec::new(),
+                    i16_v_cache,
+                    temp_v_output_u8: Vec::new(),
+                    temp_v_output_i16: vec![0i16; v_out_i16_len],
+                    temp_h_output_i16: vec![0i16; out_row_len],
+                    linearized_row_i16: vec![0i16; in_row_len + h_padding_i16],
+                    input_rows_received: 0,
+                    output_rows_produced: 0,
+                    finished: false,
+                    background,
+                    composite_bg_row,
+                }
+            }
         }
     }
 
@@ -283,6 +425,35 @@ impl<B: Background> StreamingResize<B> {
 
         let pixel_data = &row[..pixel_len];
 
+        match self.path {
+            StreamingPath::I16Srgb => {
+                // u8 → optional premul → cache u8 directly (no linearization)
+                self.check_ring_buffer()?;
+                let cache_slot = self.cache_write_idx % self.cache_size;
+                if self.needs_premul {
+                    simd::premultiply_u8_row(
+                        pixel_data,
+                        &mut self.u8_v_cache[cache_slot][..pixel_len],
+                    );
+                } else {
+                    self.u8_v_cache[cache_slot][..pixel_len].copy_from_slice(pixel_data);
+                }
+                self.cache_write_idx += 1;
+                self.input_rows_received += 1;
+                return Ok(());
+            }
+            StreamingPath::I16Linear => {
+                // sRGB u8 → linear i12 (LUT)
+                color::srgb_u8_to_linear_i12_row(
+                    pixel_data,
+                    &mut self.linearized_row_i16[..pixel_len],
+                );
+                return self.push_row_internal_i16();
+            }
+            StreamingPath::F32 => {}
+        }
+
+        // F32 path: linearize + premultiply → cache f32
         match self.config.effective_input_transfer() {
             Transfer::Srgb => {
                 color::srgb_u8_to_linear_f32(
@@ -314,6 +485,11 @@ impl<B: Background> StreamingResize<B> {
     /// Returns [`StreamingError::InputTooShort`] if `row` is shorter than required.
     /// Returns [`StreamingError::RingBufferOverflow`] if output was not drained.
     pub fn push_row_f32(&mut self, row: &[f32]) -> Result<(), StreamingError> {
+        debug_assert_eq!(
+            self.path,
+            StreamingPath::F32,
+            "push_row_f32 requires f32 path"
+        );
         if self.finished {
             return Err(StreamingError::AlreadyFinished);
         }
@@ -344,6 +520,11 @@ impl<B: Background> StreamingResize<B> {
     /// Returns [`StreamingError::AlreadyFinished`] if called after `finish()`.
     /// Returns [`StreamingError::RingBufferOverflow`] if output was not drained.
     pub fn push_row_f32_with<F: FnOnce(&mut [f32])>(&mut self, f: F) -> Result<(), StreamingError> {
+        debug_assert_eq!(
+            self.path,
+            StreamingPath::F32,
+            "push_row_f32_with requires f32 path"
+        );
         if self.finished {
             return Err(StreamingError::AlreadyFinished);
         }
@@ -434,22 +615,36 @@ impl<B: Background> StreamingResize<B> {
         if !self.can_produce_next_output() {
             return None;
         }
-        self.produce_next_into_temp();
         let row_len = self.config.out_width as usize * self.channels;
-        match self.config.effective_output_transfer() {
-            Transfer::Srgb => {
-                color::linear_f32_to_srgb_u8(
-                    &self.temp_output_f32[..row_len],
-                    &mut self.output_buf_u8[..row_len],
-                    self.channels,
-                    self.alpha_is_last,
-                );
+        match self.path {
+            StreamingPath::I16Srgb | StreamingPath::I16Linear => {
+                // i16 paths produce u8 directly — swap buffer out to avoid borrow conflict
+                let mut tmp = core::mem::take(&mut self.output_buf_u8);
+                match self.path {
+                    StreamingPath::I16Srgb => self.produce_next_i16_srgb(&mut tmp[..row_len]),
+                    StreamingPath::I16Linear => self.produce_next_i16_linear(&mut tmp[..row_len]),
+                    StreamingPath::F32 => unreachable!(),
+                }
+                self.output_buf_u8 = tmp;
             }
-            Transfer::None => {
-                simd::f32_to_u8_row(
-                    &self.temp_output_f32[..row_len],
-                    &mut self.output_buf_u8[..row_len],
-                );
+            StreamingPath::F32 => {
+                self.produce_next_f32();
+                match self.config.effective_output_transfer() {
+                    Transfer::Srgb => {
+                        color::linear_f32_to_srgb_u8(
+                            &self.temp_output_f32[..row_len],
+                            &mut self.output_buf_u8[..row_len],
+                            self.channels,
+                            self.alpha_is_last,
+                        );
+                    }
+                    Transfer::None => {
+                        simd::f32_to_u8_row(
+                            &self.temp_output_f32[..row_len],
+                            &mut self.output_buf_u8[..row_len],
+                        );
+                    }
+                }
             }
         }
         Some(&self.output_buf_u8[..row_len])
@@ -464,19 +659,25 @@ impl<B: Background> StreamingResize<B> {
         if !self.can_produce_next_output() {
             return false;
         }
-        self.produce_next_into_temp();
         let row_len = self.config.out_width as usize * self.channels;
-        match self.config.effective_output_transfer() {
-            Transfer::Srgb => {
-                color::linear_f32_to_srgb_u8(
-                    &self.temp_output_f32[..row_len],
-                    &mut dst[..row_len],
-                    self.channels,
-                    self.alpha_is_last,
-                );
-            }
-            Transfer::None => {
-                simd::f32_to_u8_row(&self.temp_output_f32[..row_len], &mut dst[..row_len]);
+        match self.path {
+            StreamingPath::I16Srgb => self.produce_next_i16_srgb(&mut dst[..row_len]),
+            StreamingPath::I16Linear => self.produce_next_i16_linear(&mut dst[..row_len]),
+            StreamingPath::F32 => {
+                self.produce_next_f32();
+                match self.config.effective_output_transfer() {
+                    Transfer::Srgb => {
+                        color::linear_f32_to_srgb_u8(
+                            &self.temp_output_f32[..row_len],
+                            &mut dst[..row_len],
+                            self.channels,
+                            self.alpha_is_last,
+                        );
+                    }
+                    Transfer::None => {
+                        simd::f32_to_u8_row(&self.temp_output_f32[..row_len], &mut dst[..row_len]);
+                    }
+                }
             }
         }
         true
@@ -490,7 +691,12 @@ impl<B: Background> StreamingResize<B> {
         if !self.can_produce_next_output() {
             return None;
         }
-        self.produce_next_into_temp();
+        debug_assert_eq!(
+            self.path,
+            StreamingPath::F32,
+            "next_output_row_f32 requires f32 path"
+        );
+        self.produce_next_f32();
         let row_len = self.config.out_width as usize * self.channels;
         Some(&self.temp_output_f32[..row_len])
     }
@@ -502,7 +708,12 @@ impl<B: Background> StreamingResize<B> {
         if !self.can_produce_next_output() {
             return None;
         }
-        self.produce_next_into_temp();
+        debug_assert_eq!(
+            self.path,
+            StreamingPath::F32,
+            "next_output_row_u16 requires f32 path"
+        );
+        self.produce_next_f32();
         let row_len = self.config.out_width as usize * self.channels;
         match self.config.effective_output_transfer() {
             Transfer::Srgb => {
@@ -512,7 +723,7 @@ impl<B: Background> StreamingResize<B> {
                     &(),
                     self.channels,
                     self.alpha_is_last,
-                    false, // unpremultiply already happened in produce_next_into_temp
+                    false,
                 );
             }
             Transfer::None => {
@@ -537,7 +748,12 @@ impl<B: Background> StreamingResize<B> {
         if !self.can_produce_next_output() {
             return false;
         }
-        self.produce_next_into_temp();
+        debug_assert_eq!(
+            self.path,
+            StreamingPath::F32,
+            "next_output_row_u16_into requires f32 path"
+        );
+        self.produce_next_f32();
         let row_len = self.config.out_width as usize * self.channels;
         match self.config.effective_output_transfer() {
             Transfer::Srgb => {
@@ -595,7 +811,8 @@ impl<B: Background> StreamingResize<B> {
 
     /// V-filter → H-filter one output row into `temp_output_f32`, apply composite and unpremultiply.
     /// Increments `output_rows_produced`. Caller must check `can_produce_next_output` first.
-    fn produce_next_into_temp(&mut self) {
+    /// Only called for the F32 path.
+    fn produce_next_f32(&mut self) {
         let out_y = self.output_rows_produced;
 
         let left = self.v_weights.left[out_y as usize];
@@ -616,10 +833,11 @@ impl<B: Background> StreamingResize<B> {
 
         // Step 2: H-filter from temp_v_output into temp_output_f32 (out_width-wide)
         // temp_v_output has h_padding zeros beyond in_row_len for SIMD safety
+        let h_weights = self.h_weights.as_ref().unwrap();
         simd::filter_h_row_f32(
             &self.temp_v_output,
             &mut self.temp_output_f32[..out_row_len],
-            &self.h_weights,
+            h_weights,
             self.channels,
         );
 
@@ -639,9 +857,87 @@ impl<B: Background> StreamingResize<B> {
         self.output_rows_produced += 1;
     }
 
-    /// Internal: cache the row from `temp_input_f32` into the ring buffer.
-    fn push_row_internal(&mut self) -> Result<(), StreamingError> {
-        // Verify ring buffer safety before writing
+    /// Produce one output row via the I16Srgb path: u8 V-filter → u8 H-filter → u8 output.
+    /// Result written to `output_buf_u8`. Increments `output_rows_produced`.
+    fn produce_next_i16_srgb(&mut self, dst: &mut [u8]) {
+        let out_y = self.output_rows_produced;
+        let i16_v_weights = self.i16_v_weights.as_ref().unwrap();
+
+        let left = i16_v_weights.left[out_y as usize];
+        let tap_count = i16_v_weights.tap_count(out_y as usize);
+        let weights = i16_v_weights.weights(out_y as usize);
+        let in_row_len = self.config.in_width as usize * self.channels;
+        let out_row_len = self.config.out_width as usize * self.channels;
+
+        // Step 1: V-filter from u8_v_cache into temp_v_output_u8
+        let mut rows: Vec<&[u8]> = Vec::with_capacity(tap_count);
+        for t in 0..tap_count {
+            let input_y = (left + t as i32).clamp(0, self.config.in_height as i32 - 1) as u32;
+            let cache_idx = input_y as usize % self.cache_size;
+            rows.push(&self.u8_v_cache[cache_idx][..in_row_len]);
+        }
+
+        simd::filter_v_row_u8_i16(&rows, &mut self.temp_v_output_u8[..in_row_len], weights);
+
+        // Step 2: H-filter u8 → u8 (via i16 weights)
+        let i16_h_weights = self.i16_h_weights.as_ref().unwrap();
+        simd::filter_h_u8_i16(
+            &self.temp_v_output_u8,
+            &mut dst[..out_row_len],
+            i16_h_weights,
+            self.channels,
+        );
+
+        // Step 3: unpremultiply if needed (in-place on u8 output)
+        if self.needs_premul {
+            simd::unpremultiply_u8_row(&mut dst[..out_row_len]);
+        }
+
+        self.output_rows_produced += 1;
+    }
+
+    /// Produce one output row via the I16Linear path: i16 V-filter → i16 H-filter → sRGB u8.
+    /// Result written to `dst`. Increments `output_rows_produced`.
+    fn produce_next_i16_linear(&mut self, dst: &mut [u8]) {
+        let out_y = self.output_rows_produced;
+        let i16_v_weights = self.i16_v_weights.as_ref().unwrap();
+
+        let left = i16_v_weights.left[out_y as usize];
+        let tap_count = i16_v_weights.tap_count(out_y as usize);
+        let weights = i16_v_weights.weights(out_y as usize);
+        let in_row_len = self.config.in_width as usize * self.channels;
+        let out_row_len = self.config.out_width as usize * self.channels;
+
+        // Step 1: V-filter from i16_v_cache into temp_v_output_i16
+        let mut rows: Vec<&[i16]> = Vec::with_capacity(tap_count);
+        for t in 0..tap_count {
+            let input_y = (left + t as i32).clamp(0, self.config.in_height as i32 - 1) as u32;
+            let cache_idx = input_y as usize % self.cache_size;
+            rows.push(&self.i16_v_cache[cache_idx][..in_row_len]);
+        }
+
+        simd::filter_v_row_i16(&rows, &mut self.temp_v_output_i16[..in_row_len], weights);
+
+        // Step 2: H-filter i16 → i16 (via i16 weights)
+        let i16_h_weights = self.i16_h_weights.as_ref().unwrap();
+        simd::filter_h_i16_i16(
+            &self.temp_v_output_i16,
+            &mut self.temp_h_output_i16[..out_row_len],
+            i16_h_weights,
+            self.channels,
+        );
+
+        // Step 3: linear i12 → sRGB u8 (LUT)
+        color::linear_i12_to_srgb_u8_row(
+            &self.temp_h_output_i16[..out_row_len],
+            &mut dst[..out_row_len],
+        );
+
+        self.output_rows_produced += 1;
+    }
+
+    /// Check ring buffer overflow before any cache write.
+    fn check_ring_buffer(&self) -> Result<(), StreamingError> {
         if self.output_rows_produced < self.config.out_height {
             let oldest_needed =
                 self.v_weights.left[self.output_rows_produced as usize].max(0) as usize;
@@ -651,10 +947,30 @@ impl<B: Background> StreamingResize<B> {
                 return Err(StreamingError::RingBufferOverflow);
             }
         }
+        Ok(())
+    }
+
+    /// Internal: cache the row from `temp_input_f32` into the f32 ring buffer.
+    fn push_row_internal(&mut self) -> Result<(), StreamingError> {
+        self.check_ring_buffer()?;
 
         let cache_slot = self.cache_write_idx % self.cache_size;
         let pixel_len = self.config.in_width as usize * self.channels;
         self.v_cache[cache_slot][..pixel_len].copy_from_slice(&self.temp_input_f32[..pixel_len]);
+
+        self.cache_write_idx += 1;
+        self.input_rows_received += 1;
+        Ok(())
+    }
+
+    /// Internal: cache i16 row from `linearized_row_i16` into the i16 ring buffer (I16Linear path).
+    fn push_row_internal_i16(&mut self) -> Result<(), StreamingError> {
+        self.check_ring_buffer()?;
+
+        let cache_slot = self.cache_write_idx % self.cache_size;
+        let pixel_len = self.config.in_width as usize * self.channels;
+        self.i16_v_cache[cache_slot][..pixel_len]
+            .copy_from_slice(&self.linearized_row_i16[..pixel_len]);
 
         self.cache_write_idx += 1;
         self.input_rows_received += 1;
@@ -1171,5 +1487,241 @@ mod tests {
             }
         }
         assert_eq!(total_rows, 8);
+    }
+
+    // === i16 path tests ===
+
+    #[test]
+    fn test_i16_srgb_path_selected() {
+        // Srgb8 + srgb() + Rgba = I16Srgb (no linearization, 4ch)
+        let config = make_config(20, 20, 10, 10);
+        let resizer = StreamingResize::new(&config);
+        assert_eq!(resizer.path, StreamingPath::I16Srgb);
+    }
+
+    #[test]
+    fn test_i16_linear_path_selected() {
+        // Srgb8 + linear() + Rgbx = I16Linear (linearize, 4ch, no premul)
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
+            .linear()
+            .build();
+        let resizer = StreamingResize::new(&config);
+        assert_eq!(resizer.path, StreamingPath::I16Linear);
+    }
+
+    #[test]
+    fn test_f32_path_for_rgba_linear() {
+        // Srgb8 + linear() + Rgba = F32 (needs premul → not I16Linear)
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .linear()
+            .build();
+        let resizer = StreamingResize::new(&config);
+        assert_eq!(resizer.path, StreamingPath::F32);
+    }
+
+    #[test]
+    fn test_f32_path_for_3ch() {
+        // Srgb8 + srgb() + Rgb = F32 (3ch → not i16)
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .format(PixelFormat::Srgb8(PixelLayout::Rgb))
+            .srgb()
+            .build();
+        let resizer = StreamingResize::new(&config);
+        assert_eq!(resizer.path, StreamingPath::F32);
+    }
+
+    #[test]
+    fn test_i16_srgb_constant_color() {
+        let config = make_config(20, 20, 10, 10); // I16Srgb
+        let mut resizer = StreamingResize::new(&config);
+        assert_eq!(resizer.path, StreamingPath::I16Srgb);
+
+        let mut row = vec![0u8; 20 * 4];
+        for pixel in row.chunks_exact_mut(4) {
+            pixel[0] = 128;
+            pixel[1] = 128;
+            pixel[2] = 128;
+            pixel[3] = 255;
+        }
+
+        let mut total_rows = 0;
+        for _ in 0..20 {
+            resizer.push_row(&row).unwrap();
+            while let Some(out_row) = resizer.next_output_row() {
+                total_rows += 1;
+                for pixel in out_row.chunks_exact(4) {
+                    assert!(
+                        (pixel[0] as i16 - 128).unsigned_abs() <= 2,
+                        "R channel off: {} (I16Srgb path)",
+                        pixel[0]
+                    );
+                    assert!(
+                        (pixel[3] as i16 - 255).unsigned_abs() <= 1,
+                        "A channel off: {} (I16Srgb path)",
+                        pixel[3]
+                    );
+                }
+            }
+        }
+        resizer.finish();
+        while resizer.next_output_row().is_some() {
+            total_rows += 1;
+        }
+        assert_eq!(total_rows, 10);
+    }
+
+    #[test]
+    fn test_i16_linear_constant_color() {
+        // Rgbx + linear = I16Linear path
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
+            .linear()
+            .build();
+        let mut resizer = StreamingResize::new(&config);
+        assert_eq!(resizer.path, StreamingPath::I16Linear);
+
+        let mut row = vec![0u8; 20 * 4];
+        for pixel in row.chunks_exact_mut(4) {
+            pixel[0] = 128;
+            pixel[1] = 128;
+            pixel[2] = 128;
+            pixel[3] = 255;
+        }
+
+        let mut total_rows = 0;
+        for _ in 0..20 {
+            resizer.push_row(&row).unwrap();
+            while let Some(out_row) = resizer.next_output_row() {
+                total_rows += 1;
+                for pixel in out_row.chunks_exact(4) {
+                    assert!(
+                        (pixel[0] as i16 - 128).unsigned_abs() <= 2,
+                        "R channel off: {} (I16Linear path)",
+                        pixel[0]
+                    );
+                }
+            }
+        }
+        resizer.finish();
+        while resizer.next_output_row().is_some() {
+            total_rows += 1;
+        }
+        assert_eq!(total_rows, 10);
+    }
+
+    #[test]
+    fn test_i16_srgb_matches_fullframe() {
+        // Srgb8 + srgb + Rgba = both fullframe and streaming use i16 srgb path
+        let config = ResizeConfig::builder(40, 40, 20, 20)
+            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .srgb()
+            .build();
+
+        // Gradient input
+        let mut input = vec![0u8; 40 * 40 * 4];
+        for y in 0..40u32 {
+            for x in 0..40u32 {
+                let idx = (y * 40 + x) as usize * 4;
+                input[idx] = ((x * 255) / 39) as u8;
+                input[idx + 1] = ((y * 255) / 39) as u8;
+                input[idx + 2] = 128;
+                input[idx + 3] = 255;
+            }
+        }
+
+        // Fullframe
+        let fullframe = {
+            use crate::resize::Resizer;
+            Resizer::new(&config).resize(&input)
+        };
+
+        // Streaming
+        let mut resizer = StreamingResize::new(&config);
+        assert_eq!(resizer.path, StreamingPath::I16Srgb);
+        let mut streaming = Vec::new();
+        for y in 0..40 {
+            let start = y * 40 * 4;
+            let end = start + 40 * 4;
+            resizer.push_row(&input[start..end]).unwrap();
+            while let Some(row) = resizer.next_output_row() {
+                streaming.extend_from_slice(row);
+            }
+        }
+        resizer.finish();
+        while let Some(row) = resizer.next_output_row() {
+            streaming.extend_from_slice(row);
+        }
+
+        assert_eq!(fullframe.len(), streaming.len());
+        let max_diff: u8 = fullframe
+            .iter()
+            .zip(streaming.iter())
+            .map(|(&a, &b)| (a as i16 - b as i16).unsigned_abs() as u8)
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_diff <= 2,
+            "i16_srgb streaming vs fullframe max diff {} exceeds tolerance 2",
+            max_diff
+        );
+    }
+
+    #[test]
+    fn test_i16_linear_matches_fullframe() {
+        // Srgb8 + linear + Rgbx = both fullframe and streaming use i16 linear path
+        let config = ResizeConfig::builder(40, 40, 20, 20)
+            .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
+            .linear()
+            .build();
+
+        // Gradient input
+        let mut input = vec![0u8; 40 * 40 * 4];
+        for y in 0..40u32 {
+            for x in 0..40u32 {
+                let idx = (y * 40 + x) as usize * 4;
+                input[idx] = ((x * 255) / 39) as u8;
+                input[idx + 1] = ((y * 255) / 39) as u8;
+                input[idx + 2] = 128;
+                input[idx + 3] = 255;
+            }
+        }
+
+        // Fullframe
+        let fullframe = {
+            use crate::resize::Resizer;
+            Resizer::new(&config).resize(&input)
+        };
+
+        // Streaming
+        let mut resizer = StreamingResize::new(&config);
+        assert_eq!(resizer.path, StreamingPath::I16Linear);
+        let mut streaming = Vec::new();
+        for y in 0..40 {
+            let start = y * 40 * 4;
+            let end = start + 40 * 4;
+            resizer.push_row(&input[start..end]).unwrap();
+            while let Some(row) = resizer.next_output_row() {
+                streaming.extend_from_slice(row);
+            }
+        }
+        resizer.finish();
+        while let Some(row) = resizer.next_output_row() {
+            streaming.extend_from_slice(row);
+        }
+
+        assert_eq!(fullframe.len(), streaming.len());
+        let max_diff: u8 = fullframe
+            .iter()
+            .zip(streaming.iter())
+            .map(|(&a, &b)| (a as i16 - b as i16).unsigned_abs() as u8)
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_diff <= 2,
+            "i16_linear streaming vs fullframe max diff {} exceeds tolerance 2",
+            max_diff
+        );
     }
 }

@@ -1333,3 +1333,198 @@ pub(crate) fn filter_v_all_i16_i16_v3(
         }
     }
 }
+
+// =============================================================================
+// Streaming single-row V-filter kernels (for StreamingResize i16 paths)
+// =============================================================================
+
+/// Streaming V-filter: u8 rows → u8 output via i16 weights using AVX2.
+///
+/// For sRGB gamma i16 streaming path. Processes row references from the ring
+/// buffer (not a contiguous intermediate). Uses paired interleaving + madd_epi16
+/// same as the batch kernel, but for a single output row.
+#[archmage::arcane]
+pub(crate) fn filter_v_row_u8_i16_v3(
+    _token: X64V3Token,
+    rows: &[&[u8]],
+    output: &mut [u8],
+    weights: &[i16],
+) {
+    let width = output.len();
+    let tap_count = rows.len();
+    debug_assert_eq!(tap_count, weights.len());
+
+    let half = _mm256_set1_epi32(1 << (I16_PRECISION - 1));
+    let chunks16 = width / 16;
+
+    // Pre-chunk row slices for direct indexing.
+    let mut row_chunks: Vec<&[[u8; 16]]> = Vec::with_capacity(tap_count);
+    for row in rows.iter() {
+        row_chunks.push(row.as_chunks::<16>().0);
+    }
+
+    // Pre-compute paired weights.
+    let pairs = tap_count / 2;
+    let odd = tap_count % 2 != 0;
+
+    let mut paired_wts: Vec<__m256i> = Vec::with_capacity(pairs);
+    for p in 0..pairs {
+        let w0 = weights[p * 2] as i32;
+        let w1 = weights[p * 2 + 1] as i32;
+        paired_wts.push(_mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF)));
+    }
+    let odd_weight = if odd {
+        _mm256_set1_epi32(weights[tap_count - 1] as i32 & 0xFFFF)
+    } else {
+        _mm256_setzero_si256()
+    };
+
+    let (out_chunks, out_tail) = output.as_chunks_mut::<16>();
+
+    for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
+        let mut acc_lo = _mm256_setzero_si256();
+        let mut acc_hi = _mm256_setzero_si256();
+
+        for (pw, row_pair) in paired_wts.iter().zip(row_chunks.chunks_exact(2)) {
+            let src0 = _mm_loadu_si128(idx(row_pair[0], ci));
+            let src1 = _mm_loadu_si128(idx(row_pair[1], ci));
+
+            let il_lo = _mm_unpacklo_epi8(src0, src1);
+            let il_hi = _mm_unpackhi_epi8(src0, src1);
+
+            let ext_lo = _mm256_cvtepu8_epi16(il_lo);
+            let ext_hi = _mm256_cvtepu8_epi16(il_hi);
+
+            acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, *pw));
+            acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, *pw));
+        }
+
+        if odd {
+            let src = _mm_loadu_si128(idx(row_chunks[tap_count - 1], ci));
+            let zero_src = _mm_setzero_si128();
+            let il_lo = _mm_unpacklo_epi8(src, zero_src);
+            let il_hi = _mm_unpackhi_epi8(src, zero_src);
+            let ext_lo = _mm256_cvtepu8_epi16(il_lo);
+            let ext_hi = _mm256_cvtepu8_epi16(il_hi);
+            acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, odd_weight));
+            acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, odd_weight));
+        }
+
+        let rounded_lo = _mm256_add_epi32(acc_lo, half);
+        let rounded_hi = _mm256_add_epi32(acc_hi, half);
+        let shifted_lo = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded_lo);
+        let shifted_hi = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded_hi);
+
+        let lo_lo = _mm256_castsi256_si128(shifted_lo);
+        let lo_hi = _mm256_extracti128_si256::<1>(shifted_lo);
+        let hi_lo = _mm256_castsi256_si128(shifted_hi);
+        let hi_hi = _mm256_extracti128_si256::<1>(shifted_hi);
+
+        let pack01 = _mm_packs_epi32(lo_lo, lo_hi);
+        let pack23 = _mm_packs_epi32(hi_lo, hi_hi);
+        let result = _mm_packus_epi16(pack01, pack23);
+
+        _mm_storeu_si128(out_chunk, result);
+    }
+
+    // Scalar tail
+    let tail_start = chunks16 * 16;
+    for (x, out_byte) in out_tail.iter_mut().enumerate() {
+        let mut acc: i32 = 0;
+        for (row, &weight) in rows.iter().zip(weights.iter()) {
+            acc += row[tail_start + x] as i32 * weight as i32;
+        }
+        let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+        *out_byte = rounded.clamp(0, 255) as u8;
+    }
+}
+
+/// Streaming V-filter: i16 rows → i16 output via i16 weights using AVX2.
+///
+/// For linear i12 streaming path. Processes row references from the ring
+/// buffer. Uses paired interleaving + madd_epi16, clamping output to [0, 4095].
+#[archmage::arcane]
+pub(crate) fn filter_v_row_i16_v3(
+    _token: X64V3Token,
+    rows: &[&[i16]],
+    output: &mut [i16],
+    weights: &[i16],
+) {
+    let width = output.len();
+    let tap_count = rows.len();
+    debug_assert_eq!(tap_count, weights.len());
+
+    let half = _mm256_set1_epi32(1 << (I16_PRECISION - 1));
+    let max_val = _mm_set1_epi16(4095);
+    let zero_xmm = _mm_setzero_si128();
+    let chunks8 = width / 8;
+
+    // Pre-chunk row slices for direct indexing.
+    let mut row_chunks: Vec<&[[i16; 8]]> = Vec::with_capacity(tap_count);
+    for row in rows.iter() {
+        row_chunks.push(row.as_chunks::<8>().0);
+    }
+
+    // Pre-compute paired weights.
+    let pairs = tap_count / 2;
+    let odd = tap_count % 2 != 0;
+
+    let mut paired_wts: Vec<__m256i> = Vec::with_capacity(pairs);
+    for p in 0..pairs {
+        let w0 = weights[p * 2] as i32;
+        let w1 = weights[p * 2 + 1] as i32;
+        paired_wts.push(_mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF)));
+    }
+    let odd_weight = if odd {
+        _mm256_set1_epi32(weights[tap_count - 1] as i32 & 0xFFFF)
+    } else {
+        _mm256_setzero_si256()
+    };
+
+    let (out_chunks, out_tail) = output.as_chunks_mut::<8>();
+
+    for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
+        let mut acc = _mm256_setzero_si256();
+
+        for (pw, row_pair) in paired_wts.iter().zip(row_chunks.chunks_exact(2)) {
+            let src0 = _mm_loadu_si128(idx(row_pair[0], ci));
+            let src1 = _mm_loadu_si128(idx(row_pair[1], ci));
+
+            let il_lo = _mm_unpacklo_epi16(src0, src1);
+            let il_hi = _mm_unpackhi_epi16(src0, src1);
+
+            let combined = _mm256_set_m128i(il_hi, il_lo);
+            acc = _mm256_add_epi32(acc, _mm256_madd_epi16(combined, *pw));
+        }
+
+        if odd {
+            let src = _mm_loadu_si128(idx(row_chunks[tap_count - 1], ci));
+            let zero_src = _mm_setzero_si128();
+            let il_lo = _mm_unpacklo_epi16(src, zero_src);
+            let il_hi = _mm_unpackhi_epi16(src, zero_src);
+            let combined = _mm256_set_m128i(il_hi, il_lo);
+            acc = _mm256_add_epi32(acc, _mm256_madd_epi16(combined, odd_weight));
+        }
+
+        let rounded = _mm256_add_epi32(acc, half);
+        let shifted = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded);
+
+        let lo_128 = _mm256_castsi256_si128(shifted);
+        let hi_128 = _mm256_extracti128_si256::<1>(shifted);
+        let packed = _mm_packs_epi32(lo_128, hi_128);
+        let clamped = _mm_min_epi16(_mm_max_epi16(packed, zero_xmm), max_val);
+
+        _mm_storeu_si128(out_chunk, clamped);
+    }
+
+    // Scalar tail
+    let tail_start = chunks8 * 8;
+    for (x, out_val) in out_tail.iter_mut().enumerate() {
+        let mut acc: i32 = 0;
+        for (row, &weight) in rows.iter().zip(weights.iter()) {
+            acc += row[tail_start + x] as i32 * weight as i32;
+        }
+        let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+        *out_val = rounded.clamp(0, 4095) as i16;
+    }
+}

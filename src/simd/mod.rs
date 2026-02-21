@@ -160,6 +160,18 @@ pub(crate) fn filter_h_i16_i16(
     archmage::incant!(filter_h_i16_i16(input, output, weights, channels))
 }
 
+/// Streaming V-filter: u8 rows → u8 output via i16 weights.
+/// For sRGB gamma i16 streaming path.
+pub(crate) fn filter_v_row_u8_i16(rows: &[&[u8]], output: &mut [u8], weights: &[i16]) {
+    archmage::incant!(filter_v_row_u8_i16(rows, output, weights))
+}
+
+/// Streaming V-filter: i16 rows → i16 output via i16 weights.
+/// For linear i12 streaming path.
+pub(crate) fn filter_v_row_i16(rows: &[&[i16]], output: &mut [i16], weights: &[i16]) {
+    archmage::incant!(filter_v_row_i16(rows, output, weights))
+}
+
 /// Batch vertical filter: i16 intermediate → i16 output, all rows at once.
 /// For linear-light i12 path (values 0-4095).
 pub(crate) fn filter_v_all_i16_i16(

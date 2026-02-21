@@ -13,10 +13,13 @@ Two resize APIs with different pipeline architectures:
 
 **Streaming `StreamingResize` (V-first):** `src/streaming.rs`
 - Row-at-a-time: push input rows, pull output rows
-- V-first pipeline: `push_row` caches linearized/premultiplied rows in ring buffer, output production runs V-filter → H-filter → composite → unpremul
+- V-first pipeline: `push_row` caches rows in ring buffer, output production runs V-filter → H-filter → composite → unpremul
 - Ring buffer is `v_weights.max_taps + 2` slots, each `in_width * ch + h_padding` wide
 - H-filter runs only `out_height` times (once per output row), not `in_height` times
-- Always uses f32 weights (no i16 integer path for streaming)
+- Three internal paths (selected automatically in `new_inner()`):
+  - **F32**: Full f32 pipeline with linearization/premul. Used for compositing, 3ch, f32 I/O, u16 I/O.
+  - **I16Srgb**: u8 ring buffer → `filter_v_row_u8_i16` → `filter_h_u8_i16` → u8. For sRGB 4ch without linearization. ~2× faster.
+  - **I16Linear**: i16 ring buffer → `filter_v_row_i16` → `filter_h_i16_i16` → `linear_i12_to_srgb_u8`. For Rgbx 4ch with linearization, no premul.
 
 ### SIMD Kernels
 

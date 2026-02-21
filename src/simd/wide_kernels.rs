@@ -560,3 +560,39 @@ pub(super) fn unpremultiply_u8_row(row: &mut [u8]) {
         }
     }
 }
+
+// ============================================================================
+// Streaming single-row V-filter kernels (for StreamingResize i16 paths)
+// ============================================================================
+
+/// Streaming V-filter: u8 rows → u8 output via i16 weights.
+#[inline(always)]
+pub(super) fn filter_v_row_u8_i16(rows: &[&[u8]], output: &mut [u8], weights: &[i16]) {
+    let width = output.len();
+    debug_assert_eq!(rows.len(), weights.len());
+
+    for x in 0..width {
+        let mut acc: i32 = 0;
+        for (row, &weight) in rows.iter().zip(weights.iter()) {
+            acc += row[x] as i32 * weight as i32;
+        }
+        let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+        output[x] = rounded.clamp(0, 255) as u8;
+    }
+}
+
+/// Streaming V-filter: i16 rows → i16 output via i16 weights.
+#[inline(always)]
+pub(super) fn filter_v_row_i16(rows: &[&[i16]], output: &mut [i16], weights: &[i16]) {
+    let width = output.len();
+    debug_assert_eq!(rows.len(), weights.len());
+
+    for x in 0..width {
+        let mut acc: i32 = 0;
+        for (row, &weight) in rows.iter().zip(weights.iter()) {
+            acc += row[x] as i32 * weight as i32;
+        }
+        let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+        output[x] = rounded.clamp(0, 4095) as i16;
+    }
+}

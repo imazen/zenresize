@@ -122,6 +122,26 @@ pub(crate) fn filter_v_all_i16_i16_neon(
 }
 
 #[archmage::arcane]
+pub(crate) fn filter_v_row_u8_i16_neon(
+    _token: NeonToken,
+    rows: &[&[u8]],
+    output: &mut [u8],
+    weights: &[i16],
+) {
+    super::wide_kernels::filter_v_row_u8_i16(rows, output, weights)
+}
+
+#[archmage::arcane]
+pub(crate) fn filter_v_row_i16_neon(
+    _token: NeonToken,
+    rows: &[&[i16]],
+    output: &mut [i16],
+    weights: &[i16],
+) {
+    super::wide_kernels::filter_v_row_i16(rows, output, weights)
+}
+
+#[archmage::arcane]
 pub(crate) fn srgb_u8_to_linear_f32_neon(
     _token: NeonToken,
     input: &[u8],
