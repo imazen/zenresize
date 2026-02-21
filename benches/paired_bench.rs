@@ -511,4 +511,67 @@ fn main() {
             "zenresize_resizer", m, ci, mps
         );
     }
+
+    // --- StreamingResize benchmark ---
+    println!();
+    println!("StreamingResize (V-first pipeline):");
+    {
+        // Linear f32 path — same as zenresize_linear but through streaming API
+        let config = zenresize::ResizeConfig::builder(img.width, img.height, out_w, out_h)
+            .filter(zenresize::Filter::Lanczos)
+            .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgba))
+            .linear()
+            .build();
+
+        let row_len = img.width as usize * 4;
+        let mut output_rows = 0u32;
+
+        // Warmup
+        for _ in 0..3 {
+            let mut sr = zenresize::StreamingResize::new(&config);
+            output_rows = 0;
+            for y in 0..img.height {
+                let start = y as usize * row_len;
+                sr.push_row(&img.rgba[start..start + row_len]).unwrap();
+                while let Some(row) = sr.next_output_row() {
+                    std::hint::black_box(row);
+                    output_rows += 1;
+                }
+            }
+            sr.finish();
+            while let Some(row) = sr.next_output_row() {
+                std::hint::black_box(row);
+                output_rows += 1;
+            }
+        }
+        assert_eq!(output_rows, out_h);
+
+        let mut times = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let mut sr = zenresize::StreamingResize::new(&config);
+            let start = Instant::now();
+            for y in 0..img.height {
+                let row_start = y as usize * row_len;
+                sr.push_row(&img.rgba[row_start..row_start + row_len])
+                    .unwrap();
+                while let Some(row) = sr.next_output_row() {
+                    std::hint::black_box(row);
+                }
+            }
+            sr.finish();
+            while let Some(row) = sr.next_output_row() {
+                std::hint::black_box(row);
+            }
+            let elapsed = start.elapsed();
+            times.push(elapsed.as_secs_f64() * 1000.0);
+        }
+        trim_outliers(&mut times);
+        let m = mean(&times);
+        let ci = ci95(&times);
+        let mps = megapixels / (m / 1000.0);
+        println!(
+            "{:<24} {:>7.2} ±{:.2} {:>10.0} MP/s",
+            "streaming_linear", m, ci, mps
+        );
+    }
 }
