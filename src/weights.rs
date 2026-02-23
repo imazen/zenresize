@@ -136,6 +136,23 @@ impl F32WeightTable {
         }
     }
 
+    /// Create a weight table from pre-computed parts.
+    ///
+    /// Used by [`crate::blur`] to build Gaussian convolution kernels.
+    pub(crate) fn from_parts(
+        left: Vec<i32>,
+        weights_flat: Vec<f32>,
+        tap_counts: Vec<u16>,
+        max_taps: usize,
+    ) -> Self {
+        Self {
+            left,
+            weights_flat,
+            tap_counts,
+            max_taps,
+        }
+    }
+
     /// Get weights slice for a specific output pixel (non-zero taps only).
     #[inline]
     pub fn weights(&self, out_pixel: usize) -> &[f32] {

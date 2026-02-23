@@ -600,6 +600,17 @@ impl<B: Background> Resizer<B> {
                 }
             }
         }
+
+        // Post-resize blur (applies to all paths).
+        if config.post_blur_sigma > 0.0 {
+            crate::blur::blur_u8(
+                output,
+                config.out_width,
+                config.out_height,
+                channels,
+                config.post_blur_sigma,
+            );
+        }
     }
 
     /// Resize an f32 image, allocating and returning the output.
@@ -708,6 +719,18 @@ impl<B: Background> Resizer<B> {
                 output[out_start..out_start + out_row_len]
                     .copy_from_slice(&temp_output[..h_row_len]);
             }
+        }
+
+        // Post-resize blur.
+        let config = &self.config;
+        if config.post_blur_sigma > 0.0 {
+            crate::blur::blur_f32(
+                output,
+                config.out_width,
+                config.out_height,
+                config.output_format.layout().channels() as usize,
+                config.post_blur_sigma,
+            );
         }
     }
 

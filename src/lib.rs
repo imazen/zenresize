@@ -32,6 +32,7 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
+pub(crate) mod blur;
 pub(crate) mod color;
 pub mod composite;
 #[cfg(feature = "layout")]

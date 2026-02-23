@@ -281,6 +281,12 @@ pub struct ResizeConfig {
     pub output_format: PixelFormat,
     /// Sharpening amount (0.0 = none).
     pub sharpen: f32,
+    /// Gaussian blur sigma applied after resize (0.0 = none).
+    ///
+    /// The blur is applied as a post-processing step after the resize completes.
+    /// Useful for compression-optimized preprocessing (smoothing flat areas
+    /// reduces encoded file size).
+    pub post_blur_sigma: f32,
     /// Whether to resize in linear light (true) or sRGB gamma space (false).
     ///
     /// Linear light (default) converts sRGB u8 to linear f32 before resampling.
@@ -448,6 +454,7 @@ pub struct ResizeConfigBuilder {
     input_format: PixelFormat,
     output_format: Option<PixelFormat>,
     sharpen: f32,
+    post_blur_sigma: f32,
     linear: bool,
     in_stride: usize,
     out_stride: usize,
@@ -466,6 +473,7 @@ impl ResizeConfigBuilder {
             input_format: PixelFormat::Srgb8(PixelLayout::Rgba),
             output_format: None,
             sharpen: 0.0,
+            post_blur_sigma: 0.0,
             linear: true,
             in_stride: 0,
             out_stride: 0,
@@ -502,6 +510,12 @@ impl ResizeConfigBuilder {
     /// Set sharpening amount (0.0 = none).
     pub fn sharpen(mut self, amount: f32) -> Self {
         self.sharpen = amount;
+        self
+    }
+
+    /// Set post-resize Gaussian blur sigma (0.0 = none).
+    pub fn post_blur(mut self, sigma: f32) -> Self {
+        self.post_blur_sigma = sigma;
         self
     }
 
@@ -557,6 +571,7 @@ impl ResizeConfigBuilder {
             input_format: self.input_format,
             output_format,
             sharpen: self.sharpen,
+            post_blur_sigma: self.post_blur_sigma,
             linear: self.linear,
             in_stride: self.in_stride,
             out_stride: self.out_stride,
