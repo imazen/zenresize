@@ -157,6 +157,70 @@ pub(crate) fn blur_u8(
     simd::f32_to_u8_row(&f32_buf, &mut data[..len]);
 }
 
+/// In-place unsharp mask of a u8 buffer (width × height × channels).
+///
+/// `sharp = original + amount * (original - gaussian_blur(original, sigma))`
+///
+/// This enhances edges by adding back the high-frequency detail that the
+/// Gaussian blur removes. `amount` controls the strength (1.0 = standard,
+/// higher = more aggressive). `sigma` controls the blur radius.
+pub(crate) fn unsharp_mask_u8(
+    data: &mut [u8],
+    width: u32,
+    height: u32,
+    channels: usize,
+    amount: f32,
+    sigma: f32,
+) {
+    if amount <= 0.0 || sigma <= 0.0 || width == 0 || height == 0 {
+        return;
+    }
+    let len = width as usize * height as usize * channels;
+
+    // Convert u8 → f32
+    let mut original = vec![0.0f32; len];
+    simd::u8_to_f32_row(&data[..len], &mut original);
+
+    // Blur a copy
+    let mut blurred = original.clone();
+    blur_f32(&mut blurred, width, height, channels, sigma);
+
+    // sharp = original + amount * (original - blurred), clamped to [0, 1]
+    for i in 0..len {
+        let v = original[i] + amount * (original[i] - blurred[i]);
+        original[i] = v.clamp(0.0, 1.0);
+    }
+
+    // Convert f32 → u8
+    simd::f32_to_u8_row(&original, &mut data[..len]);
+}
+
+/// In-place unsharp mask of an f32 buffer (width × height × channels).
+///
+/// Values are clamped to [0, 1] after sharpening.
+pub(crate) fn unsharp_mask_f32(
+    data: &mut [f32],
+    width: u32,
+    height: u32,
+    channels: usize,
+    amount: f32,
+    sigma: f32,
+) {
+    if amount <= 0.0 || sigma <= 0.0 || width == 0 || height == 0 {
+        return;
+    }
+    let len = width as usize * height as usize * channels;
+
+    // Blur a copy
+    let mut blurred = data[..len].to_vec();
+    blur_f32(&mut blurred, width, height, channels, sigma);
+
+    // sharp = original + amount * (original - blurred)
+    for i in 0..len {
+        data[i] = (data[i] + amount * (data[i] - blurred[i])).clamp(0.0, 1.0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

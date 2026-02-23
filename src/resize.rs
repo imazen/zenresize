@@ -601,7 +601,19 @@ impl<B: Background> Resizer<B> {
             }
         }
 
-        // Post-resize blur (applies to all paths).
+        // Post-resize sharpening (unsharp mask).
+        if config.sharpen > 0.0 {
+            crate::blur::unsharp_mask_u8(
+                output,
+                config.out_width,
+                config.out_height,
+                channels,
+                config.sharpen,
+                config.sharpen * 0.5 + 0.5, // sigma scales with amount
+            );
+        }
+
+        // Post-resize blur (applies after sharpening).
         if config.post_blur_sigma > 0.0 {
             crate::blur::blur_u8(
                 output,
@@ -721,14 +733,27 @@ impl<B: Background> Resizer<B> {
             }
         }
 
-        // Post-resize blur.
+        // Post-resize sharpening (unsharp mask).
         let config = &self.config;
+        let out_channels = config.output_format.layout().channels() as usize;
+        if config.sharpen > 0.0 {
+            crate::blur::unsharp_mask_f32(
+                output,
+                config.out_width,
+                config.out_height,
+                out_channels,
+                config.sharpen,
+                config.sharpen * 0.5 + 0.5,
+            );
+        }
+
+        // Post-resize blur.
         if config.post_blur_sigma > 0.0 {
             crate::blur::blur_f32(
                 output,
                 config.out_width,
                 config.out_height,
-                config.output_format.layout().channels() as usize,
+                out_channels,
                 config.post_blur_sigma,
             );
         }
