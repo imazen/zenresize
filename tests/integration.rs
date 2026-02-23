@@ -742,3 +742,152 @@ fn bgra_linear_preserves_order() {
         assert!((px[3] as i16 - 255).unsigned_abs() <= 1, "A: {}", px[3]);
     }
 }
+
+// =============================================================================
+// Post-resize blur tests
+// =============================================================================
+
+#[test]
+fn identity_resize_no_blur_is_bit_identical() {
+    let w = 64u32;
+    let h = 64u32;
+    let input = gradient_image(w, h);
+
+    let config = ResizeConfig::builder(w, h, w, h)
+        .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+        .srgb()
+        .build();
+
+    let output = Resizer::new(&config).resize(&input);
+    assert_eq!(input, output, "ratio=1 sRGB path should be bit-identical");
+}
+
+#[test]
+fn identity_resize_linear_no_blur_max_diff_1() {
+    let w = 64u32;
+    let h = 64u32;
+    let input = gradient_image(w, h);
+
+    let config = ResizeConfig::builder(w, h, w, h)
+        .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+        .linear()
+        .build();
+
+    let output = Resizer::new(&config).resize(&input);
+
+    let max_diff: u8 = input
+        .iter()
+        .zip(output.iter())
+        .map(|(&a, &b)| a.abs_diff(b))
+        .max()
+        .unwrap_or(0);
+    assert!(
+        max_diff <= 1,
+        "linear identity max diff = {max_diff}, expected <= 1"
+    );
+}
+
+#[test]
+fn blur_reduces_high_frequency_content() {
+    let w = 64u32;
+    let h = 64u32;
+
+    let mut input = vec![0u8; w as usize * h as usize * 4];
+    for y in 0..h as usize {
+        for x in 0..w as usize {
+            let idx = (y * w as usize + x) * 4;
+            let val = if (x + y) % 2 == 0 { 200u8 } else { 50u8 };
+            input[idx] = val;
+            input[idx + 1] = val;
+            input[idx + 2] = val;
+            input[idx + 3] = 255;
+        }
+    }
+
+    let config = ResizeConfig::builder(w, h, w, h)
+        .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+        .srgb()
+        .post_blur(1.5)
+        .build();
+
+    let output = Resizer::new(&config).resize(&input);
+
+    let mut input_diff_sum = 0u64;
+    let mut output_diff_sum = 0u64;
+    for y in 0..h as usize {
+        for x in 1..w as usize {
+            let idx = (y * w as usize + x) * 4;
+            let prev = (y * w as usize + x - 1) * 4;
+            input_diff_sum += (input[idx] as i32 - input[prev] as i32).unsigned_abs() as u64;
+            output_diff_sum += (output[idx] as i32 - output[prev] as i32).unsigned_abs() as u64;
+        }
+    }
+
+    assert!(
+        output_diff_sum < input_diff_sum / 2,
+        "blur should reduce neighbor diffs: input={input_diff_sum}, output={output_diff_sum}"
+    );
+}
+
+#[test]
+fn blur_uniform_image_stays_uniform() {
+    let w = 32u32;
+    let h = 32u32;
+    let input = vec![128u8; w as usize * h as usize * 4];
+
+    let config = ResizeConfig::builder(w, h, w, h)
+        .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+        .srgb()
+        .post_blur(2.0)
+        .build();
+
+    let output = Resizer::new(&config).resize(&input);
+
+    let max_diff: u8 = input
+        .iter()
+        .zip(output.iter())
+        .map(|(&a, &b)| a.abs_diff(b))
+        .max()
+        .unwrap_or(0);
+    assert!(
+        max_diff <= 1,
+        "uniform image should stay uniform, max diff = {max_diff}"
+    );
+}
+
+#[test]
+fn blur_f32_reduces_variance() {
+    let w = 32u32;
+    let h = 32u32;
+    let channels = 4;
+    let len = w as usize * h as usize * channels;
+
+    let mut input = vec![0.0f32; len];
+    for y in 0..h as usize {
+        for x in 0..w as usize {
+            let idx = (y * w as usize + x) * channels;
+            let val = if (x + y) % 2 == 0 { 0.8 } else { 0.2 };
+            input[idx] = val;
+            input[idx + 1] = val;
+            input[idx + 2] = val;
+            input[idx + 3] = 1.0;
+        }
+    }
+
+    let config = ResizeConfig::builder(w, h, w, h)
+        .format(PixelFormat::LinearF32(PixelLayout::Rgba))
+        .post_blur(1.0)
+        .build();
+
+    let output = Resizer::new(&config).resize_f32(&input);
+
+    let max_deviation: f32 = output
+        .chunks(channels)
+        .flat_map(|px| px[..3].iter())
+        .map(|&v| (v - 0.5).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        max_deviation < 0.15,
+        "blurred pattern should converge toward mean, max_deviation = {max_deviation}"
+    );
+}
