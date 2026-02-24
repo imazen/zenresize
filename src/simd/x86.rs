@@ -1559,7 +1559,7 @@ pub(crate) fn f32_to_f16_row_v3(_token: X64V3Token, input: &[f32], output: &mut 
 
     for (in_chunk, out_chunk) in in_chunks.iter().zip(out_chunks.iter_mut()) {
         let floats = _mm256_loadu_ps(in_chunk);
-        let halfs = _mm256_cvtps_ph::<8>(floats); // round-to-nearest-even, no exceptions
+        let halfs = _mm256_cvtps_ph::<0>(floats); // round-to-nearest-even
         _mm_storeu_si128(out_chunk, halfs);
     }
 
@@ -1684,7 +1684,7 @@ fn filter_h_4ch_to_f16(
         }
 
         // Convert 4 f32 → 4 f16 and store as 8 bytes (4 u16)
-        let f16_vec = _mm_cvtps_ph::<8>(acc_128);
+        let f16_vec = _mm_cvtps_ph::<0>(acc_128);
         _mm_storeu_si64(idx_mut(out_pixels, out_x), f16_vec);
     }
 }
