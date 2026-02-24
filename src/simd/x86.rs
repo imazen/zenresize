@@ -1370,7 +1370,7 @@ pub(crate) fn filter_v_row_u8_i16_v3(
 
     // Pre-compute paired weights (stack array, no heap alloc).
     let pairs = tap_count / 2;
-    let odd = tap_count % 2 != 0;
+    let odd = !tap_count.is_multiple_of(2);
 
     let zero_ymm = _mm256_setzero_si256();
     let mut paired_wts = [zero_ymm; MAX_TAPS / 2];
@@ -1479,7 +1479,7 @@ pub(crate) fn filter_v_row_i16_v3(
 
     // Pre-compute paired weights (stack array, no heap alloc).
     let pairs = tap_count / 2;
-    let odd = tap_count % 2 != 0;
+    let odd = !tap_count.is_multiple_of(2);
 
     let zero_ymm = _mm256_setzero_si256();
     let mut paired_wts = [zero_ymm; MAX_TAPS / 2];

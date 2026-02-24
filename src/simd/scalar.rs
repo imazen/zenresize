@@ -398,7 +398,7 @@ pub(super) fn f16_to_f32_soft(h: u16) -> f32 {
     }
 
     // Normal
-    let f32_exp = ((exp + 127 - 15) << 23) as u32;
+    let f32_exp = (exp + 127 - 15) << 23;
     let f32_mant = mant << 13;
     f32::from_bits(sign | f32_exp | f32_mant)
 }
