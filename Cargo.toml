@@ -79,6 +79,10 @@ harness = false
 name = "profile_streaming"
 harness = false
 
+[[bench]]
+name = "profile_f16"
+harness = false
+
 [profile.test]
 opt-level = 2
 
