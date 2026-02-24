@@ -172,6 +172,57 @@ pub(crate) fn filter_v_row_i16(rows: &[&[i16]], output: &mut [i16], weights: &[i
     archmage::incant!(filter_v_row_i16(rows, output, weights))
 }
 
+// =========================================================================
+// f16 (half-precision) pipeline kernels
+// =========================================================================
+
+/// Bulk convert f32 → f16 (stored as u16).
+pub(crate) fn f32_to_f16_row(input: &[f32], output: &mut [u16]) {
+    archmage::incant!(f32_to_f16_row(input, output))
+}
+
+/// Bulk convert f16 (stored as u16) → f32.
+#[allow(dead_code)]
+pub(crate) fn f16_to_f32_row(input: &[u16], output: &mut [f32]) {
+    archmage::incant!(f16_to_f32_row(input, output))
+}
+
+/// Horizontal filter: f32 input → f16 (u16) output.
+/// Accumulates in f32, converts to f16 on store.
+pub(crate) fn filter_h_row_f32_to_f16(
+    input: &[f32],
+    output: &mut [u16],
+    weights: &F32WeightTable,
+    channels: usize,
+) {
+    archmage::incant!(filter_h_row_f32_to_f16(input, output, weights, channels))
+}
+
+/// Streaming V-filter: f16 rows → f32 output via f32 weights.
+pub(crate) fn filter_v_row_f16(rows: &[&[u16]], output: &mut [f32], weights: &[f32]) {
+    archmage::incant!(filter_v_row_f16(rows, output, weights))
+}
+
+/// Batch V-filter for fullframe: f16 intermediate → f32 output.
+#[allow(dead_code)]
+pub(crate) fn filter_v_all_f16(
+    intermediate: &[u16],
+    output: &mut [f32],
+    h_row_len: usize,
+    in_h: usize,
+    out_h: usize,
+    weights: &F32WeightTable,
+) {
+    archmage::incant!(filter_v_all_f16(
+        intermediate,
+        output,
+        h_row_len,
+        in_h,
+        out_h,
+        weights
+    ))
+}
+
 /// Batch vertical filter: i16 intermediate → i16 output, all rows at once.
 /// For linear-light i12 path (values 0-4095).
 pub(crate) fn filter_v_all_i16_i16(

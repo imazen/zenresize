@@ -313,6 +313,197 @@ pub(crate) fn unpremultiply_u8_row_scalar(_token: ScalarToken, row: &mut [u8]) {
     }
 }
 
+// ============================================================================
+// f16 (IEEE 754 half-precision) support — software conversion
+// ============================================================================
+
+/// Convert f32 to f16 (IEEE 754 half-precision) bit pattern stored as u16.
+/// Uses round-to-nearest-even to match F16C hardware.
+#[inline]
+pub(super) fn f32_to_f16_soft(x: f32) -> u16 {
+    let b = x.to_bits();
+    let sign = (b >> 16) & 0x8000;
+    let e = ((b >> 23) & 0xFF) as i32;
+    let m = b & 0x007F_FFFF;
+
+    if e == 0xFF {
+        // Inf or NaN
+        return (sign | 0x7C00 | if m != 0 { (m >> 13).max(1) } else { 0 }) as u16;
+    }
+
+    // f16 exponent = f32 exponent - 112 (bias difference: 127 - 15)
+    let f16e = e - 112;
+
+    if e == 0 {
+        // f32 zero or subnormal → f16 zero
+        return sign as u16;
+    }
+
+    if f16e >= 31 {
+        // Overflow → ±Inf
+        return (sign | 0x7C00) as u16;
+    }
+
+    if f16e <= 0 {
+        if f16e < -10 {
+            return sign as u16; // Too small → zero
+        }
+        // Subnormal f16: prepend implicit 1 bit and right-shift
+        let full_m = m | 0x0080_0000;
+        let shift = (1 - f16e) as u32 + 13;
+        let shifted = full_m >> shift;
+        // Round to nearest even
+        let half_bit = 1u32 << (shift - 1);
+        let remainder = full_m & ((1u32 << shift) - 1);
+        let round =
+            u32::from(remainder > half_bit || (remainder == half_bit && (shifted & 1) != 0));
+        return (sign | (shifted + round)) as u16;
+    }
+
+    // Normal case: shift mantissa from 23 to 10 bits
+    let shifted_m = m >> 13;
+    let remainder = m & 0x1FFF;
+    let round = u32::from(remainder > 0x1000 || (remainder == 0x1000 && (shifted_m & 1) != 0));
+    let result = sign | ((f16e as u32) << 10) | shifted_m;
+    (result + round) as u16 // overflow into exponent is correct (carries to next binade)
+}
+
+/// Convert f16 bit pattern (u16) to f32.
+#[inline]
+pub(super) fn f16_to_f32_soft(h: u16) -> f32 {
+    let h32 = h as u32;
+    let sign = (h32 & 0x8000) << 16;
+    let exp = (h32 >> 10) & 0x1F;
+    let mant = h32 & 0x03FF;
+
+    if exp == 0 {
+        if mant == 0 {
+            return f32::from_bits(sign); // ±0
+        }
+        // Subnormal: normalize by shifting mantissa left
+        let mut e = 1i32;
+        let mut m = mant;
+        while m & 0x0400 == 0 {
+            m <<= 1;
+            e -= 1;
+        }
+        let f32_exp = ((127 - 15 + e) as u32) << 23;
+        let f32_mant = (m & 0x03FF) << 13;
+        return f32::from_bits(sign | f32_exp | f32_mant);
+    }
+
+    if exp == 31 {
+        // Inf or NaN
+        return f32::from_bits(sign | 0x7F80_0000 | (mant << 13));
+    }
+
+    // Normal
+    let f32_exp = (exp + 127 - 15) << 23;
+    let f32_mant = mant << 13;
+    f32::from_bits(sign | f32_exp | f32_mant)
+}
+
+// ============================================================================
+// f16 conversion row kernels
+// ============================================================================
+
+/// Bulk convert f32 → f16 row, scalar fallback.
+pub(crate) fn f32_to_f16_row_scalar(_token: ScalarToken, input: &[f32], output: &mut [u16]) {
+    debug_assert_eq!(input.len(), output.len());
+    for (inp, out) in input.iter().zip(output.iter_mut()) {
+        *out = f32_to_f16_soft(*inp);
+    }
+}
+
+/// Bulk convert f16 → f32 row, scalar fallback.
+pub(crate) fn f16_to_f32_row_scalar(_token: ScalarToken, input: &[u16], output: &mut [f32]) {
+    debug_assert_eq!(input.len(), output.len());
+    for (inp, out) in input.iter().zip(output.iter_mut()) {
+        *out = f16_to_f32_soft(*inp);
+    }
+}
+
+// ============================================================================
+// f16 filter kernels
+// ============================================================================
+
+/// Horizontal convolution: f32 input → f16 (u16) output, scalar fallback.
+/// Accumulates in f32, converts result to f16 for storage.
+pub(crate) fn filter_h_row_f32_to_f16_scalar(
+    _token: ScalarToken,
+    input: &[f32],
+    output: &mut [u16],
+    weights: &F32WeightTable,
+    channels: usize,
+) {
+    let out_width = weights.len();
+
+    for out_x in 0..out_width {
+        let left = weights.left[out_x] as usize;
+        let w = weights.weights(out_x);
+        let out_offset = out_x * channels;
+
+        for c in 0..channels {
+            let mut acc = 0.0f32;
+            for (t, &weight) in w.iter().enumerate() {
+                acc += input[(left + t) * channels + c] * weight;
+            }
+            output[out_offset + c] = f32_to_f16_soft(acc);
+        }
+    }
+}
+
+/// Streaming V-filter: f16 rows → f32 output via f32 weights, scalar fallback.
+/// Converts each f16 element to f32, accumulates weighted sum.
+pub(crate) fn filter_v_row_f16_scalar(
+    _token: ScalarToken,
+    rows: &[&[u16]],
+    output: &mut [f32],
+    weights: &[f32],
+) {
+    let width = output.len();
+    debug_assert_eq!(rows.len(), weights.len());
+
+    for v in output.iter_mut() {
+        *v = 0.0;
+    }
+
+    for (row, &weight) in rows.iter().zip(weights.iter()) {
+        debug_assert!(row.len() >= width);
+        for x in 0..width {
+            output[x] += f16_to_f32_soft(row[x]) * weight;
+        }
+    }
+}
+
+/// Batch V-filter for fullframe: f16 intermediate → f32 output, scalar fallback.
+/// Reads f16 (u16) intermediate, accumulates in f32 per output row.
+pub(crate) fn filter_v_all_f16_scalar(
+    _token: ScalarToken,
+    intermediate: &[u16],
+    output: &mut [f32],
+    h_row_len: usize,
+    in_h: usize,
+    out_h: usize,
+    weights: &F32WeightTable,
+) {
+    for out_y in 0..out_h {
+        let left = weights.left[out_y];
+        let tap_count = weights.tap_count(out_y);
+        let w = weights.weights(out_y);
+        let out_start = out_y * h_row_len;
+
+        for x in 0..h_row_len {
+            let mut acc = 0.0f32;
+            for (t, &weight) in w[..tap_count].iter().enumerate() {
+                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+                acc += f16_to_f32_soft(intermediate[in_y * h_row_len + x]) * weight;
+            }
+            output[out_start + x] = acc;
+        }
+    }
+}
+
 /// Convert sRGB u8 → linear f32 using LUT.
 pub(crate) fn srgb_u8_to_linear_f32_scalar(
     _token: ScalarToken,

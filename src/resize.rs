@@ -132,7 +132,7 @@ pub struct Resizer<B: Background = NoBackground> {
     h_weights_f32: Option<F32WeightTable>,
     v_weights_f32: Option<F32WeightTable>,
     intermediate_u8: Vec<u8>,
-    intermediate_f32: Vec<f32>,
+    intermediate_f16: Vec<u16>,
     intermediate_i16: Vec<i16>,
     linearized_row: Vec<i16>,
     v_output_i16: Vec<i16>,
@@ -232,7 +232,8 @@ impl<B: Background> Resizer<B> {
                 h_weights_f32: Some(h_weights),
                 v_weights_f32: Some(v_weights),
                 intermediate_u8: Vec::new(),
-                intermediate_f32: vec![0.0f32; h_row_len * in_h],
+
+                intermediate_f16: vec![0u16; h_row_len * in_h],
                 intermediate_i16: Vec::new(),
                 linearized_row: Vec::new(),
                 v_output_i16: Vec::new(),
@@ -258,7 +259,8 @@ impl<B: Background> Resizer<B> {
                 h_weights_f32: Some(h_weights),
                 v_weights_f32: Some(v_weights),
                 intermediate_u8: Vec::new(),
-                intermediate_f32: vec![0.0f32; h_row_len * in_h],
+
+                intermediate_f16: vec![0u16; h_row_len * in_h],
                 intermediate_i16: Vec::new(),
                 linearized_row: Vec::new(),
                 v_output_i16: Vec::new(),
@@ -291,7 +293,8 @@ impl<B: Background> Resizer<B> {
                 h_weights_f32: None,
                 v_weights_f32: None,
                 intermediate_u8: intermediate,
-                intermediate_f32: Vec::new(),
+
+                intermediate_f16: Vec::new(),
                 intermediate_i16: Vec::new(),
                 linearized_row: Vec::new(),
                 v_output_i16: Vec::new(),
@@ -315,7 +318,8 @@ impl<B: Background> Resizer<B> {
                 h_weights_f32: None,
                 v_weights_f32: None,
                 intermediate_u8: Vec::new(),
-                intermediate_f32: Vec::new(),
+
+                intermediate_f16: Vec::new(),
                 intermediate_i16: vec![0i16; h_row_len * in_h],
                 linearized_row: vec![0i16; in_row_len + h_padding],
                 v_output_i16: vec![0i16; h_row_len * out_h],
@@ -339,7 +343,8 @@ impl<B: Background> Resizer<B> {
                 h_weights_f32: Some(h_weights),
                 v_weights_f32: Some(v_weights),
                 intermediate_u8: Vec::new(),
-                intermediate_f32: vec![0.0f32; h_row_len * in_h],
+
+                intermediate_f16: vec![0u16; h_row_len * in_h],
                 intermediate_i16: Vec::new(),
                 linearized_row: Vec::new(),
                 v_output_i16: Vec::new(),
@@ -527,10 +532,10 @@ impl<B: Background> Resizer<B> {
                 let v_weights = self.v_weights_f32.as_ref().unwrap();
                 let input_tf = config.effective_input_transfer();
                 let output_tf = config.effective_output_transfer();
-                let intermediate = &mut self.intermediate_f32;
+                let intermediate = &mut self.intermediate_f16;
                 let temp_row = &mut self.temp_row_f32;
 
-                // === Horizontal pass ===
+                // === Horizontal pass (f32 → f16) ===
                 for y in 0..in_h {
                     let in_start = y * in_stride;
                     let in_row = &input[in_start..in_start + in_row_len];
@@ -548,7 +553,7 @@ impl<B: Background> Resizer<B> {
                     }
 
                     let out_start = y * h_row_len;
-                    simd::filter_h_row_f32(
+                    simd::filter_h_row_f32_to_f16(
                         temp_row,
                         &mut intermediate[out_start..out_start + h_row_len],
                         h_weights,
@@ -556,9 +561,9 @@ impl<B: Background> Resizer<B> {
                     );
                 }
 
-                // === Vertical pass ===
+                // === Vertical pass (f16 → f32) ===
                 let max_taps = v_weights.max_taps;
-                let mut row_ptrs: Vec<&[f32]> = Vec::with_capacity(max_taps);
+                let mut row_ptrs: Vec<&[u16]> = Vec::with_capacity(max_taps);
                 let temp_output = &mut self.temp_output_f32;
 
                 for out_y in 0..out_h {
@@ -573,7 +578,7 @@ impl<B: Background> Resizer<B> {
                         row_ptrs.push(&intermediate[start..start + h_row_len]);
                     }
 
-                    simd::filter_v_row_f32(&row_ptrs, &mut temp_output[..h_row_len], weights);
+                    simd::filter_v_row_f16(&row_ptrs, &mut temp_output[..h_row_len], weights);
 
                     // === Composite: source-over onto background ===
                     composite::composite_dispatch(
@@ -664,10 +669,10 @@ impl<B: Background> Resizer<B> {
 
         let h_weights = self.h_weights_f32.as_ref().unwrap();
         let v_weights = self.v_weights_f32.as_ref().unwrap();
-        let intermediate = &mut self.intermediate_f32;
+        let intermediate = &mut self.intermediate_f16;
         let temp_row = &mut self.temp_row_f32;
 
-        // === Horizontal pass: f32 → f32 ===
+        // === Horizontal pass: f32 → f16 ===
         for y in 0..in_h {
             let in_start = y * in_stride;
             temp_row[..in_row_len].copy_from_slice(&input[in_start..in_start + in_row_len]);
@@ -677,7 +682,7 @@ impl<B: Background> Resizer<B> {
             }
 
             let out_start = y * h_row_len;
-            simd::filter_h_row_f32(
+            simd::filter_h_row_f32_to_f16(
                 temp_row,
                 &mut intermediate[out_start..out_start + h_row_len],
                 h_weights,
@@ -685,9 +690,9 @@ impl<B: Background> Resizer<B> {
             );
         }
 
-        // === Vertical pass: f32 → f32 ===
+        // === Vertical pass: f16 → f32 ===
         let max_taps = v_weights.max_taps;
-        let mut row_ptrs: Vec<&[f32]> = Vec::with_capacity(max_taps);
+        let mut row_ptrs: Vec<&[u16]> = Vec::with_capacity(max_taps);
 
         for out_y in 0..out_h {
             let left = v_weights.left[out_y];
@@ -705,7 +710,7 @@ impl<B: Background> Resizer<B> {
                 // No compositing — write directly to output (zero overhead for NoBackground)
                 let out_start = out_y * out_row_len;
                 let out_slice = &mut output[out_start..out_start + out_row_len];
-                simd::filter_v_row_f32(&row_ptrs, out_slice, weights);
+                simd::filter_v_row_f16(&row_ptrs, out_slice, weights);
 
                 if needs_premul {
                     simd::unpremultiply_alpha_row(out_slice);
@@ -713,7 +718,7 @@ impl<B: Background> Resizer<B> {
             } else {
                 // Compositing active — use temp buffer
                 let temp_output = &mut self.temp_output_f32;
-                simd::filter_v_row_f32(&row_ptrs, &mut temp_output[..h_row_len], weights);
+                simd::filter_v_row_f16(&row_ptrs, &mut temp_output[..h_row_len], weights);
 
                 composite::composite_dispatch(
                     &mut temp_output[..h_row_len],
@@ -805,10 +810,10 @@ impl<B: Background> Resizer<B> {
 
         let h_weights = self.h_weights_f32.as_ref().unwrap();
         let v_weights = self.v_weights_f32.as_ref().unwrap();
-        let intermediate = &mut self.intermediate_f32;
+        let intermediate = &mut self.intermediate_f16;
         let temp_row = &mut self.temp_row_f32;
 
-        // === Horizontal pass: u16 → f32 (linearize) → f32 (filtered) ===
+        // === Horizontal pass: u16 → f32 (linearize) → f16 (filtered) ===
         for y in 0..in_h {
             let in_start = y * in_stride;
             let in_row = &input[in_start..in_start + in_row_len];
@@ -823,7 +828,7 @@ impl<B: Background> Resizer<B> {
             );
 
             let out_start = y * h_row_len;
-            simd::filter_h_row_f32(
+            simd::filter_h_row_f32_to_f16(
                 temp_row,
                 &mut intermediate[out_start..out_start + h_row_len],
                 h_weights,
@@ -831,9 +836,9 @@ impl<B: Background> Resizer<B> {
             );
         }
 
-        // === Vertical pass: f32 → f32 → u16 (delinearize) ===
+        // === Vertical pass: f16 → f32 → u16 (delinearize) ===
         let max_taps = v_weights.max_taps;
-        let mut row_ptrs: Vec<&[f32]> = Vec::with_capacity(max_taps);
+        let mut row_ptrs: Vec<&[u16]> = Vec::with_capacity(max_taps);
         let temp_output = &mut self.temp_output_f32;
 
         for out_y in 0..out_h {
@@ -848,7 +853,7 @@ impl<B: Background> Resizer<B> {
                 row_ptrs.push(&intermediate[start..start + h_row_len]);
             }
 
-            simd::filter_v_row_f32(&row_ptrs, &mut temp_output[..h_row_len], weights);
+            simd::filter_v_row_f16(&row_ptrs, &mut temp_output[..h_row_len], weights);
 
             // === Composite: source-over onto background ===
             composite::composite_dispatch(
@@ -908,9 +913,9 @@ impl<B: Background> Resizer<B> {
             }
 
             let out_start = y * h_row_len;
-            simd::filter_h_row_f32(
+            simd::filter_h_row_f32_to_f16(
                 &self.temp_row_f32,
-                &mut self.intermediate_f32[out_start..out_start + h_row_len],
+                &mut self.intermediate_f16[out_start..out_start + h_row_len],
                 h_weights,
                 channels,
             );
@@ -941,9 +946,9 @@ impl<B: Background> Resizer<B> {
             }
 
             let out_start = y * h_row_len;
-            simd::filter_h_row_f32(
+            simd::filter_h_row_f32_to_f16(
                 &self.temp_row_f32,
-                &mut self.intermediate_f32[out_start..out_start + h_row_len],
+                &mut self.intermediate_f16[out_start..out_start + h_row_len],
                 h_weights,
                 channels,
             );
@@ -980,9 +985,9 @@ impl<B: Background> Resizer<B> {
             );
 
             let out_start = y * h_row_len;
-            simd::filter_h_row_f32(
+            simd::filter_h_row_f32_to_f16(
                 &self.temp_row_f32,
-                &mut self.intermediate_f32[out_start..out_start + h_row_len],
+                &mut self.intermediate_f16[out_start..out_start + h_row_len],
                 h_weights,
                 channels,
             );
@@ -1004,7 +1009,7 @@ impl<B: Background> Resizer<B> {
 
         let v_weights = self.v_weights_f32.as_ref().unwrap();
         let max_taps = v_weights.max_taps;
-        let mut row_ptrs: Vec<&[f32]> = Vec::with_capacity(max_taps);
+        let mut row_ptrs: Vec<&[u16]> = Vec::with_capacity(max_taps);
 
         for out_y in 0..out_h {
             let left = v_weights.left[out_y];
@@ -1015,10 +1020,10 @@ impl<B: Background> Resizer<B> {
             for t in 0..tap_count {
                 let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
                 let start = in_y * h_row_len;
-                row_ptrs.push(&self.intermediate_f32[start..start + h_row_len]);
+                row_ptrs.push(&self.intermediate_f16[start..start + h_row_len]);
             }
 
-            simd::filter_v_row_f32(&row_ptrs, &mut self.temp_output_f32[..h_row_len], weights);
+            simd::filter_v_row_f16(&row_ptrs, &mut self.temp_output_f32[..h_row_len], weights);
 
             composite::composite_dispatch(
                 &mut self.temp_output_f32[..h_row_len],
@@ -1057,7 +1062,7 @@ impl<B: Background> Resizer<B> {
 
         let v_weights = self.v_weights_f32.as_ref().unwrap();
         let max_taps = v_weights.max_taps;
-        let mut row_ptrs: Vec<&[f32]> = Vec::with_capacity(max_taps);
+        let mut row_ptrs: Vec<&[u16]> = Vec::with_capacity(max_taps);
 
         for out_y in 0..out_h {
             let left = v_weights.left[out_y];
@@ -1068,19 +1073,19 @@ impl<B: Background> Resizer<B> {
             for t in 0..tap_count {
                 let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
                 let start = in_y * h_row_len;
-                row_ptrs.push(&self.intermediate_f32[start..start + h_row_len]);
+                row_ptrs.push(&self.intermediate_f16[start..start + h_row_len]);
             }
 
             if self.background.is_transparent() {
                 let out_start = out_y * out_row_len;
                 let out_slice = &mut output[out_start..out_start + out_row_len];
-                simd::filter_v_row_f32(&row_ptrs, out_slice, weights);
+                simd::filter_v_row_f16(&row_ptrs, out_slice, weights);
 
                 if needs_premul {
                     simd::unpremultiply_alpha_row(out_slice);
                 }
             } else {
-                simd::filter_v_row_f32(&row_ptrs, &mut self.temp_output_f32[..h_row_len], weights);
+                simd::filter_v_row_f16(&row_ptrs, &mut self.temp_output_f32[..h_row_len], weights);
 
                 composite::composite_dispatch(
                     &mut self.temp_output_f32[..h_row_len],
@@ -1117,7 +1122,7 @@ impl<B: Background> Resizer<B> {
 
         let v_weights = self.v_weights_f32.as_ref().unwrap();
         let max_taps = v_weights.max_taps;
-        let mut row_ptrs: Vec<&[f32]> = Vec::with_capacity(max_taps);
+        let mut row_ptrs: Vec<&[u16]> = Vec::with_capacity(max_taps);
 
         for out_y in 0..out_h {
             let left = v_weights.left[out_y];
@@ -1128,10 +1133,10 @@ impl<B: Background> Resizer<B> {
             for t in 0..tap_count {
                 let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
                 let start = in_y * h_row_len;
-                row_ptrs.push(&self.intermediate_f32[start..start + h_row_len]);
+                row_ptrs.push(&self.intermediate_f16[start..start + h_row_len]);
             }
 
-            simd::filter_v_row_f32(&row_ptrs, &mut self.temp_output_f32[..h_row_len], weights);
+            simd::filter_v_row_f16(&row_ptrs, &mut self.temp_output_f32[..h_row_len], weights);
 
             composite::composite_dispatch(
                 &mut self.temp_output_f32[..h_row_len],

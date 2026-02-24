@@ -166,10 +166,10 @@ pub struct StreamingResize<B: Background = NoBackground> {
     needs_premul: bool,
     alpha_is_last: bool,
 
-    /// Ring buffer of input rows (f32, linearized + premultiplied).
-    /// Each row is `in_width * channels + h_padding` wide (zero-padded for H-filter SIMD).
+    /// Ring buffer of input rows (f16 stored as u16, linearized + premultiplied).
+    /// Each row is `in_width * channels + h_padding` wide (zero-padded for V-filter SIMD).
     /// Empty when i16 path is active.
-    v_cache: Vec<Vec<f32>>,
+    v_cache: Vec<Vec<u16>>,
     /// Which ring buffer slot to write the next input row into.
     cache_write_idx: usize,
     /// Total number of cache slots.
@@ -328,7 +328,7 @@ impl<B: Background> StreamingResize<B> {
                 let v_cache_row_len = in_row_len + h_padding;
 
                 let v_cache = (0..cache_size)
-                    .map(|_| vec![0.0f32; v_cache_row_len])
+                    .map(|_| vec![0u16; v_cache_row_len])
                     .collect();
 
                 Self {
@@ -1120,7 +1120,7 @@ impl<B: Background> StreamingResize<B> {
 
     /// V-filter → H-filter one output row into `temp_output_f32`, apply composite and unpremultiply.
     /// Increments `output_rows_produced`. Caller must check `can_produce_next_output` first.
-    /// Only called for the F32 path.
+    /// Only called for the F32 path. Ring buffer stores f16 (u16), V-filter outputs f32.
     fn produce_next_f32(&mut self) {
         let out_y = self.output_rows_produced;
 
@@ -1130,7 +1130,7 @@ impl<B: Background> StreamingResize<B> {
         let in_row_len = self.config.in_width as usize * self.channels;
         let out_row_len = self.config.out_width as usize * self.channels;
 
-        // Step 1: V-filter from v_cache into temp_v_output (in_width-wide)
+        // Step 1: V-filter from f16 v_cache into temp_v_output (f32, in_width-wide)
         with_v_rows(
             &self.v_cache,
             self.cache_size,
@@ -1138,7 +1138,7 @@ impl<B: Background> StreamingResize<B> {
             tap_count,
             self.config.in_height,
             in_row_len,
-            |rows| simd::filter_v_row_f32(rows, &mut self.temp_v_output[..in_row_len], weights),
+            |rows| simd::filter_v_row_f16(rows, &mut self.temp_v_output[..in_row_len], weights),
         );
 
         // Step 2: H-filter from temp_v_output into temp_output_f32 (out_width-wide)
@@ -1264,13 +1264,16 @@ impl<B: Background> StreamingResize<B> {
         Ok(())
     }
 
-    /// Internal: cache the row from `temp_input_f32` into the f32 ring buffer.
+    /// Internal: convert f32 → f16 and cache the row into the f16 ring buffer.
     fn push_row_internal(&mut self) -> Result<(), StreamingError> {
         self.check_ring_buffer()?;
 
         let cache_slot = self.cache_write_idx % self.cache_size;
         let pixel_len = self.config.in_width as usize * self.channels;
-        self.v_cache[cache_slot][..pixel_len].copy_from_slice(&self.temp_input_f32[..pixel_len]);
+        simd::f32_to_f16_row(
+            &self.temp_input_f32[..pixel_len],
+            &mut self.v_cache[cache_slot][..pixel_len],
+        );
 
         self.cache_write_idx += 1;
         self.input_rows_received += 1;
@@ -1839,8 +1842,11 @@ mod tests {
 
         assert_eq!(fullframe.len(), streaming.len());
         for (i, (&a, &b)) in fullframe.iter().zip(streaming.iter()).enumerate() {
+            // ±16 tolerance: f16 quantization at different pipeline stages
+            // (H-first fullframe vs V-first streaming) compounds quantization errors.
+            // Observed max diff ~11 in u16 space (0.017%).
             assert!(
-                (a as i32 - b as i32).unsigned_abs() <= 1,
+                (a as i32 - b as i32).unsigned_abs() <= 16,
                 "mismatch at element {}: fullframe={}, streaming={}",
                 i,
                 a,

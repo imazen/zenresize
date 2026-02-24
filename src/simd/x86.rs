@@ -1370,7 +1370,7 @@ pub(crate) fn filter_v_row_u8_i16_v3(
 
     // Pre-compute paired weights (stack array, no heap alloc).
     let pairs = tap_count / 2;
-    let odd = tap_count % 2 != 0;
+    let odd = !tap_count.is_multiple_of(2);
 
     let zero_ymm = _mm256_setzero_si256();
     let mut paired_wts = [zero_ymm; MAX_TAPS / 2];
@@ -1479,7 +1479,7 @@ pub(crate) fn filter_v_row_i16_v3(
 
     // Pre-compute paired weights (stack array, no heap alloc).
     let pairs = tap_count / 2;
-    let odd = tap_count % 2 != 0;
+    let odd = !tap_count.is_multiple_of(2);
 
     let zero_ymm = _mm256_setzero_si256();
     let mut paired_wts = [zero_ymm; MAX_TAPS / 2];
@@ -1540,5 +1540,371 @@ pub(crate) fn filter_v_row_i16_v3(
         }
         let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
         *out_val = rounded.clamp(0, 4095) as i16;
+    }
+}
+
+// =============================================================================
+// f16 (IEEE 754 half-precision) kernels — F16C is guaranteed by X64V3Token
+// =============================================================================
+
+/// Bulk convert f32 → f16 row using F16C (vcvtps2ph).
+/// Processes 8 f32 at a time → 8 f16 (stored as u16).
+#[archmage::arcane]
+pub(crate) fn f32_to_f16_row_v3(_token: X64V3Token, input: &[f32], output: &mut [u16]) {
+    debug_assert_eq!(input.len(), output.len());
+    let len = input.len();
+
+    let (in_chunks, _) = input.as_chunks::<8>();
+    let (out_chunks, _) = output.as_chunks_mut::<8>();
+
+    for (in_chunk, out_chunk) in in_chunks.iter().zip(out_chunks.iter_mut()) {
+        let floats = _mm256_loadu_ps(in_chunk);
+        let halfs = _mm256_cvtps_ph::<0>(floats); // round-to-nearest-even
+        _mm_storeu_si128(out_chunk, halfs);
+    }
+
+    // Scalar tail
+    let chunks8 = in_chunks.len();
+    for i in (chunks8 * 8)..len {
+        output[i] = super::scalar::f32_to_f16_soft(input[i]);
+    }
+}
+
+/// Bulk convert f16 → f32 row using F16C (vcvtph2ps).
+/// Processes 8 f16 at a time → 8 f32.
+#[archmage::arcane]
+pub(crate) fn f16_to_f32_row_v3(_token: X64V3Token, input: &[u16], output: &mut [f32]) {
+    debug_assert_eq!(input.len(), output.len());
+    let len = input.len();
+
+    let (in_chunks, _) = input.as_chunks::<8>();
+    let (out_chunks, _) = output.as_chunks_mut::<8>();
+
+    for (in_chunk, out_chunk) in in_chunks.iter().zip(out_chunks.iter_mut()) {
+        let halfs = _mm_loadu_si128(in_chunk);
+        let floats = _mm256_cvtph_ps(halfs);
+        _mm256_storeu_ps(out_chunk, floats);
+    }
+
+    // Scalar tail
+    let chunks8 = in_chunks.len();
+    for i in (chunks8 * 8)..len {
+        output[i] = super::scalar::f16_to_f32_soft(input[i]);
+    }
+}
+
+/// Horizontal filter: f32 input → f16 (u16) output using AVX2+F16C.
+/// Accumulates in f32, converts to f16 on store.
+#[archmage::arcane]
+pub(crate) fn filter_h_row_f32_to_f16_v3(
+    _token: X64V3Token,
+    input: &[f32],
+    output: &mut [u16],
+    weights: &F32WeightTable,
+    channels: usize,
+) {
+    match channels {
+        4 => filter_h_4ch_to_f16(_token, input, output, weights),
+        3 => filter_h_3ch_to_f16(_token, input, output, weights),
+        _ => filter_h_generic_to_f16(_token, input, output, weights, channels),
+    }
+}
+
+/// 4-channel horizontal filter: f32 → f16 output.
+/// Same accumulation as filter_h_4ch but stores via vcvtps2ph.
+#[archmage::rite]
+fn filter_h_4ch_to_f16(
+    _token: X64V3Token,
+    input: &[f32],
+    output: &mut [u16],
+    weights: &F32WeightTable,
+) {
+    let out_width = weights.len();
+    let max_taps = weights.max_taps;
+
+    let in_pixels_arr: &[[f32; 4]] = input.as_chunks().0;
+    let (out_pixels, _) = output.as_chunks_mut::<4>();
+
+    let chunks8 = max_taps / 8;
+    let remainder = max_taps - chunks8 * 8;
+
+    let perm01 = _mm256_set_epi32(1, 1, 1, 1, 0, 0, 0, 0);
+    let perm23 = _mm256_set_epi32(3, 3, 3, 3, 2, 2, 2, 2);
+    let perm45 = _mm256_set_epi32(5, 5, 5, 5, 4, 4, 4, 4);
+    let perm67 = _mm256_set_epi32(7, 7, 7, 7, 6, 6, 6, 6);
+
+    for out_x in 0..out_width {
+        let left = weights.left[out_x] as usize;
+        let w = weights.weights_padded(out_x);
+
+        let flat_start = left * 4;
+        let input_window = &input[flat_start..flat_start + max_taps * 4];
+        let (pairs, _) = input_window.as_chunks::<8>();
+        let (w_chunks, _) = w.as_chunks::<8>();
+
+        let mut acc0 = _mm256_setzero_ps();
+        let mut acc1 = _mm256_setzero_ps();
+        let mut acc2 = _mm256_setzero_ps();
+        let mut acc3 = _mm256_setzero_ps();
+
+        for c in 0..chunks8 {
+            let w_vec = _mm256_loadu_ps(idx(w_chunks, c));
+            let w01 = _mm256_permutevar8x32_ps(w_vec, perm01);
+            let w23 = _mm256_permutevar8x32_ps(w_vec, perm23);
+            let w45 = _mm256_permutevar8x32_ps(w_vec, perm45);
+            let w67 = _mm256_permutevar8x32_ps(w_vec, perm67);
+
+            let pi = c * 4;
+            let p01 = _mm256_loadu_ps(idx(pairs, pi));
+            let p23 = _mm256_loadu_ps(idx(pairs, pi + 1));
+            let p45 = _mm256_loadu_ps(idx(pairs, pi + 2));
+            let p67 = _mm256_loadu_ps(idx(pairs, pi + 3));
+
+            acc0 = _mm256_fmadd_ps(p01, w01, acc0);
+            acc1 = _mm256_fmadd_ps(p23, w23, acc1);
+            acc2 = _mm256_fmadd_ps(p45, w45, acc2);
+            acc3 = _mm256_fmadd_ps(p67, w67, acc3);
+        }
+
+        // Reduce 256→128
+        let sum01 = _mm256_add_ps(acc0, acc1);
+        let sum23 = _mm256_add_ps(acc2, acc3);
+        let sum = _mm256_add_ps(sum01, sum23);
+        let lo = _mm256_castps256_ps128(sum);
+        let hi = _mm256_extractf128_ps::<1>(sum);
+        let mut acc_128 = _mm_add_ps(lo, hi);
+
+        // SSE remainder
+        let t_start = chunks8 * 8;
+        for t in 0..remainder {
+            let tt = t_start + t;
+            let w_val = _mm_set1_ps(*idx(w, tt));
+            let pixel = _mm_loadu_ps(idx(in_pixels_arr, left + tt));
+            acc_128 = _mm_fmadd_ps(pixel, w_val, acc_128);
+        }
+
+        // Convert 4 f32 → 4 f16 and store as 8 bytes (4 u16)
+        let f16_vec = _mm_cvtps_ph::<0>(acc_128);
+        _mm_storeu_si64(idx_mut(out_pixels, out_x), f16_vec);
+    }
+}
+
+/// 3-channel horizontal filter: f32 → f16 output (scalar accumulation).
+#[archmage::rite]
+fn filter_h_3ch_to_f16(
+    _token: X64V3Token,
+    input: &[f32],
+    output: &mut [u16],
+    weights: &F32WeightTable,
+) {
+    for out_x in 0..weights.len() {
+        let left = weights.left[out_x] as usize;
+        let w = weights.weights(out_x);
+        let out_offset = out_x * 3;
+
+        let mut acc0 = 0.0f32;
+        let mut acc1 = 0.0f32;
+        let mut acc2 = 0.0f32;
+
+        for (t, &weight) in w.iter().enumerate() {
+            let in_offset = (left + t) * 3;
+            acc0 += input[in_offset] * weight;
+            acc1 += input[in_offset + 1] * weight;
+            acc2 += input[in_offset + 2] * weight;
+        }
+
+        output[out_offset] = super::scalar::f32_to_f16_soft(acc0);
+        output[out_offset + 1] = super::scalar::f32_to_f16_soft(acc1);
+        output[out_offset + 2] = super::scalar::f32_to_f16_soft(acc2);
+    }
+}
+
+/// Generic-channel horizontal filter: f32 → f16 output (scalar).
+#[archmage::rite]
+fn filter_h_generic_to_f16(
+    _token: X64V3Token,
+    input: &[f32],
+    output: &mut [u16],
+    weights: &F32WeightTable,
+    channels: usize,
+) {
+    for out_x in 0..weights.len() {
+        let left = weights.left[out_x] as usize;
+        let w = weights.weights(out_x);
+        let out_offset = out_x * channels;
+
+        for c in 0..channels {
+            let mut acc = 0.0f32;
+            for (t, &weight) in w.iter().enumerate() {
+                acc += input[(left + t) * channels + c] * weight;
+            }
+            output[out_offset + c] = super::scalar::f32_to_f16_soft(acc);
+        }
+    }
+}
+
+/// Streaming V-filter: f16 rows → f32 output using AVX2+F16C.
+///
+/// Per-tap: load 8 f16 → vcvtph2ps → fmadd_ps. Same 4×8 ILP structure
+/// as filter_v_row_f32_v3 but with f16→f32 conversion per row load.
+#[archmage::arcane]
+pub(crate) fn filter_v_row_f16_v3(
+    _token: X64V3Token,
+    rows: &[&[u16]],
+    output: &mut [f32],
+    weights: &[f32],
+) {
+    let width = output.len();
+    debug_assert_eq!(rows.len(), weights.len());
+
+    // Zero the output buffer
+    let (out_chunks, out_tail) = output.as_chunks_mut::<8>();
+    let zero = _mm256_setzero_ps();
+    for chunk in out_chunks.iter_mut() {
+        _mm256_storeu_ps(chunk, zero);
+    }
+    for v in out_tail.iter_mut() {
+        *v = 0.0;
+    }
+
+    let base8 = out_chunks.len() * 8;
+
+    // Row-major accumulation: broadcast weight once, sweep entire row
+    for (row, &weight) in rows.iter().zip(weights.iter()) {
+        let w = _mm256_set1_ps(weight);
+        let (row_chunks, _) = row.as_chunks::<8>();
+
+        // Process 32 f16 values (4×8) at a time for ILP
+        let (out_blocks, out_rem) = output[..base8].as_chunks_mut::<32>();
+
+        for (out_block, row_block) in out_blocks.iter_mut().zip(row_chunks.chunks_exact(4)) {
+            // Load 4 groups of 8 f16, convert to f32, FMA accumulate
+            let h0 = _mm_loadu_si128(&row_block[0]);
+            let h1 = _mm_loadu_si128(&row_block[1]);
+            let h2 = _mm_loadu_si128(&row_block[2]);
+            let h3 = _mm_loadu_si128(&row_block[3]);
+
+            let s0 = _mm256_cvtph_ps(h0);
+            let s1 = _mm256_cvtph_ps(h1);
+            let s2 = _mm256_cvtph_ps(h2);
+            let s3 = _mm256_cvtph_ps(h3);
+
+            let oc: &mut [[f32; 8]] = out_block.as_mut_slice().as_chunks_mut().0;
+            let a0 = _mm256_loadu_ps(&oc[0]);
+            let a1 = _mm256_loadu_ps(&oc[1]);
+            let a2 = _mm256_loadu_ps(&oc[2]);
+            let a3 = _mm256_loadu_ps(&oc[3]);
+
+            _mm256_storeu_ps(&mut oc[0], _mm256_fmadd_ps(s0, w, a0));
+            _mm256_storeu_ps(&mut oc[1], _mm256_fmadd_ps(s1, w, a1));
+            _mm256_storeu_ps(&mut oc[2], _mm256_fmadd_ps(s2, w, a2));
+            _mm256_storeu_ps(&mut oc[3], _mm256_fmadd_ps(s3, w, a3));
+        }
+
+        // Remaining 8-element chunks
+        let blocks4 = out_blocks.len();
+        let rem_row_chunks = &row_chunks[blocks4 * 4..];
+        let (rem_out_chunks, _) = out_rem.as_chunks_mut::<8>();
+        for (out_chunk, row_chunk) in rem_out_chunks.iter_mut().zip(rem_row_chunks.iter()) {
+            let halfs = _mm_loadu_si128(row_chunk);
+            let src = _mm256_cvtph_ps(halfs);
+            let acc = _mm256_loadu_ps(out_chunk);
+            _mm256_storeu_ps(out_chunk, _mm256_fmadd_ps(src, w, acc));
+        }
+
+        // Scalar tail
+        let w_scalar = weight;
+        for x in base8..width {
+            output[x] += super::scalar::f16_to_f32_soft(row[x]) * w_scalar;
+        }
+    }
+}
+
+/// Batch V-filter for fullframe: f16 intermediate → f32 output using AVX2+F16C.
+///
+/// Reads f16 intermediate buffer, accumulates in f32, outputs f32.
+/// Same structure as filter_v_all_u8_i16 but with f16→f32 conversion.
+#[archmage::arcane]
+pub(crate) fn filter_v_all_f16_v3(
+    _token: X64V3Token,
+    intermediate: &[u16],
+    output: &mut [f32],
+    h_row_len: usize,
+    in_h: usize,
+    out_h: usize,
+    weights: &F32WeightTable,
+) {
+    for out_y in 0..out_h {
+        let left = weights.left[out_y];
+        let tap_count = weights.tap_count(out_y);
+        let w = weights.weights(out_y);
+        let out_start = out_y * h_row_len;
+
+        let in_h_i32 = in_h as i32 - 1;
+
+        // Zero the output row
+        let out_row = &mut output[out_start..out_start + h_row_len];
+        let (out_chunks, out_tail) = out_row.as_chunks_mut::<8>();
+        let zero = _mm256_setzero_ps();
+        for chunk in out_chunks.iter_mut() {
+            _mm256_storeu_ps(chunk, zero);
+        }
+        for v in out_tail.iter_mut() {
+            *v = 0.0;
+        }
+
+        let base8 = out_chunks.len() * 8;
+
+        // Accumulate each tap row
+        for (t, &weight) in w[..tap_count].iter().enumerate() {
+            let in_y = (left + t as i32).clamp(0, in_h_i32) as usize;
+            let row_off = in_y * h_row_len;
+            let row = &intermediate[row_off..row_off + h_row_len];
+            let wv = _mm256_set1_ps(weight);
+            let (row_chunks, _) = row.as_chunks::<8>();
+
+            // Process 32 elements (4×8) at a time for ILP
+            let (out_blocks, out_rem) = output[out_start..out_start + base8].as_chunks_mut::<32>();
+
+            for (out_block, row_block) in out_blocks.iter_mut().zip(row_chunks.chunks_exact(4)) {
+                let h0 = _mm_loadu_si128(&row_block[0]);
+                let h1 = _mm_loadu_si128(&row_block[1]);
+                let h2 = _mm_loadu_si128(&row_block[2]);
+                let h3 = _mm_loadu_si128(&row_block[3]);
+
+                let s0 = _mm256_cvtph_ps(h0);
+                let s1 = _mm256_cvtph_ps(h1);
+                let s2 = _mm256_cvtph_ps(h2);
+                let s3 = _mm256_cvtph_ps(h3);
+
+                let oc: &mut [[f32; 8]] = out_block.as_mut_slice().as_chunks_mut().0;
+                let a0 = _mm256_loadu_ps(&oc[0]);
+                let a1 = _mm256_loadu_ps(&oc[1]);
+                let a2 = _mm256_loadu_ps(&oc[2]);
+                let a3 = _mm256_loadu_ps(&oc[3]);
+
+                _mm256_storeu_ps(&mut oc[0], _mm256_fmadd_ps(s0, wv, a0));
+                _mm256_storeu_ps(&mut oc[1], _mm256_fmadd_ps(s1, wv, a1));
+                _mm256_storeu_ps(&mut oc[2], _mm256_fmadd_ps(s2, wv, a2));
+                _mm256_storeu_ps(&mut oc[3], _mm256_fmadd_ps(s3, wv, a3));
+            }
+
+            // Remaining 8-element chunks
+            let blocks4 = out_blocks.len();
+            let rem_row_chunks = &row_chunks[blocks4 * 4..];
+            let (rem_out_chunks, _) = out_rem.as_chunks_mut::<8>();
+            for (out_chunk, row_chunk) in rem_out_chunks.iter_mut().zip(rem_row_chunks.iter()) {
+                let halfs = _mm_loadu_si128(row_chunk);
+                let src = _mm256_cvtph_ps(halfs);
+                let acc = _mm256_loadu_ps(out_chunk);
+                _mm256_storeu_ps(out_chunk, _mm256_fmadd_ps(src, wv, acc));
+            }
+
+            // Scalar tail
+            let w_scalar = weight;
+            for x in base8..h_row_len {
+                output[out_start + x] += super::scalar::f16_to_f32_soft(row[x]) * w_scalar;
+            }
+        }
     }
 }

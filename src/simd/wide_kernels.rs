@@ -581,6 +581,97 @@ pub(super) fn filter_v_row_u8_i16(rows: &[&[u8]], output: &mut [u8], weights: &[
     }
 }
 
+// ============================================================================
+// f16 (half-precision) support — scalar-style (no portable SIMD f16 convert)
+// ============================================================================
+
+/// Bulk convert f32 → f16 row (scalar, uses software conversion).
+#[inline(always)]
+pub(super) fn f32_to_f16_row(input: &[f32], output: &mut [u16]) {
+    debug_assert_eq!(input.len(), output.len());
+    for (inp, out) in input.iter().zip(output.iter_mut()) {
+        *out = super::scalar::f32_to_f16_soft(*inp);
+    }
+}
+
+/// Bulk convert f16 → f32 row (scalar, uses software conversion).
+#[inline(always)]
+pub(super) fn f16_to_f32_row(input: &[u16], output: &mut [f32]) {
+    debug_assert_eq!(input.len(), output.len());
+    for (inp, out) in input.iter().zip(output.iter_mut()) {
+        *out = super::scalar::f16_to_f32_soft(*inp);
+    }
+}
+
+/// Horizontal f32 convolution with f16 output — dispatch by channel count.
+#[inline(always)]
+pub(super) fn filter_h_row_f32_to_f16(
+    input: &[f32],
+    output: &mut [u16],
+    weights: &F32WeightTable,
+    channels: usize,
+) {
+    let out_width = weights.len();
+    for out_x in 0..out_width {
+        let left = weights.left[out_x] as usize;
+        let w = weights.weights(out_x);
+        let out_offset = out_x * channels;
+
+        for c in 0..channels {
+            let mut acc = 0.0f32;
+            for (t, &weight) in w.iter().enumerate() {
+                acc += input[(left + t) * channels + c] * weight;
+            }
+            output[out_offset + c] = super::scalar::f32_to_f16_soft(acc);
+        }
+    }
+}
+
+/// Streaming V-filter: f16 rows → f32 output via f32 weights.
+#[inline(always)]
+pub(super) fn filter_v_row_f16(rows: &[&[u16]], output: &mut [f32], weights: &[f32]) {
+    let width = output.len();
+    debug_assert_eq!(rows.len(), weights.len());
+
+    for v in output.iter_mut() {
+        *v = 0.0;
+    }
+
+    for (row, &weight) in rows.iter().zip(weights.iter()) {
+        debug_assert!(row.len() >= width);
+        for x in 0..width {
+            output[x] += super::scalar::f16_to_f32_soft(row[x]) * weight;
+        }
+    }
+}
+
+/// Batch V-filter: f16 intermediate → f32 output.
+#[inline(always)]
+pub(super) fn filter_v_all_f16(
+    intermediate: &[u16],
+    output: &mut [f32],
+    h_row_len: usize,
+    in_h: usize,
+    out_h: usize,
+    weights: &F32WeightTable,
+) {
+    for out_y in 0..out_h {
+        let left = weights.left[out_y];
+        let tap_count = weights.tap_count(out_y);
+        let w = weights.weights(out_y);
+        let out_start = out_y * h_row_len;
+
+        for x in 0..h_row_len {
+            let mut acc = 0.0f32;
+            for (t, &weight) in w[..tap_count].iter().enumerate() {
+                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+                acc += super::scalar::f16_to_f32_soft(intermediate[in_y * h_row_len + x]) * weight;
+            }
+            output[out_start + x] = acc;
+        }
+    }
+}
+
 /// Streaming V-filter: i16 rows → i16 output via i16 weights.
 #[inline(always)]
 pub(super) fn filter_v_row_i16(rows: &[&[i16]], output: &mut [i16], weights: &[i16]) {

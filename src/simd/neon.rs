@@ -141,6 +141,52 @@ pub(crate) fn filter_v_row_i16_neon(
     super::wide_kernels::filter_v_row_i16(rows, output, weights)
 }
 
+// f16 kernels — delegate to wide_kernels (scalar-style)
+
+#[archmage::arcane]
+pub(crate) fn f32_to_f16_row_neon(_token: NeonToken, input: &[f32], output: &mut [u16]) {
+    super::wide_kernels::f32_to_f16_row(input, output)
+}
+
+#[archmage::arcane]
+pub(crate) fn f16_to_f32_row_neon(_token: NeonToken, input: &[u16], output: &mut [f32]) {
+    super::wide_kernels::f16_to_f32_row(input, output)
+}
+
+#[archmage::arcane]
+pub(crate) fn filter_h_row_f32_to_f16_neon(
+    _token: NeonToken,
+    input: &[f32],
+    output: &mut [u16],
+    weights: &F32WeightTable,
+    channels: usize,
+) {
+    super::wide_kernels::filter_h_row_f32_to_f16(input, output, weights, channels)
+}
+
+#[archmage::arcane]
+pub(crate) fn filter_v_row_f16_neon(
+    _token: NeonToken,
+    rows: &[&[u16]],
+    output: &mut [f32],
+    weights: &[f32],
+) {
+    super::wide_kernels::filter_v_row_f16(rows, output, weights)
+}
+
+#[archmage::arcane]
+pub(crate) fn filter_v_all_f16_neon(
+    _token: NeonToken,
+    intermediate: &[u16],
+    output: &mut [f32],
+    h_row_len: usize,
+    in_h: usize,
+    out_h: usize,
+    weights: &F32WeightTable,
+) {
+    super::wide_kernels::filter_v_all_f16(intermediate, output, h_row_len, in_h, out_h, weights)
+}
+
 #[archmage::arcane]
 pub(crate) fn srgb_u8_to_linear_f32_neon(
     _token: NeonToken,
