@@ -46,6 +46,7 @@ pub(crate) fn filter_h_row_f32(
 }
 
 /// Vertically filter accumulated rows into one output row.
+#[allow(dead_code)] // Used by blur.rs (not present in this worktree, arrives at merge)
 pub(crate) fn filter_v_row_f32(rows: &[&[f32]], output: &mut [f32], weights: &[f32]) {
     archmage::incant!(filter_v_row_f32(rows, output, weights))
 }
@@ -182,6 +183,7 @@ pub(crate) fn f32_to_f16_row(input: &[f32], output: &mut [u16]) {
 }
 
 /// Bulk convert f16 (stored as u16) → f32.
+#[allow(dead_code)]
 pub(crate) fn f16_to_f32_row(input: &[u16], output: &mut [f32]) {
     archmage::incant!(f16_to_f32_row(input, output))
 }
@@ -203,6 +205,7 @@ pub(crate) fn filter_v_row_f16(rows: &[&[u16]], output: &mut [f32], weights: &[f
 }
 
 /// Batch V-filter for fullframe: f16 intermediate → f32 output.
+#[allow(dead_code)]
 pub(crate) fn filter_v_all_f16(
     intermediate: &[u16],
     output: &mut [f32],

@@ -132,7 +132,6 @@ pub struct Resizer<B: Background = NoBackground> {
     h_weights_f32: Option<F32WeightTable>,
     v_weights_f32: Option<F32WeightTable>,
     intermediate_u8: Vec<u8>,
-    intermediate_f32: Vec<f32>,
     intermediate_f16: Vec<u16>,
     intermediate_i16: Vec<i16>,
     linearized_row: Vec<i16>,
@@ -233,7 +232,7 @@ impl<B: Background> Resizer<B> {
                 h_weights_f32: Some(h_weights),
                 v_weights_f32: Some(v_weights),
                 intermediate_u8: Vec::new(),
-                intermediate_f32: Vec::new(),
+
                 intermediate_f16: vec![0u16; h_row_len * in_h],
                 intermediate_i16: Vec::new(),
                 linearized_row: Vec::new(),
@@ -260,7 +259,7 @@ impl<B: Background> Resizer<B> {
                 h_weights_f32: Some(h_weights),
                 v_weights_f32: Some(v_weights),
                 intermediate_u8: Vec::new(),
-                intermediate_f32: Vec::new(),
+
                 intermediate_f16: vec![0u16; h_row_len * in_h],
                 intermediate_i16: Vec::new(),
                 linearized_row: Vec::new(),
@@ -294,7 +293,7 @@ impl<B: Background> Resizer<B> {
                 h_weights_f32: None,
                 v_weights_f32: None,
                 intermediate_u8: intermediate,
-                intermediate_f32: Vec::new(),
+
                 intermediate_f16: Vec::new(),
                 intermediate_i16: Vec::new(),
                 linearized_row: Vec::new(),
@@ -319,7 +318,7 @@ impl<B: Background> Resizer<B> {
                 h_weights_f32: None,
                 v_weights_f32: None,
                 intermediate_u8: Vec::new(),
-                intermediate_f32: Vec::new(),
+
                 intermediate_f16: Vec::new(),
                 intermediate_i16: vec![0i16; h_row_len * in_h],
                 linearized_row: vec![0i16; in_row_len + h_padding],
@@ -344,7 +343,7 @@ impl<B: Background> Resizer<B> {
                 h_weights_f32: Some(h_weights),
                 v_weights_f32: Some(v_weights),
                 intermediate_u8: Vec::new(),
-                intermediate_f32: Vec::new(),
+
                 intermediate_f16: vec![0u16; h_row_len * in_h],
                 intermediate_i16: Vec::new(),
                 linearized_row: Vec::new(),
