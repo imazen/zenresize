@@ -414,15 +414,18 @@ fn golden_streaming_matches_fullframe_path2() {
     let fullframe = Resizer::new(&config).resize(&input);
     let streaming = streaming_resize_u8(&config, &input);
 
-    // Streaming uses f32 path always, so it matches path 2 exactly
+    // Both paths use f16 intermediates but at different stages (H-first vs V-first),
+    // so f16 quantization produces small differences (typically ≤1 u8 LSB).
     assert_eq!(fullframe.len(), streaming.len());
-    assert_eq!(
-        fullframe,
-        streaming,
-        "Streaming vs fullframe mismatch! hash_ff={}, hash_st={}",
-        hash_bytes(&fullframe),
-        hash_bytes(&streaming),
-    );
+    for (i, (&a, &b)) in fullframe.iter().zip(streaming.iter()).enumerate() {
+        assert!(
+            (a as i16 - b as i16).unsigned_abs() <= 1,
+            "mismatch at element {}: fullframe={}, streaming={}",
+            i,
+            a,
+            b
+        );
+    }
 }
 
 // ============================================================================
