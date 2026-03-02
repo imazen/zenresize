@@ -25,7 +25,7 @@ unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512",
 archmage = { version = "0.8.4", default-features = false, features = ["macros"] }
 zenlayout = { version = "0.1", path = "../zenlayout", default-features = false, optional = true }
 linear-srgb = { version = "0.5.5", default-features = false }
-safe_unaligned_simd = "0.2.4"
+safe_unaligned_simd = "0.2.5"
 wide = { version = "1.1", default-features = false }
 imgref = "1.12"
 rgb = { version = "0.8", default-features = false }
@@ -81,6 +81,10 @@ harness = false
 
 [[bench]]
 name = "profile_f16"
+harness = false
+
+[[bench]]
+name = "planar_bench"
 harness = false
 
 
