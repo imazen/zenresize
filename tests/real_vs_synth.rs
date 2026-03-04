@@ -3,7 +3,7 @@
 //!
 //! cargo test --release --test real_vs_synth -- --nocapture
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 struct TestImage {
@@ -85,7 +85,9 @@ fn bench_resize(img: &TestImage, out_w: u32, out_h: u32, iterations: usize) -> (
 
 #[test]
 fn real_vs_synth_comparison() {
-    let corpus = Path::new("/home/lilith/work/codec-corpus");
+    let corpus = PathBuf::from(
+        std::env::var("CODEC_CORPUS_DIR").unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
+    );
     let iterations = 30;
 
     let feature = if cfg!(feature = "unsafe_kernels") {

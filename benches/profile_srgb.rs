@@ -2,10 +2,18 @@
 //! Usage: cargo build --release --bench profile_srgb
 //!        valgrind --tool=callgrind target/release/deps/profile_srgb-*
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+fn codec_corpus_dir() -> PathBuf {
+    let dir = PathBuf::from(
+        std::env::var("CODEC_CORPUS_DIR").unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
+    );
+    assert!(dir.is_dir(), "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.", dir.display());
+    dir
+}
 
 fn main() {
-    let corpus = Path::new("/home/lilith/work/codec-corpus");
+    let corpus = codec_corpus_dir();
     let img = image::open(corpus.join(
         "clic2025-1024/02809272b4ca9b08af45771501b741296187c7e26907efb44abbbfcb6cd804f7.png",
     ))
