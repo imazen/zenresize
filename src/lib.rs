@@ -48,6 +48,7 @@ pub(crate) mod transfer;
 pub(crate) mod weights;
 pub(crate) mod working;
 
+pub(crate) mod fastmath;
 mod proven;
 mod simd;
 
