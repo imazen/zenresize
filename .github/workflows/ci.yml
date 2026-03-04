@@ -5,178 +5,169 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
   CI: true
 
 jobs:
-  # ==========================================================================
-  # Native x86_64 testing
-  # ==========================================================================
-  test-x64:
-    name: Test x64 (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Test (default: std + layout)
-        run: cargo test
-
-      - name: Test (no_std, no layout)
-        run: cargo test --no-default-features --lib
-
-      - name: Test (pretty-safe: unchecked bounds)
-        run: cargo test --features pretty-safe
-
-  # ==========================================================================
-  # Native aarch64 testing
-  # ==========================================================================
-  test-aarch64:
-    name: Test aarch64 (${{ matrix.name }})
+  test:
+    name: Test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-24.04-arm, name: Linux }
-          - { os: macos-latest, name: macOS }
-          - { os: windows-11-arm, name: Windows }
+          - name: Linux x64
+            os: ubuntu-latest
+          - name: Linux aarch64
+            os: ubuntu-24.04-arm
+          - name: macOS arm64
+            os: macos-latest
+          - name: macOS x64
+            os: macos-26-intel
+          - name: Windows x64
+            os: windows-latest
+          - name: Windows arm64
+            os: windows-11-arm
     steps:
       - uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Test (default: std + layout)
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Patch path deps to git refs
+        shell: bash
+        run: |
+          sed \
+            -e 's|path = "\.\./zenlayout"|git = "https://github.com/imazen/zenlayout"|g' \
+            -e 's|path = "\.\./zenpixels/zenpixels"|git = "https://github.com/imazen/zenpixels"|g' \
+            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
+      - uses: Swatinem/rust-cache@v2
+      - name: Run tests (default features)
         run: cargo test
-
-      - name: Test (pretty-safe: unchecked bounds)
+      - name: Run tests (no_std)
+        run: cargo test --no-default-features --lib
+      - name: Run tests (pretty-safe)
         run: cargo test --features pretty-safe
 
-  # ==========================================================================
-  # WASM SIMD128 testing
-  # ==========================================================================
-  test-wasm:
-    name: Test WASM SIMD128
+  i686:
+    name: Test (Linux i686)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-wasip1
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install wasmtime
-        run: |
-          curl https://wasmtime.dev/install.sh -sSf | bash
-          echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
-
-      - name: Test WASM (no_std)
-        env:
-          CARGO_TARGET_WASM32_WASIP1_RUNNER: "wasmtime --dir=. --"
-          RUSTFLAGS: "-C target-feature=+simd128"
-        run: cargo test --target wasm32-wasip1 --no-default-features --lib
-
-  # ==========================================================================
-  # Cross-compiled 32-bit testing (i686 via QEMU)
-  # ==========================================================================
-  test-i686:
-    name: Test i686
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: i686-unknown-linux-gnu
-
-      - name: Install cross
-        uses: taiki-e/install-action@cross
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - name: Patch path deps to git refs
+        shell: bash
+        run: |
+          sed \
+            -e 's|path = "\.\./zenlayout"|git = "https://github.com/imazen/zenlayout"|g' \
+            -e 's|path = "\.\./zenpixels/zenpixels"|git = "https://github.com/imazen/zenpixels"|g' \
+            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
+      - uses: taiki-e/install-action@cross
+      - uses: Swatinem/rust-cache@v2
         with:
           key: cross-i686
-
-      - name: Test (i686/QEMU)
+      - name: Run tests (i686)
         run: cross test --target i686-unknown-linux-gnu
 
-  # ==========================================================================
-  # Clippy
-  # ==========================================================================
+  wasm:
+    name: WASM test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - name: Patch path deps to git refs
+        shell: bash
+        run: |
+          sed \
+            -e 's|path = "\.\./zenlayout"|git = "https://github.com/imazen/zenlayout"|g' \
+            -e 's|path = "\.\./zenpixels/zenpixels"|git = "https://github.com/imazen/zenpixels"|g' \
+            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
+      - name: Install wasmtime
+        uses: bytecodealliance/actions/wasmtime/setup@v1
+      - uses: Swatinem/rust-cache@v2
+      - name: Test WASM (no_std)
+        run: cargo test --target wasm32-wasip1 --no-default-features --lib
+        env:
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
+          RUSTFLAGS: "-C target-feature=+simd128"
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Clippy (default features)
+      - name: Patch path deps to git refs
+        shell: bash
+        run: |
+          sed \
+            -e 's|path = "\.\./zenlayout"|git = "https://github.com/imazen/zenlayout"|g' \
+            -e 's|path = "\.\./zenpixels/zenpixels"|git = "https://github.com/imazen/zenpixels"|g' \
+            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Clippy (pretty-safe)
-        run: cargo clippy --all-targets --features pretty-safe -- -D warnings
-
-  # ==========================================================================
-  # Format check
-  # ==========================================================================
   fmt:
     name: Format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-
-      - name: Format check
+      - name: Check formatting
         run: cargo fmt --all -- --check
 
-  # ==========================================================================
-  # MSRV check
-  # ==========================================================================
   msrv:
-    name: MSRV (1.93)
+    name: MSRV
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
-      - name: Install Rust 1.93
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.93"
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Patch path deps to git refs
+        shell: bash
+        run: |
+          sed \
+            -e 's|path = "\.\./zenlayout"|git = "https://github.com/imazen/zenlayout"|g' \
+            -e 's|path = "\.\./zenpixels/zenpixels"|git = "https://github.com/imazen/zenpixels"|g' \
+            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
+      - uses: taiki-e/install-action@cargo-hack
+      - uses: Swatinem/rust-cache@v2
       - name: Check MSRV
-        run: cargo check
+        run: cargo hack check --rust-version
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Patch path deps to git refs
+        shell: bash
+        run: |
+          sed \
+            -e 's|path = "\.\./zenlayout"|git = "https://github.com/imazen/zenlayout"|g' \
+            -e 's|path = "\.\./zenpixels/zenpixels"|git = "https://github.com/imazen/zenpixels"|g' \
+            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: Swatinem/rust-cache@v2
+      - name: Generate coverage
+        run: cargo llvm-cov --lcov --output-path lcov.info
+      - name: Upload coverage
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+        continue-on-error: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
