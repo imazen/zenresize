@@ -27,16 +27,14 @@ fn main() {
     // === zenresize f32 output ===
     let config_f32 = zenresize::ResizeConfig::builder(w, h, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::LinearF32(
-            zenresize::PixelLayout::Rgbx,
-        ))
+        .format(zenresize::PixelDescriptor::RGBAF32_LINEAR.with_alpha(Some(zenresize::AlphaMode::Undefined)))
         .build();
     let zen_f32 = zenresize::Resizer::new(&config_f32).resize_f32(&f32_rgba);
 
     // === zenresize linear u8→u8 ===
     let config_linear = zenresize::ResizeConfig::builder(w, h, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgbx))
+        .format(zenresize::PixelDescriptor::RGBX8_SRGB)
         .linear()
         .build();
     let zen_linear_u8 = zenresize::Resizer::new(&config_linear).resize(&rgba);
@@ -44,7 +42,7 @@ fn main() {
     // === zenresize sRGB u8→u8 ===
     let config_srgb = zenresize::ResizeConfig::builder(w, h, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgbx))
+        .format(zenresize::PixelDescriptor::RGBX8_SRGB)
         .srgb()
         .build();
     let zen_srgb_u8 = zenresize::Resizer::new(&config_srgb).resize(&rgba);

@@ -24,7 +24,7 @@ fn make_gradient(w: u32, h: u32) -> Vec<u8> {
 fn bench_srgb(rgba: &[u8], w: u32, h: u32, out_w: u32, out_h: u32, iters: usize) -> (f64, f64) {
     let config = zenresize::ResizeConfig::builder(w, h, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgba))
+        .format(zenresize::PixelDescriptor::RGBA8_SRGB)
         .srgb()
         .build();
 

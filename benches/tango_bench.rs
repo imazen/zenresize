@@ -57,7 +57,7 @@ fn zen_benchmarks() -> impl IntoBenchmarks {
             b.iter(move || {
                 let config = zenresize::ResizeConfig::builder(img.width, img.height, 512, 512)
                     .filter(zenresize::Filter::Lanczos)
-                    .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgbx))
+                    .format(zenresize::PixelDescriptor::RGBX8_SRGB)
                     .srgb()
                     .build();
                 black_box(zenresize::Resizer::new(&config).resize(&img.rgba))
@@ -69,7 +69,7 @@ fn zen_benchmarks() -> impl IntoBenchmarks {
             b.iter(move || {
                 let config = zenresize::ResizeConfig::builder(img.width, img.height, 288, 288)
                     .filter(zenresize::Filter::Lanczos)
-                    .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgbx))
+                    .format(zenresize::PixelDescriptor::RGBX8_SRGB)
                     .srgb()
                     .build();
                 black_box(zenresize::Resizer::new(&config).resize(&img.rgba))
@@ -81,7 +81,7 @@ fn zen_benchmarks() -> impl IntoBenchmarks {
             b.iter(move || {
                 let config = zenresize::ResizeConfig::builder(img.width, img.height, 512, 512)
                     .filter(zenresize::Filter::Lanczos)
-                    .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgba))
+                    .format(zenresize::PixelDescriptor::RGBA8_SRGB)
                     .linear()
                     .build();
                 black_box(zenresize::Resizer::new(&config).resize(&img.rgba))
@@ -93,7 +93,7 @@ fn zen_benchmarks() -> impl IntoBenchmarks {
             b.iter(move || {
                 let config = zenresize::ResizeConfig::builder(img.width, img.height, 512, 512)
                     .filter(zenresize::Filter::Lanczos)
-                    .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgbx))
+                    .format(zenresize::PixelDescriptor::RGBX8_SRGB)
                     .srgb()
                     .build();
                 black_box(zenresize::Resizer::new(&config).resize(&img.rgba))
@@ -104,7 +104,7 @@ fn zen_benchmarks() -> impl IntoBenchmarks {
             let img = test_image(1024, 1024);
             let config = zenresize::ResizeConfig::builder(img.width, img.height, 512, 512)
                 .filter(zenresize::Filter::Lanczos)
-                .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgbx))
+                .format(zenresize::PixelDescriptor::RGBX8_SRGB)
                 .srgb()
                 .build();
             let mut resizer = zenresize::Resizer::new(&config);

@@ -1,17 +1,16 @@
 //! Cross-format resize test matrix.
 //!
-//! Tests all 9 format pairs {Srgb8, LinearF32, Encoded16} × {Srgb8, LinearF32, Encoded16}
-//! with both transfer functions {Srgb, None} on input and output (where applicable).
+//! Tests all 9 format pairs {RGBA8_SRGB, RGBAF32_LINEAR, RGBA16_SRGB} × same
+//! with both transfer functions {Srgb, Linear} on input and output (where applicable).
 
 use zenresize::{
-    Filter, PixelFormat, PixelLayout, ResizeConfig, Resizer, StreamingResize, Transfer,
+    ChannelType, Filter, PixelDescriptor, ResizeConfig, Resizer, StreamingResize, TransferFunction,
 };
 
 const IN_W: u32 = 40;
 const IN_H: u32 = 40;
 const OUT_W: u32 = 20;
 const OUT_H: u32 = 20;
-const LAYOUT: PixelLayout = PixelLayout::Rgba;
 const CH: usize = 4;
 
 // =============================================================================
@@ -59,7 +58,7 @@ fn make_u16_image(r: u16, g: u16, b: u16, a: u16) -> Vec<u16> {
 fn same_format_u8_srgb() {
     let config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Srgb8(LAYOUT))
+        .format(PixelDescriptor::RGBA8_SRGB)
         .linear()
         .build();
     let input = make_u8_image(128, 64, 32, 255);
@@ -89,7 +88,7 @@ fn same_format_u8_srgb() {
 fn same_format_f32_linear() {
     let config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::LinearF32(LAYOUT))
+        .format(PixelDescriptor::RGBAF32_LINEAR)
         .build();
     let input = make_f32_image(0.5, 0.3, 0.1, 1.0);
     let output = Resizer::new(&config).resize_f32(&input);
@@ -105,7 +104,7 @@ fn same_format_f32_linear() {
 fn same_format_u16_encoded() {
     let config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Encoded16(LAYOUT))
+        .format(PixelDescriptor::RGBA16_SRGB)
         .build();
     let input = make_u16_image(32768, 16384, 8192, 65535);
     let output = Resizer::new(&config).resize_u16(&input);
@@ -141,8 +140,8 @@ fn same_format_u16_encoded() {
 fn cross_u8_to_f32() {
     let config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .input_format(PixelFormat::Srgb8(LAYOUT))
-        .output_format(PixelFormat::LinearF32(LAYOUT))
+        .input(PixelDescriptor::RGBA8_SRGB)
+        .output(PixelDescriptor::RGBAF32_LINEAR)
         .linear()
         .build();
     let input = make_u8_image(128, 64, 32, 255);
@@ -159,8 +158,8 @@ fn cross_u8_to_f32() {
 fn cross_f32_to_u8() {
     let config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .input_format(PixelFormat::LinearF32(LAYOUT))
-        .output_format(PixelFormat::Srgb8(LAYOUT))
+        .input(PixelDescriptor::RGBAF32_LINEAR)
+        .output(PixelDescriptor::RGBA8_SRGB)
         .linear()
         .build();
     // 0.216 linear ≈ 128 sRGB, 0.0514 ≈ 64, 0.01444 ≈ 32
@@ -191,8 +190,8 @@ fn cross_f32_to_u8() {
 fn cross_u8_to_u16() {
     let config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .input_format(PixelFormat::Srgb8(LAYOUT))
-        .output_format(PixelFormat::Encoded16(LAYOUT))
+        .input(PixelDescriptor::RGBA8_SRGB)
+        .output(PixelDescriptor::RGBA16_SRGB)
         .linear()
         .build();
     let input = make_u8_image(128, 128, 128, 255);
@@ -217,8 +216,8 @@ fn cross_u8_to_u16() {
 fn cross_u16_to_u8() {
     let config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .input_format(PixelFormat::Encoded16(LAYOUT))
-        .output_format(PixelFormat::Srgb8(LAYOUT))
+        .input(PixelDescriptor::RGBA16_SRGB)
+        .output(PixelDescriptor::RGBA8_SRGB)
         .linear()
         .build();
     let input = make_u16_image(32768, 32768, 32768, 65535);
@@ -239,8 +238,8 @@ fn cross_u16_to_u8() {
 fn cross_u16_to_f32() {
     let config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .input_format(PixelFormat::Encoded16(LAYOUT))
-        .output_format(PixelFormat::LinearF32(LAYOUT))
+        .input(PixelDescriptor::RGBA16_SRGB)
+        .output(PixelDescriptor::RGBAF32_LINEAR)
         .build();
     let input = make_u16_image(32768, 0, 65535, 65535);
     let output = Resizer::new(&config).resize_u16_to_f32(&input);
@@ -258,8 +257,8 @@ fn cross_u16_to_f32() {
 fn cross_f32_to_u16() {
     let config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .input_format(PixelFormat::LinearF32(LAYOUT))
-        .output_format(PixelFormat::Encoded16(LAYOUT))
+        .input(PixelDescriptor::RGBAF32_LINEAR)
+        .output(PixelDescriptor::RGBA16_SRGB)
         .build();
     // 0.5 linear → ~0.735 sRGB → ~48163 u16
     let input = make_f32_image(0.5, 0.0, 1.0, 1.0);
@@ -289,7 +288,7 @@ fn roundtrip_u8_f32_u8() {
     // Direct u8 → u8
     let direct_config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Srgb8(LAYOUT))
+        .format(PixelDescriptor::RGBA8_SRGB)
         .linear()
         .build();
     let input = make_u8_image(200, 100, 50, 255);
@@ -298,8 +297,8 @@ fn roundtrip_u8_f32_u8() {
     // u8 → f32
     let to_f32_config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .input_format(PixelFormat::Srgb8(LAYOUT))
-        .output_format(PixelFormat::LinearF32(LAYOUT))
+        .input(PixelDescriptor::RGBA8_SRGB)
+        .output(PixelDescriptor::RGBAF32_LINEAR)
         .linear()
         .build();
     let f32_output = Resizer::new(&to_f32_config).resize_u8_to_f32(&input);
@@ -307,8 +306,8 @@ fn roundtrip_u8_f32_u8() {
     // f32 → u8 (identity resize, same dimensions)
     let to_u8_config = ResizeConfig::builder(OUT_W, OUT_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .input_format(PixelFormat::LinearF32(LAYOUT))
-        .output_format(PixelFormat::Srgb8(LAYOUT))
+        .input(PixelDescriptor::RGBAF32_LINEAR)
+        .output(PixelDescriptor::RGBA8_SRGB)
         .linear()
         .build();
     let roundtrip_output = Resizer::new(&to_u8_config).resize_f32_to_u8(&f32_output);
@@ -334,7 +333,7 @@ fn roundtrip_u8_u16_u8() {
     // Direct u8 → u8
     let direct_config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Srgb8(LAYOUT))
+        .format(PixelDescriptor::RGBA8_SRGB)
         .linear()
         .build();
     let input = make_u8_image(200, 100, 50, 255);
@@ -343,8 +342,8 @@ fn roundtrip_u8_u16_u8() {
     // u8 → u16
     let to_u16_config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .input_format(PixelFormat::Srgb8(LAYOUT))
-        .output_format(PixelFormat::Encoded16(LAYOUT))
+        .input(PixelDescriptor::RGBA8_SRGB)
+        .output(PixelDescriptor::RGBA16_SRGB)
         .linear()
         .build();
     let u16_output = Resizer::new(&to_u16_config).resize_u8_to_u16(&input);
@@ -352,8 +351,8 @@ fn roundtrip_u8_u16_u8() {
     // u16 → u8 (identity resize)
     let to_u8_config = ResizeConfig::builder(OUT_W, OUT_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .input_format(PixelFormat::Encoded16(LAYOUT))
-        .output_format(PixelFormat::Srgb8(LAYOUT))
+        .input(PixelDescriptor::RGBA16_SRGB)
+        .output(PixelDescriptor::RGBA8_SRGB)
         .linear()
         .build();
     let roundtrip_output = Resizer::new(&to_u8_config).resize_u16_to_u8(&u16_output);
@@ -383,10 +382,8 @@ fn tf_srgb_decode_linear_output() {
     // sRGB u8 → linear f32: sRGB decode, no output TF needed (f32 is always identity)
     let config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .input_format(PixelFormat::Srgb8(LAYOUT))
-        .output_format(PixelFormat::LinearF32(LAYOUT))
-        .input_transfer(Transfer::Srgb)
-        .output_transfer(Transfer::None)
+        .input(PixelDescriptor::RGBA8_SRGB)
+        .output(PixelDescriptor::RGBAF32_LINEAR)
         .build();
     let input = make_u8_image(128, 128, 128, 255);
     let output = Resizer::new(&config).resize_u8_to_f32(&input);
@@ -402,10 +399,8 @@ fn tf_linear_input_srgb_encode() {
     // linear f32 → sRGB u8: no input TF, sRGB encode
     let config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .input_format(PixelFormat::LinearF32(LAYOUT))
-        .output_format(PixelFormat::Srgb8(LAYOUT))
-        .input_transfer(Transfer::None)
-        .output_transfer(Transfer::Srgb)
+        .input(PixelDescriptor::RGBAF32_LINEAR)
+        .output(PixelDescriptor::RGBA8_SRGB)
         .build();
     // 0.216 linear → ~128 sRGB
     let input = make_f32_image(0.2158605, 0.2158605, 0.2158605, 1.0);
@@ -422,22 +417,19 @@ fn tf_linear_input_srgb_encode() {
 
 #[test]
 fn tf_none_decode_srgb_encode_shifts_brightness() {
-    // u8 with Transfer::None input → u8 with Transfer::Srgb output
+    // u8 with Linear transfer input → u8 with Srgb transfer output
     // This means: u8 values are treated as already-linear (just /255),
     // then sRGB-encoded on output. Should produce visibly different results
     // from a normal sRGB→sRGB resize.
     let config_none_srgb = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Srgb8(LAYOUT))
-        .input_transfer(Transfer::None)
-        .output_transfer(Transfer::Srgb)
+        .input(PixelDescriptor::RGBA8_SRGB.with_transfer(TransferFunction::Linear))
+        .output(PixelDescriptor::RGBA8_SRGB)
         .build();
 
     let config_srgb_srgb = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Srgb8(LAYOUT))
-        .input_transfer(Transfer::Srgb)
-        .output_transfer(Transfer::Srgb)
+        .format(PixelDescriptor::RGBA8_SRGB)
         .build();
 
     let input = make_u8_image(128, 128, 128, 255);
@@ -453,13 +445,11 @@ fn tf_none_decode_srgb_encode_shifts_brightness() {
 
 #[test]
 fn tf_u16_srgb_to_u8_srgb() {
-    // Encoded16(sRGB) → Srgb8(sRGB): just precision loss
+    // RGBA16_SRGB(sRGB) → RGBA8_SRGB(sRGB): just precision loss
     let config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .input_format(PixelFormat::Encoded16(LAYOUT))
-        .output_format(PixelFormat::Srgb8(LAYOUT))
-        .input_transfer(Transfer::Srgb)
-        .output_transfer(Transfer::Srgb)
+        .input(PixelDescriptor::RGBA16_SRGB)
+        .output(PixelDescriptor::RGBA8_SRGB)
         .build();
     // u16 32768 ≈ sRGB 128
     let input = make_u16_image(32768, 32768, 32768, 65535);
@@ -477,14 +467,12 @@ fn tf_u16_srgb_to_u8_srgb() {
 
 #[test]
 fn tf_u16_none_to_u8_none() {
-    // Encoded16 with Transfer::None → Srgb8 with Transfer::None
+    // RGBA16 with Linear transfer → RGBA8 with Linear transfer
     // Both sides are identity: u16 v/65535 → linear f32 → u8 clamp+round
     let config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .input_format(PixelFormat::Encoded16(LAYOUT))
-        .output_format(PixelFormat::Srgb8(LAYOUT))
-        .input_transfer(Transfer::None)
-        .output_transfer(Transfer::None)
+        .input(PixelDescriptor::RGBA16_SRGB.with_transfer(TransferFunction::Linear))
+        .output(PixelDescriptor::RGBA8_SRGB.with_transfer(TransferFunction::Linear))
         .build();
     // u16 32768 ≈ 0.5 → u8 128 (identity both ways)
     let input = make_u16_image(32768, 16384, 65535, 65535);
@@ -514,8 +502,8 @@ fn tf_u16_none_to_u8_none() {
 fn streaming_matches_fullframe_u8_to_f32() {
     let config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .input_format(PixelFormat::Srgb8(LAYOUT))
-        .output_format(PixelFormat::LinearF32(LAYOUT))
+        .input(PixelDescriptor::RGBA8_SRGB)
+        .output(PixelDescriptor::RGBAF32_LINEAR)
         .linear()
         .build();
 
@@ -557,8 +545,8 @@ fn streaming_matches_fullframe_u8_to_f32() {
 fn streaming_matches_fullframe_u16_to_u8() {
     let config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .input_format(PixelFormat::Encoded16(LAYOUT))
-        .output_format(PixelFormat::Srgb8(LAYOUT))
+        .input(PixelDescriptor::RGBA16_SRGB)
+        .output(PixelDescriptor::RGBA8_SRGB)
         .build();
 
     let input = make_u16_image(40000, 20000, 10000, 65535);
@@ -602,102 +590,78 @@ fn streaming_matches_fullframe_u16_to_u8() {
 
 #[test]
 fn all_9_pairs_smoke_test() {
-    let pairs: &[(PixelFormat, PixelFormat, &str)] = &[
-        (
-            PixelFormat::Srgb8(LAYOUT),
-            PixelFormat::Srgb8(LAYOUT),
-            "u8→u8",
-        ),
-        (
-            PixelFormat::Srgb8(LAYOUT),
-            PixelFormat::LinearF32(LAYOUT),
-            "u8→f32",
-        ),
-        (
-            PixelFormat::Srgb8(LAYOUT),
-            PixelFormat::Encoded16(LAYOUT),
-            "u8→u16",
-        ),
-        (
-            PixelFormat::LinearF32(LAYOUT),
-            PixelFormat::Srgb8(LAYOUT),
-            "f32→u8",
-        ),
-        (
-            PixelFormat::LinearF32(LAYOUT),
-            PixelFormat::LinearF32(LAYOUT),
-            "f32→f32",
-        ),
-        (
-            PixelFormat::LinearF32(LAYOUT),
-            PixelFormat::Encoded16(LAYOUT),
-            "f32→u16",
-        ),
-        (
-            PixelFormat::Encoded16(LAYOUT),
-            PixelFormat::Srgb8(LAYOUT),
-            "u16→u8",
-        ),
-        (
-            PixelFormat::Encoded16(LAYOUT),
-            PixelFormat::LinearF32(LAYOUT),
-            "u16→f32",
-        ),
-        (
-            PixelFormat::Encoded16(LAYOUT),
-            PixelFormat::Encoded16(LAYOUT),
-            "u16→u16",
-        ),
+    let pairs: &[(PixelDescriptor, PixelDescriptor, &str)] = &[
+        (PixelDescriptor::RGBA8_SRGB, PixelDescriptor::RGBA8_SRGB, "u8→u8"),
+        (PixelDescriptor::RGBA8_SRGB, PixelDescriptor::RGBAF32_LINEAR, "u8→f32"),
+        (PixelDescriptor::RGBA8_SRGB, PixelDescriptor::RGBA16_SRGB, "u8→u16"),
+        (PixelDescriptor::RGBAF32_LINEAR, PixelDescriptor::RGBA8_SRGB, "f32→u8"),
+        (PixelDescriptor::RGBAF32_LINEAR, PixelDescriptor::RGBAF32_LINEAR, "f32→f32"),
+        (PixelDescriptor::RGBAF32_LINEAR, PixelDescriptor::RGBA16_SRGB, "f32→u16"),
+        (PixelDescriptor::RGBA16_SRGB, PixelDescriptor::RGBA8_SRGB, "u16→u8"),
+        (PixelDescriptor::RGBA16_SRGB, PixelDescriptor::RGBAF32_LINEAR, "u16→f32"),
+        (PixelDescriptor::RGBA16_SRGB, PixelDescriptor::RGBA16_SRGB, "u16→u16"),
     ];
 
     for (in_fmt, out_fmt, label) in pairs {
         let config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
             .filter(Filter::Lanczos)
-            .input_format(*in_fmt)
-            .output_format(*out_fmt)
+            .input(*in_fmt)
+            .output(*out_fmt)
             .linear()
             .build();
         let mut resizer = Resizer::new(&config);
         let out_len = OUT_W as usize * OUT_H as usize * CH;
 
-        match (in_fmt.is_u8(), in_fmt.is_f32(), in_fmt.is_u16()) {
-            (true, _, _) => {
+        match in_fmt.channel_type() {
+            ChannelType::U8 => {
                 let input = make_u8_image(128, 128, 128, 255);
-                if out_fmt.is_u8() {
-                    let output = resizer.resize(&input);
-                    assert_eq!(output.len(), out_len, "{label}: wrong u8 output length");
-                } else if out_fmt.is_f32() {
-                    let output = resizer.resize_u8_to_f32(&input);
-                    assert_eq!(output.len(), out_len, "{label}: wrong f32 output length");
-                } else {
-                    let output = resizer.resize_u8_to_u16(&input);
-                    assert_eq!(output.len(), out_len, "{label}: wrong u16 output length");
+                match out_fmt.channel_type() {
+                    ChannelType::U8 => {
+                        let output = resizer.resize(&input);
+                        assert_eq!(output.len(), out_len, "{label}: wrong u8 output length");
+                    }
+                    ChannelType::F32 => {
+                        let output = resizer.resize_u8_to_f32(&input);
+                        assert_eq!(output.len(), out_len, "{label}: wrong f32 output length");
+                    }
+                    _ => {
+                        let output = resizer.resize_u8_to_u16(&input);
+                        assert_eq!(output.len(), out_len, "{label}: wrong u16 output length");
+                    }
                 }
             }
-            (_, true, _) => {
+            ChannelType::F32 => {
                 let input = make_f32_image(0.5, 0.5, 0.5, 1.0);
-                if out_fmt.is_u8() {
-                    let output = resizer.resize_f32_to_u8(&input);
-                    assert_eq!(output.len(), out_len, "{label}: wrong u8 output length");
-                } else if out_fmt.is_f32() {
-                    let output = resizer.resize_f32(&input);
-                    assert_eq!(output.len(), out_len, "{label}: wrong f32 output length");
-                } else {
-                    let output = resizer.resize_f32_to_u16(&input);
-                    assert_eq!(output.len(), out_len, "{label}: wrong u16 output length");
+                match out_fmt.channel_type() {
+                    ChannelType::U8 => {
+                        let output = resizer.resize_f32_to_u8(&input);
+                        assert_eq!(output.len(), out_len, "{label}: wrong u8 output length");
+                    }
+                    ChannelType::F32 => {
+                        let output = resizer.resize_f32(&input);
+                        assert_eq!(output.len(), out_len, "{label}: wrong f32 output length");
+                    }
+                    _ => {
+                        let output = resizer.resize_f32_to_u16(&input);
+                        assert_eq!(output.len(), out_len, "{label}: wrong u16 output length");
+                    }
                 }
             }
-            (_, _, true) => {
+            ChannelType::U16 => {
                 let input = make_u16_image(32768, 32768, 32768, 65535);
-                if out_fmt.is_u8() {
-                    let output = resizer.resize_u16_to_u8(&input);
-                    assert_eq!(output.len(), out_len, "{label}: wrong u8 output length");
-                } else if out_fmt.is_f32() {
-                    let output = resizer.resize_u16_to_f32(&input);
-                    assert_eq!(output.len(), out_len, "{label}: wrong f32 output length");
-                } else {
-                    let output = resizer.resize_u16(&input);
-                    assert_eq!(output.len(), out_len, "{label}: wrong u16 output length");
+                match out_fmt.channel_type() {
+                    ChannelType::U8 => {
+                        let output = resizer.resize_u16_to_u8(&input);
+                        assert_eq!(output.len(), out_len, "{label}: wrong u8 output length");
+                    }
+                    ChannelType::F32 => {
+                        let output = resizer.resize_u16_to_f32(&input);
+                        assert_eq!(output.len(), out_len, "{label}: wrong f32 output length");
+                    }
+                    _ => {
+                        let output = resizer.resize_u16(&input);
+                        assert_eq!(output.len(), out_len, "{label}: wrong u16 output length");
+                    }
                 }
             }
             _ => unreachable!(),
@@ -706,20 +670,19 @@ fn all_9_pairs_smoke_test() {
 }
 
 // =============================================================================
-// 7. Transfer function matrix (Srgb × None on input/output)
+// 7. Transfer function matrix (Srgb × Linear on input/output)
 // =============================================================================
 
 #[test]
 fn transfer_matrix_u8_to_u8() {
-    let tfs = [(Transfer::Srgb, "Srgb"), (Transfer::None, "None")];
+    let tfs = [(TransferFunction::Srgb, "Srgb"), (TransferFunction::Linear, "Linear")];
 
     for (in_tf, in_name) in &tfs {
         for (out_tf, out_name) in &tfs {
             let config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
                 .filter(Filter::Lanczos)
-                .format(PixelFormat::Srgb8(LAYOUT))
-                .input_transfer(*in_tf)
-                .output_transfer(*out_tf)
+                .input(PixelDescriptor::RGBA8_SRGB.with_transfer(*in_tf))
+                .output(PixelDescriptor::RGBA8_SRGB.with_transfer(*out_tf))
                 .build();
             let input = make_u8_image(128, 128, 128, 255);
             let output = Resizer::new(&config).resize(&input);
@@ -746,15 +709,14 @@ fn transfer_matrix_u8_to_u8() {
 
 #[test]
 fn transfer_matrix_u16_to_u16() {
-    let tfs = [(Transfer::Srgb, "Srgb"), (Transfer::None, "None")];
+    let tfs = [(TransferFunction::Srgb, "Srgb"), (TransferFunction::Linear, "Linear")];
 
     for (in_tf, in_name) in &tfs {
         for (out_tf, out_name) in &tfs {
             let config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
                 .filter(Filter::Lanczos)
-                .format(PixelFormat::Encoded16(LAYOUT))
-                .input_transfer(*in_tf)
-                .output_transfer(*out_tf)
+                .input(PixelDescriptor::RGBA16_SRGB.with_transfer(*in_tf))
+                .output(PixelDescriptor::RGBA16_SRGB.with_transfer(*out_tf))
                 .build();
             let input = make_u16_image(32768, 32768, 32768, 65535);
             let output = Resizer::new(&config).resize_u16(&input);
@@ -787,8 +749,8 @@ fn transfer_matrix_u16_to_u16() {
 fn into_matches_alloc_u8_to_f32() {
     let config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .input_format(PixelFormat::Srgb8(LAYOUT))
-        .output_format(PixelFormat::LinearF32(LAYOUT))
+        .input(PixelDescriptor::RGBA8_SRGB)
+        .output(PixelDescriptor::RGBAF32_LINEAR)
         .linear()
         .build();
     let input = make_u8_image(128, 64, 32, 255);
@@ -804,8 +766,8 @@ fn into_matches_alloc_u8_to_f32() {
 fn into_matches_alloc_f32_to_u8() {
     let config = ResizeConfig::builder(IN_W, IN_H, OUT_W, OUT_H)
         .filter(Filter::Lanczos)
-        .input_format(PixelFormat::LinearF32(LAYOUT))
-        .output_format(PixelFormat::Srgb8(LAYOUT))
+        .input(PixelDescriptor::RGBAF32_LINEAR)
+        .output(PixelDescriptor::RGBA8_SRGB)
         .linear()
         .build();
     let input = make_f32_image(0.5, 0.3, 0.1, 1.0);

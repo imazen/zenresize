@@ -24,7 +24,7 @@ fn make_gradient(w: u32, h: u32) -> Vec<u8> {
 fn resize_srgb(rgba: &[u8], w: u32, h: u32, out_w: u32, out_h: u32) -> (Vec<u8>, f64) {
     let config = zenresize::ResizeConfig::builder(w, h, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgba))
+        .format(zenresize::PixelDescriptor::RGBA8_SRGB)
         .srgb()
         .build();
     let start = Instant::now();
@@ -36,7 +36,7 @@ fn resize_srgb(rgba: &[u8], w: u32, h: u32, out_w: u32, out_h: u32) -> (Vec<u8>,
 fn resize_linear(rgba: &[u8], w: u32, h: u32, out_w: u32, out_h: u32) -> (Vec<u8>, f64) {
     let config = zenresize::ResizeConfig::builder(w, h, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgba))
+        .format(zenresize::PixelDescriptor::RGBA8_SRGB)
         .linear()
         .build();
     let start = Instant::now();
@@ -165,7 +165,7 @@ fn stress_odd_dimensions() {
         let rgba = make_gradient(in_w, in_h);
         let config = zenresize::ResizeConfig::builder(in_w, in_h, out_w, out_h)
             .filter(zenresize::Filter::Lanczos)
-            .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgba))
+            .format(zenresize::PixelDescriptor::RGBA8_SRGB)
             .srgb()
             .build();
         let result = zenresize::Resizer::new(&config).resize(&rgba);

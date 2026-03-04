@@ -7,7 +7,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use zenresize::{Filter, PixelFormat, PixelLayout, ResizeConfig, Resizer, StreamingResize};
+use zenresize::{Filter, PixelDescriptor, ResizeConfig, Resizer, StreamingResize};
 
 fn hash_bytes(data: &[u8]) -> u64 {
     let mut hasher = DefaultHasher::new();
@@ -202,14 +202,14 @@ fn check_golden_f32(name: &str, data: &[f32]) {
 
 // ============================================================================
 // Path 0: sRGB i16 fast path (no linearization, 4ch, no premul)
-// Config: Srgb8(Rgba), srgb mode → 4ch opaque triggers batch path
+// Config: RGBA8_SRGB, srgb mode → 4ch opaque triggers batch path
 // ============================================================================
 
 #[test]
 fn golden_path0_srgb_i16_downscale() {
     let config = ResizeConfig::builder(100, 100, 50, 50)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+        .format(PixelDescriptor::RGBA8_SRGB)
         .srgb()
         .build();
     let input = make_rgba_gradient(100, 100);
@@ -221,7 +221,7 @@ fn golden_path0_srgb_i16_downscale() {
 fn golden_path0_srgb_i16_upscale() {
     let config = ResizeConfig::builder(50, 50, 100, 100)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+        .format(PixelDescriptor::RGBA8_SRGB)
         .srgb()
         .build();
     let input = make_rgba_gradient(50, 50);
@@ -233,7 +233,7 @@ fn golden_path0_srgb_i16_upscale() {
 fn golden_path0_srgb_i16_identity() {
     let config = ResizeConfig::builder(32, 32, 32, 32)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+        .format(PixelDescriptor::RGBA8_SRGB)
         .srgb()
         .build();
     let input = make_rgba_gradient(32, 32);
@@ -246,7 +246,7 @@ fn golden_path0_with_alpha() {
     // Rgba with varying alpha in sRGB mode — needs premul so may take different subpath
     let config = ResizeConfig::builder(80, 60, 40, 30)
         .filter(Filter::Robidoux)
-        .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+        .format(PixelDescriptor::RGBA8_SRGB)
         .srgb()
         .build();
     let input = make_rgba_alpha_gradient(80, 60);
@@ -262,7 +262,7 @@ fn golden_path0_with_alpha() {
 fn golden_path1_linear_i16_downscale() {
     let config = ResizeConfig::builder(100, 100, 50, 50)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
+        .format(PixelDescriptor::RGBX8_SRGB)
         .linear()
         .build();
     let input = make_rgbx_gradient(100, 100);
@@ -274,7 +274,7 @@ fn golden_path1_linear_i16_downscale() {
 fn golden_path1_linear_i16_upscale() {
     let config = ResizeConfig::builder(40, 40, 80, 80)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
+        .format(PixelDescriptor::RGBX8_SRGB)
         .linear()
         .build();
     let input = make_rgbx_gradient(40, 40);
@@ -290,7 +290,7 @@ fn golden_path1_linear_i16_upscale() {
 fn golden_path2_f32_u8io_downscale() {
     let config = ResizeConfig::builder(100, 100, 50, 50)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+        .format(PixelDescriptor::RGBA8_SRGB)
         .linear()
         .build();
     let input = make_rgba_gradient(100, 100);
@@ -302,7 +302,7 @@ fn golden_path2_f32_u8io_downscale() {
 fn golden_path2_f32_u8io_upscale() {
     let config = ResizeConfig::builder(50, 50, 100, 100)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+        .format(PixelDescriptor::RGBA8_SRGB)
         .linear()
         .build();
     let input = make_rgba_gradient(50, 50);
@@ -314,7 +314,7 @@ fn golden_path2_f32_u8io_upscale() {
 fn golden_path2_with_alpha() {
     let config = ResizeConfig::builder(80, 60, 40, 30)
         .filter(Filter::Robidoux)
-        .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+        .format(PixelDescriptor::RGBA8_SRGB)
         .linear()
         .build();
     let input = make_rgba_alpha_gradient(80, 60);
@@ -330,7 +330,7 @@ fn golden_path2_with_alpha() {
 fn golden_gray_downscale() {
     let config = ResizeConfig::builder(100, 100, 50, 50)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Srgb8(PixelLayout::Gray))
+        .format(PixelDescriptor::GRAY8_SRGB)
         .linear()
         .build();
     let input = make_gray_gradient(100, 100);
@@ -342,7 +342,7 @@ fn golden_gray_downscale() {
 fn golden_rgb_downscale() {
     let config = ResizeConfig::builder(100, 100, 50, 50)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Srgb8(PixelLayout::Rgb))
+        .format(PixelDescriptor::RGB8_SRGB)
         .linear()
         .build();
     let input = make_rgb_gradient(100, 100);
@@ -358,7 +358,7 @@ fn golden_rgb_downscale() {
 fn golden_path3_f32_native_downscale() {
     let config = ResizeConfig::builder(100, 100, 50, 50)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::LinearF32(PixelLayout::Rgba))
+        .format(PixelDescriptor::RGBAF32_LINEAR)
         .build();
     let input = make_f32_gradient(100, 100);
     let output = Resizer::new(&config).resize_f32(&input);
@@ -369,7 +369,7 @@ fn golden_path3_f32_native_downscale() {
 fn golden_path3_f32_native_upscale() {
     let config = ResizeConfig::builder(40, 40, 80, 80)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::LinearF32(PixelLayout::Rgba))
+        .format(PixelDescriptor::RGBAF32_LINEAR)
         .build();
     let input = make_f32_gradient(40, 40);
     let output = Resizer::new(&config).resize_f32(&input);
@@ -382,7 +382,7 @@ fn golden_path3_f32_native_upscale() {
 
 fn streaming_resize_u8(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
     let in_w = config.in_width as usize;
-    let channels = config.input_format.channels() as usize;
+    let channels = config.input.channels() as usize;
     let row_len = in_w * channels;
     let in_h = config.in_height as usize;
 
@@ -406,7 +406,7 @@ fn streaming_resize_u8(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
 fn golden_streaming_matches_fullframe_path2() {
     let config = ResizeConfig::builder(100, 100, 50, 50)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+        .format(PixelDescriptor::RGBA8_SRGB)
         .linear()
         .build();
     let input = make_rgba_gradient(100, 100);
@@ -448,7 +448,7 @@ fn golden_filters() {
     for (filter, name) in &filters {
         let config = ResizeConfig::builder(80, 60, 40, 30)
             .filter(*filter)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .format(PixelDescriptor::RGBA8_SRGB)
             .linear()
             .build();
         let output = Resizer::new(&config).resize(&input);
@@ -464,7 +464,7 @@ fn golden_filters() {
 fn golden_u16_rgba_downscale() {
     let config = ResizeConfig::builder(100, 100, 50, 50)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Encoded16(PixelLayout::Rgba))
+        .format(PixelDescriptor::RGBA16_SRGB)
         .build();
     let input = make_u16_rgba_gradient(100, 100);
     let output = Resizer::new(&config).resize_u16(&input);
@@ -476,7 +476,7 @@ fn golden_u16_rgba_downscale() {
 fn golden_u16_rgba_upscale() {
     let config = ResizeConfig::builder(50, 50, 100, 100)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Encoded16(PixelLayout::Rgba))
+        .format(PixelDescriptor::RGBA16_SRGB)
         .build();
     let input = make_u16_rgba_gradient(50, 50);
     let output = Resizer::new(&config).resize_u16(&input);
@@ -488,7 +488,7 @@ fn golden_u16_rgba_upscale() {
 fn golden_u16_rgb_downscale() {
     let config = ResizeConfig::builder(100, 100, 50, 50)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Encoded16(PixelLayout::Rgb))
+        .format(PixelDescriptor::RGB16_SRGB)
         .build();
     let input = make_u16_rgb_gradient(100, 100);
     let output = Resizer::new(&config).resize_u16(&input);
@@ -500,7 +500,7 @@ fn golden_u16_rgb_downscale() {
 fn golden_u16_gray_downscale() {
     let config = ResizeConfig::builder(100, 100, 50, 50)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Encoded16(PixelLayout::Gray))
+        .format(PixelDescriptor::GRAY16_SRGB)
         .build();
     let input = make_u16_gray_gradient(100, 100);
     let output = Resizer::new(&config).resize_u16(&input);
@@ -516,7 +516,7 @@ fn golden_u16_gray_downscale() {
 fn golden_nonsquare() {
     let config = ResizeConfig::builder(200, 50, 40, 100)
         .filter(Filter::Lanczos)
-        .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+        .format(PixelDescriptor::RGBA8_SRGB)
         .linear()
         .build();
     let input = make_rgba_gradient(200, 50);

@@ -56,7 +56,7 @@ fn load_image(path: &Path, name: &'static str) -> Option<TestImage> {
 fn bench_resize(img: &TestImage, out_w: u32, out_h: u32, iterations: usize) -> (f64, f64) {
     let config = zenresize::ResizeConfig::builder(img.width, img.height, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgba))
+        .format(zenresize::PixelDescriptor::RGBA8_SRGB)
         .srgb()
         .build();
 

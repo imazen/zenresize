@@ -16,7 +16,7 @@ fn main() {
 
     let config = zenresize::ResizeConfig::builder(w, h, w / 2, h / 2)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgbx))
+        .format(zenresize::PixelDescriptor::RGBX8_SRGB)
         .srgb()
         .build();
 

@@ -7,7 +7,7 @@
 //!   4. 1 full + 2 half-size planes via PlaneResizer (i16 1ch, simulates 4:2:0)
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use zenresize::{Filter, PixelFormat, PixelLayout, PlaneResizer, ResizeConfig, Resizer};
+use zenresize::{AlphaMode, Filter, PixelDescriptor, PlaneResizer, ResizeConfig, Resizer};
 
 // ---------------------------------------------------------------------------
 // Test dimensions: (width, height, label)
@@ -44,7 +44,7 @@ fn planar_vs_interleaved(c: &mut Criterion) {
             let mut output = vec![0u8; (out_w as usize) * (out_h as usize) * 4];
             let config = ResizeConfig::builder(w, h, out_w, out_h)
                 .filter(FILTER)
-                .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
+                .format(PixelDescriptor::RGBX8_SRGB)
                 .srgb()
                 .build();
             let mut resizer = Resizer::new(&config);
@@ -60,7 +60,7 @@ fn planar_vs_interleaved(c: &mut Criterion) {
             let mut output = vec![0u8; (out_w as usize) * (out_h as usize) * 4];
             let config = ResizeConfig::builder(w, h, out_w, out_h)
                 .filter(FILTER)
-                .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+                .format(PixelDescriptor::RGBA8_SRGB)
                 .srgb()
                 .build();
             let mut resizer = Resizer::new(&config);
@@ -148,7 +148,7 @@ fn f32_planar_vs_interleaved(c: &mut Criterion) {
             let mut output = vec![0.0f32; (out_w as usize) * (out_h as usize) * 4];
             let config = ResizeConfig::builder(w, h, out_w, out_h)
                 .filter(FILTER)
-                .format(PixelFormat::LinearF32(PixelLayout::Rgbx))
+                .format(PixelDescriptor::RGBAF32_LINEAR.with_alpha(Some(AlphaMode::Undefined)))
                 .build();
             let mut resizer = Resizer::new(&config);
 
@@ -165,7 +165,7 @@ fn f32_planar_vs_interleaved(c: &mut Criterion) {
             let mut outputs = [pout.clone(), pout.clone(), pout.clone()];
             let config = ResizeConfig::builder(w, h, out_w, out_h)
                 .filter(FILTER)
-                .format(PixelFormat::LinearF32(PixelLayout::Gray))
+                .format(PixelDescriptor::GRAYF32_LINEAR)
                 .build();
             let mut resizer = Resizer::new(&config);
 
@@ -194,11 +194,11 @@ fn f32_planar_vs_interleaved(c: &mut Criterion) {
 
             let full_config = ResizeConfig::builder(w, h, out_w, out_h)
                 .filter(FILTER)
-                .format(PixelFormat::LinearF32(PixelLayout::Gray))
+                .format(PixelDescriptor::GRAYF32_LINEAR)
                 .build();
             let half_config = ResizeConfig::builder(half_w, half_h, out_half_w, out_half_h)
                 .filter(FILTER)
-                .format(PixelFormat::LinearF32(PixelLayout::Gray))
+                .format(PixelDescriptor::GRAYF32_LINEAR)
                 .build();
             let mut full_resizer = Resizer::new(&full_config);
             let mut half_resizer = Resizer::new(&half_config);

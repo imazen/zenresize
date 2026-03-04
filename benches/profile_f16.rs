@@ -35,7 +35,7 @@ fn main() {
 
         let config = zenresize::ResizeConfig::builder(in_w, in_h, out_w, out_h)
             .filter(zenresize::Filter::Lanczos)
-            .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgba))
+            .format(zenresize::PixelDescriptor::RGBA8_SRGB)
             .linear()
             .build();
 

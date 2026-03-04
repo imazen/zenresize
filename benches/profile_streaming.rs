@@ -27,7 +27,7 @@ fn main() {
     // --- Streaming resize (batch=8) ---
     let config = zenresize::ResizeConfig::builder(in_w, in_h, out_w, out_h)
         .filter(zenresize::Filter::Robidoux)
-        .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgb))
+        .format(zenresize::PixelDescriptor::RGB8_SRGB)
         .linear()
         .build();
 
@@ -74,7 +74,7 @@ fn main() {
     let in_row_len4 = in_w as usize * channels4;
     let config_i16_srgb = zenresize::ResizeConfig::builder(in_w, in_h, out_w, out_h)
         .filter(zenresize::Filter::Robidoux)
-        .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgba))
+        .format(zenresize::PixelDescriptor::RGBA8_SRGB)
         .srgb()
         .build();
 
@@ -114,7 +114,7 @@ fn main() {
     // --- I16Linear path: RGBA (Rgbx), linearized ---
     let config_i16_linear = zenresize::ResizeConfig::builder(in_w, in_h, out_w, out_h)
         .filter(zenresize::Filter::Robidoux)
-        .format(zenresize::PixelFormat::Srgb8(zenresize::PixelLayout::Rgba))
+        .format(zenresize::PixelDescriptor::RGBA8_SRGB)
         .linear()
         .build();
 
