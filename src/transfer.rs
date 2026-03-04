@@ -1583,40 +1583,20 @@ mod tests {
 
     #[test]
     fn cicp_transfer_known_codes() {
-        use crate::pixel::Transfer;
-        assert_eq!(Transfer::from_cicp_transfer(1), Some(Transfer::Bt709));
-        assert_eq!(Transfer::from_cicp_transfer(6), Some(Transfer::Bt709));
-        assert_eq!(Transfer::from_cicp_transfer(8), Some(Transfer::None));
-        assert_eq!(Transfer::from_cicp_transfer(13), Some(Transfer::Srgb));
-        assert_eq!(Transfer::from_cicp_transfer(16), Some(Transfer::Pq));
-        assert_eq!(Transfer::from_cicp_transfer(18), Some(Transfer::Hlg));
+        use zenpixels::TransferFunction;
+        assert_eq!(TransferFunction::from_cicp(1), Some(TransferFunction::Bt709));
+        assert_eq!(TransferFunction::from_cicp(6), Some(TransferFunction::Bt709));
+        assert_eq!(TransferFunction::from_cicp(8), Some(TransferFunction::Linear));
+        assert_eq!(TransferFunction::from_cicp(13), Some(TransferFunction::Srgb));
+        assert_eq!(TransferFunction::from_cicp(16), Some(TransferFunction::Pq));
+        assert_eq!(TransferFunction::from_cicp(18), Some(TransferFunction::Hlg));
     }
 
     #[test]
     fn cicp_transfer_unknown_codes() {
-        use crate::pixel::Transfer;
-        assert_eq!(Transfer::from_cicp_transfer(0), None);
-        assert_eq!(Transfer::from_cicp_transfer(2), None);
-        assert_eq!(Transfer::from_cicp_transfer(255), None);
-    }
-
-    #[test]
-    fn transfer_requires_f32() {
-        use crate::pixel::Transfer;
-        assert!(!Transfer::Srgb.requires_f32());
-        assert!(!Transfer::None.requires_f32());
-        assert!(!Transfer::Bt709.requires_f32());
-        assert!(Transfer::Pq.requires_f32());
-        assert!(Transfer::Hlg.requires_f32());
-    }
-
-    #[test]
-    fn transfer_is_identity() {
-        use crate::pixel::Transfer;
-        assert!(Transfer::None.is_identity());
-        assert!(!Transfer::Srgb.is_identity());
-        assert!(!Transfer::Bt709.is_identity());
-        assert!(!Transfer::Pq.is_identity());
-        assert!(!Transfer::Hlg.is_identity());
+        use zenpixels::TransferFunction;
+        assert_eq!(TransferFunction::from_cicp(0), None);
+        assert_eq!(TransferFunction::from_cicp(2), None);
+        assert_eq!(TransferFunction::from_cicp(255), None);
     }
 }

@@ -13,24 +13,24 @@ use crate::composite::{Background, CompositeError};
 use crate::layout::{
     CanvasColor, DecoderOffer, DecoderRequest, IdealLayout, LayoutPlan, Orientation,
 };
-use crate::pixel::{PixelFormat, PixelLayout};
+use zenpixels::{AlphaMode, ChannelLayout, ChannelType, PixelDescriptor};
 use crate::resize::Resizer;
 
 /// Execute a finalized [`LayoutPlan`] on decoder output.
 ///
 /// Pipeline: trim → orient → resize → canvas placement → edge replication.
 ///
-/// Only supports `Srgb8` pixel formats. Panics if `format` is `LinearF32`.
+/// Only supports u8 pixel formats. Panics if `desc` is not `ChannelType::U8`.
 pub fn execute_layout(
     decoder_output: &[u8],
     decoder_width: u32,
     decoder_height: u32,
     plan: &LayoutPlan,
-    format: PixelFormat,
+    desc: PixelDescriptor,
     filter: Filter,
 ) -> Vec<u8> {
-    assert!(format.is_u8(), "execute_layout only supports Srgb8 formats");
-    let ch = format.channels() as usize;
+    assert!(desc.channel_type() == ChannelType::U8, "execute_layout only supports u8 formats");
+    let ch = desc.channels();
 
     let expected_len = decoder_width as usize * decoder_height as usize * ch;
     assert!(
@@ -102,7 +102,7 @@ pub fn execute_layout(
             trim_w,
             trim_h,
             plan.remaining_orientation,
-            format.channels(),
+            desc.channels() as u8,
         );
         (Some(result), new_w, new_h)
     };
@@ -130,7 +130,7 @@ pub fn execute_layout(
 
         let builder = crate::ResizeConfig::builder(orient_w, orient_h, rw, rh)
             .filter(filter)
-            .format(format);
+            .format(desc);
 
         if let Some(ref data) = oriented {
             let config = builder.build();
@@ -150,7 +150,7 @@ pub fn execute_layout(
     let placed = if canvas_w == resize_w && canvas_h == resize_h && px == 0 && py == 0 {
         resized
     } else {
-        let bg = canvas_color_to_pixel(&plan.canvas_color, format);
+        let bg = canvas_color_to_pixel(&plan.canvas_color, desc);
         let mut canvas = fill_canvas(canvas_w, canvas_h, &bg);
         place_on_canvas(
             &mut canvas,
@@ -194,7 +194,7 @@ pub fn execute_layout(
 pub fn execute(
     source_pixels: &[u8],
     ideal: &IdealLayout,
-    format: PixelFormat,
+    desc: PixelDescriptor,
     filter: Filter,
 ) -> Vec<u8> {
     let pre_orient = ideal
@@ -215,7 +215,7 @@ pub fn execute(
         pre_orient.width,
         pre_orient.height,
         &plan,
-        format,
+        desc,
         filter,
     )
 }
@@ -243,7 +243,7 @@ pub fn execute_with_offer(
     ideal: &IdealLayout,
     request: &DecoderRequest,
     offer: &DecoderOffer,
-    format: PixelFormat,
+    desc: PixelDescriptor,
     filter: Filter,
 ) -> Vec<u8> {
     let plan = ideal.finalize(request, offer);
@@ -252,7 +252,7 @@ pub fn execute_with_offer(
         offer.dimensions.width,
         offer.dimensions.height,
         &plan,
-        format,
+        desc,
         filter,
     )
 }
@@ -279,12 +279,12 @@ pub fn execute_secondary(
     primary_source: crate::layout::Size,
     secondary_source: crate::layout::Size,
     secondary_target: Option<crate::layout::Size>,
-    format: PixelFormat,
+    desc: PixelDescriptor,
     filter: Filter,
 ) -> Vec<u8> {
     let (sec_ideal, _sec_request) =
         primary_ideal.derive_secondary(primary_source, secondary_source, secondary_target);
-    execute(source_pixels, &sec_ideal, format, filter)
+    execute(source_pixels, &sec_ideal, desc, filter)
 }
 
 /// Execute a [`LayoutPlan`] with background compositing.
@@ -301,14 +301,14 @@ pub fn execute_secondary(
 ///
 /// # Errors
 ///
-/// Returns [`CompositeError::PremultipliedInput`] if `format` uses `RgbaPremul`.
+/// Returns [`CompositeError::PremultipliedInput`] if `desc` uses premultiplied alpha.
 #[allow(clippy::too_many_arguments)]
 pub fn execute_layout_with_background<B: Background>(
     decoder_output: &[u8],
     decoder_width: u32,
     decoder_height: u32,
     plan: &LayoutPlan,
-    format: PixelFormat,
+    desc: PixelDescriptor,
     filter: Filter,
     background: B,
 ) -> Result<Vec<u8>, CompositeError> {
@@ -319,19 +319,19 @@ pub fn execute_layout_with_background<B: Background>(
             decoder_width,
             decoder_height,
             plan,
-            format,
+            desc,
             filter,
         ));
     }
 
     assert!(
-        format.is_u8(),
-        "execute_layout_with_background only supports Srgb8 formats"
+        desc.channel_type() == ChannelType::U8,
+        "execute_layout_with_background only supports u8 formats"
     );
-    if format.layout().is_premultiplied() {
+    if desc.alpha == Some(AlphaMode::Premultiplied) {
         return Err(CompositeError::PremultipliedInput);
     }
-    let ch = format.channels() as usize;
+    let ch = desc.channels();
 
     let expected_len = decoder_width as usize * decoder_height as usize * ch;
     assert!(
@@ -395,7 +395,7 @@ pub fn execute_layout_with_background<B: Background>(
             trim_w,
             trim_h,
             plan.remaining_orientation,
-            format.channels(),
+            desc.channels() as u8,
         );
         (Some(result), new_w, new_h)
     };
@@ -404,7 +404,7 @@ pub fn execute_layout_with_background<B: Background>(
     // Capture solid pixel for canvas fill before moving background into Resizer.
     let solid_fill: Option<Vec<u8>> = background
         .solid_pixel()
-        .map(|pixel| premul_linear_f32_to_srgb_u8_pixel(pixel, format));
+        .map(|pixel| premul_linear_f32_to_srgb_u8_pixel(pixel, desc));
 
     let rw = plan.resize_to.width;
     let rh = plan.resize_to.height;
@@ -430,7 +430,7 @@ pub fn execute_layout_with_background<B: Background>(
     let resized = {
         let builder = crate::ResizeConfig::builder(orient_w, orient_h, actual_rw, actual_rh)
             .filter(filter)
-            .format(format);
+            .format(desc);
 
         if let Some(ref data) = oriented {
             let config = builder.build();
@@ -454,7 +454,7 @@ pub fn execute_layout_with_background<B: Background>(
         let fill_pixel = if let Some(ref pixel) = solid_fill {
             pixel.as_slice()
         } else {
-            &canvas_color_to_pixel(&plan.canvas_color, format)
+            &canvas_color_to_pixel(&plan.canvas_color, desc)
         };
         let mut canvas = fill_canvas(canvas_w, canvas_h, fill_pixel);
         place_on_canvas(
@@ -495,11 +495,11 @@ pub fn execute_layout_with_background<B: Background>(
 ///
 /// # Errors
 ///
-/// Returns [`CompositeError::PremultipliedInput`] if `format` uses `RgbaPremul`.
+/// Returns [`CompositeError::PremultipliedInput`] if `desc` uses premultiplied alpha.
 pub fn execute_with_background<B: Background>(
     source_pixels: &[u8],
     ideal: &IdealLayout,
-    format: PixelFormat,
+    desc: PixelDescriptor,
     filter: Filter,
     background: B,
 ) -> Result<Vec<u8>, CompositeError> {
@@ -521,7 +521,7 @@ pub fn execute_with_background<B: Background>(
         pre_orient.width,
         pre_orient.height,
         &plan,
-        format,
+        desc,
         filter,
         background,
     )
@@ -533,7 +533,7 @@ pub fn execute_with_background<B: Background>(
 ///
 /// # Errors
 ///
-/// Returns [`CompositeError::PremultipliedInput`] if `format` uses `RgbaPremul`.
+/// Returns [`CompositeError::PremultipliedInput`] if `desc` uses premultiplied alpha.
 #[allow(clippy::too_many_arguments)]
 pub fn execute_secondary_with_background<B: Background>(
     source_pixels: &[u8],
@@ -541,13 +541,13 @@ pub fn execute_secondary_with_background<B: Background>(
     primary_source: crate::layout::Size,
     secondary_source: crate::layout::Size,
     secondary_target: Option<crate::layout::Size>,
-    format: PixelFormat,
+    desc: PixelDescriptor,
     filter: Filter,
     background: B,
 ) -> Result<Vec<u8>, CompositeError> {
     let (sec_ideal, _sec_request) =
         primary_ideal.derive_secondary(primary_source, secondary_source, secondary_target);
-    execute_with_background(source_pixels, &sec_ideal, format, filter, background)
+    execute_with_background(source_pixels, &sec_ideal, desc, filter, background)
 }
 
 /// Apply an [`Orientation`] transform to an image buffer.
@@ -635,32 +635,32 @@ fn compact_strided(src: &[u8], w: u32, h: u32, stride: usize, ch: usize) -> Vec<
     out
 }
 
-/// Convert a [`CanvasColor`] to pixel bytes for the given format.
+/// Convert a [`CanvasColor`] to pixel bytes for the given descriptor.
 #[allow(unreachable_patterns)] // non_exhaustive enums require wildcard arms
-pub fn canvas_color_to_pixel(color: &CanvasColor, format: PixelFormat) -> Vec<u8> {
-    let ch = format.channels() as usize;
+pub fn canvas_color_to_pixel(color: &CanvasColor, desc: PixelDescriptor) -> Vec<u8> {
+    let ch = desc.channels();
     match color {
         CanvasColor::Transparent => vec![0u8; ch],
-        CanvasColor::Srgb { r, g, b, a } => match format.layout() {
-            PixelLayout::Gray => vec![*r], // approximate: use red channel
-            PixelLayout::Rgb => vec![*r, *g, *b],
-            PixelLayout::Rgbx | PixelLayout::Rgba | PixelLayout::RgbaPremul => {
+        CanvasColor::Srgb { r, g, b, a } => match desc.layout() {
+            ChannelLayout::Gray => vec![*r], // approximate: use red channel
+            ChannelLayout::Rgb => vec![*r, *g, *b],
+            _ => {
+                // Rgba, Bgra, etc.
                 vec![*r, *g, *b, *a]
             }
-            _ => vec![0u8; ch],
         },
         CanvasColor::Linear { r, g, b, a } => {
             let sr = linear_srgb::scalar::linear_to_srgb_u8(*r);
             let sg = linear_srgb::scalar::linear_to_srgb_u8(*g);
             let sb = linear_srgb::scalar::linear_to_srgb_u8(*b);
             let sa = (*a * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-            match format.layout() {
-                PixelLayout::Gray => vec![sr],
-                PixelLayout::Rgb => vec![sr, sg, sb],
-                PixelLayout::Rgbx | PixelLayout::Rgba | PixelLayout::RgbaPremul => {
+            match desc.layout() {
+                ChannelLayout::Gray => vec![sr],
+                ChannelLayout::Rgb => vec![sr, sg, sb],
+                _ => {
+                    // Rgba, Bgra, etc.
                     vec![sr, sg, sb, sa]
                 }
-                _ => vec![0u8; ch],
             }
         }
         _ => vec![0u8; ch],
@@ -668,7 +668,7 @@ pub fn canvas_color_to_pixel(color: &CanvasColor, format: PixelFormat) -> Vec<u8
 }
 
 /// Convert a premultiplied linear f32 pixel to sRGB u8 for canvas fill.
-fn premul_linear_f32_to_srgb_u8_pixel(pixel: &[f32; 4], format: PixelFormat) -> Vec<u8> {
+fn premul_linear_f32_to_srgb_u8_pixel(pixel: &[f32; 4], desc: PixelDescriptor) -> Vec<u8> {
     // Unpremultiply
     let a = pixel[3];
     let (r, g, b) = if a > 1.0 / 1024.0 {
@@ -682,9 +682,9 @@ fn premul_linear_f32_to_srgb_u8_pixel(pixel: &[f32; 4], format: PixelFormat) -> 
     let sg = linear_srgb::scalar::linear_to_srgb_u8(g);
     let sb = linear_srgb::scalar::linear_to_srgb_u8(b);
     let sa = (a * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-    match format.layout() {
-        PixelLayout::Gray => vec![sr],
-        PixelLayout::Rgb => vec![sr, sg, sb],
+    match desc.layout() {
+        ChannelLayout::Gray => vec![sr],
+        ChannelLayout::Rgb => vec![sr, sg, sb],
         _ => vec![sr, sg, sb, sa],
     }
 }
@@ -945,7 +945,7 @@ mod tests {
     #[test]
     fn canvas_fill_and_place() {
         let ch = 4usize;
-        let format = PixelFormat::Srgb8(PixelLayout::Rgba);
+        let format = PixelDescriptor::RGBA8_SRGB;
         let white = canvas_color_to_pixel(&CanvasColor::white(), format);
         assert_eq!(white, vec![255, 255, 255, 255]);
 
@@ -1036,7 +1036,7 @@ mod tests {
         let w = 8u32;
         let h = 6u32;
         let ch = 4usize;
-        let format = PixelFormat::Srgb8(PixelLayout::Rgba);
+        let format = PixelDescriptor::RGBA8_SRGB;
         let img = make_test_image(w, h, ch);
 
         let plan = LayoutPlan::identity(Size::new(w, h));
@@ -1053,7 +1053,7 @@ mod tests {
         let src_w = 100u32;
         let src_h = 50u32;
         let ch = 4usize;
-        let format = PixelFormat::Srgb8(PixelLayout::Rgba);
+        let format = PixelDescriptor::RGBA8_SRGB;
         let img = make_test_image(src_w, src_h, ch);
 
         let (ideal, request) = Pipeline::new(src_w, src_h).fit_pad(80, 80).plan().unwrap();
@@ -1090,7 +1090,7 @@ mod tests {
         let stored_w = 60u32;
         let stored_h = 40u32;
         let ch = 4usize;
-        let format = PixelFormat::Srgb8(PixelLayout::Rgba);
+        let format = PixelDescriptor::RGBA8_SRGB;
         let img = make_test_image(stored_w, stored_h, ch);
 
         let (ideal, request) = Pipeline::new(stored_w, stored_h)
@@ -1118,7 +1118,7 @@ mod tests {
         let src_w = 20u32;
         let src_h = 20u32;
         let ch = 4usize;
-        let format = PixelFormat::Srgb8(PixelLayout::Rgba);
+        let format = PixelDescriptor::RGBA8_SRGB;
         let img = make_test_image(src_w, src_h, ch);
 
         let trim = Rect::new(5, 5, 10, 10);
@@ -1156,7 +1156,7 @@ mod tests {
         let stored_w = 60u32;
         let stored_h = 40u32;
         let ch = 4usize;
-        let format = PixelFormat::Srgb8(PixelLayout::Rgba);
+        let format = PixelDescriptor::RGBA8_SRGB;
         let stored_img = make_test_image(stored_w, stored_h, ch);
 
         let (ideal, request) = Pipeline::new(stored_w, stored_h)
@@ -1214,7 +1214,7 @@ mod tests {
         let gm_w = 100u32; // 1/4 scale gain map
         let gm_h = 75u32;
         let ch = 4usize;
-        let format = PixelFormat::Srgb8(PixelLayout::Rgba);
+        let format = PixelDescriptor::RGBA8_SRGB;
         let gm_img = make_test_image(gm_w, gm_h, ch);
 
         // Primary: auto_orient(6) + fit(200, 200)
@@ -1267,7 +1267,7 @@ mod tests {
         let gm_w = 100u32;
         let gm_h = 75u32;
         let ch = 4usize;
-        let format = PixelFormat::Srgb8(PixelLayout::Rgba);
+        let format = PixelDescriptor::RGBA8_SRGB;
         let gm_stored = make_test_image(gm_w, gm_h, ch);
 
         let (sdr_ideal, _sdr_req) = Pipeline::new(sdr_w, sdr_h)
@@ -1323,7 +1323,7 @@ mod tests {
         let w = 80u32;
         let h = 60u32;
         let ch = 4usize;
-        let format = PixelFormat::Srgb8(PixelLayout::Rgba);
+        let format = PixelDescriptor::RGBA8_SRGB;
         let img = make_test_image(w, h, ch);
 
         let (ideal, request) = Pipeline::new(w, h).fit(40, 40).plan().unwrap();
@@ -1346,7 +1346,7 @@ mod tests {
         let gm_w = 100u32;
         let gm_h = 75u32;
         let ch = 4usize;
-        let format = PixelFormat::Srgb8(PixelLayout::Rgba);
+        let format = PixelDescriptor::RGBA8_SRGB;
         let gm_img = make_test_image(gm_w, gm_h, ch);
 
         let (sdr_ideal, _sdr_req) = Pipeline::new(sdr_w, sdr_h)
@@ -1381,7 +1381,7 @@ mod tests {
         let w = 80u32;
         let h = 60u32;
         let ch = 4usize;
-        let format = PixelFormat::Srgb8(PixelLayout::Rgba);
+        let format = PixelDescriptor::RGBA8_SRGB;
         let img = make_test_image(w, h, ch);
 
         let (ideal, request) = Pipeline::new(w, h).fit(40, 40).plan().unwrap();
@@ -1411,7 +1411,7 @@ mod tests {
         let src_w = 100u32;
         let src_h = 50u32;
         let ch = 4usize;
-        let format = PixelFormat::Srgb8(PixelLayout::Rgba);
+        let format = PixelDescriptor::RGBA8_SRGB;
         // Semi-transparent RGBA image
         let mut img = vec![0u8; src_w as usize * src_h as usize * ch];
         for pixel in img.chunks_exact_mut(ch) {
@@ -1436,7 +1436,7 @@ mod tests {
         assert_eq!(plan.resize_to, Size::new(80, 40));
         let py = plan.placement.1; // vertical offset (should be 20)
 
-        let bg = crate::composite::SolidBackground::white(format.layout());
+        let bg = crate::composite::SolidBackground::white(format);
         let result =
             execute_layout_with_background(&img, src_w, src_h, &plan, format, Filter::Lanczos, bg)
                 .unwrap();
@@ -1473,7 +1473,7 @@ mod tests {
         let w = 60u32;
         let h = 40u32;
         let ch = 4usize;
-        let format = PixelFormat::Srgb8(PixelLayout::Rgba);
+        let format = PixelDescriptor::RGBA8_SRGB;
         let img = make_test_image(w, h, ch);
 
         let (ideal, request) = Pipeline::new(w, h).fit(30, 30).plan().unwrap();
@@ -1491,7 +1491,7 @@ mod tests {
         )
         .unwrap();
 
-        let transparent_bg = crate::composite::SolidBackground::transparent(format.layout());
+        let transparent_bg = crate::composite::SolidBackground::transparent(format);
         let result_transparent = execute_layout_with_background(
             &img,
             w,
@@ -1514,14 +1514,14 @@ mod tests {
         let w = 10u32;
         let h = 10u32;
         let ch = 4usize;
-        let format = PixelFormat::Srgb8(PixelLayout::RgbaPremul);
+        let format = PixelDescriptor::RGBA8_SRGB.with_alpha(Some(AlphaMode::Premultiplied));
         let img = vec![128u8; w as usize * h as usize * ch];
 
         let (ideal, request) = Pipeline::new(w, h).fit(5, 5).plan().unwrap();
         let offer = DecoderOffer::full_decode(w, h);
         let plan = ideal.finalize(&request, &offer);
 
-        let bg = crate::composite::SolidBackground::white(format.layout());
+        let bg = crate::composite::SolidBackground::white(format);
         let result = execute_layout_with_background(&img, w, h, &plan, format, Filter::Lanczos, bg);
 
         assert!(matches!(result, Err(CompositeError::PremultipliedInput)));

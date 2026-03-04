@@ -11,7 +11,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::{vec, vec::Vec};
 
-use crate::pixel::PixelLayout;
+use zenpixels::PixelDescriptor;
 
 /// Error type for compositing configuration.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,12 +98,12 @@ impl SolidBackground {
     /// Create from sRGB u8 color values.
     ///
     /// The color is converted to premultiplied linear f32.
-    /// For non-alpha layouts (Gray, Rgb, Rgbx), alpha is set to 1.0.
-    pub fn from_srgb_u8(r: u8, g: u8, b: u8, a: u8, layout: PixelLayout) -> Self {
+    /// For non-alpha descriptors (Gray, Rgb), alpha is set to 1.0.
+    pub fn from_srgb_u8(r: u8, g: u8, b: u8, a: u8, desc: PixelDescriptor) -> Self {
         let lr = linear_srgb::scalar::srgb_to_linear(r as f32 / 255.0);
         let lg = linear_srgb::scalar::srgb_to_linear(g as f32 / 255.0);
         let lb = linear_srgb::scalar::srgb_to_linear(b as f32 / 255.0);
-        let fa = if layout.has_alpha() {
+        let fa = if desc.has_alpha() {
             a as f32 / 255.0
         } else {
             1.0
@@ -118,9 +118,9 @@ impl SolidBackground {
     /// Create from linear f32 color values (already in linear light).
     ///
     /// Values should be straight (non-premultiplied). They will be premultiplied internally.
-    /// For non-alpha layouts, alpha is forced to 1.0.
-    pub fn from_linear(r: f32, g: f32, b: f32, a: f32, layout: PixelLayout) -> Self {
-        let fa = if layout.has_alpha() { a } else { 1.0 };
+    /// For non-alpha descriptors, alpha is forced to 1.0.
+    pub fn from_linear(r: f32, g: f32, b: f32, a: f32, desc: PixelDescriptor) -> Self {
+        let fa = if desc.has_alpha() { a } else { 1.0 };
         Self {
             pixel: [r * fa, g * fa, b * fa, fa],
             opaque: fa >= 1.0,
@@ -129,22 +129,22 @@ impl SolidBackground {
 
     /// Create from a [`CanvasColor`](crate::layout::CanvasColor).
     #[cfg(feature = "layout")]
-    pub fn from_canvas_color(color: &crate::layout::CanvasColor, layout: PixelLayout) -> Self {
+    pub fn from_canvas_color(color: &crate::layout::CanvasColor, desc: PixelDescriptor) -> Self {
         match color {
-            crate::layout::CanvasColor::Transparent => Self::transparent(layout),
+            crate::layout::CanvasColor::Transparent => Self::transparent(desc),
             crate::layout::CanvasColor::Srgb { r, g, b, a } => {
-                Self::from_srgb_u8(*r, *g, *b, *a, layout)
+                Self::from_srgb_u8(*r, *g, *b, *a, desc)
             }
             crate::layout::CanvasColor::Linear { r, g, b, a } => {
-                Self::from_linear(*r, *g, *b, *a, layout)
+                Self::from_linear(*r, *g, *b, *a, desc)
             }
             // non_exhaustive fallback
-            _ => Self::transparent(layout),
+            _ => Self::transparent(desc),
         }
     }
 
     /// Fully transparent background (equivalent to [`NoBackground`] but as a concrete type).
-    pub fn transparent(_layout: PixelLayout) -> Self {
+    pub fn transparent(_desc: PixelDescriptor) -> Self {
         Self {
             pixel: [0.0; 4],
             opaque: false,
@@ -152,13 +152,13 @@ impl SolidBackground {
     }
 
     /// Opaque white background.
-    pub fn white(layout: PixelLayout) -> Self {
-        Self::from_srgb_u8(255, 255, 255, 255, layout)
+    pub fn white(desc: PixelDescriptor) -> Self {
+        Self::from_srgb_u8(255, 255, 255, 255, desc)
     }
 
     /// Opaque black background.
-    pub fn black(layout: PixelLayout) -> Self {
-        Self::from_srgb_u8(0, 0, 0, 255, layout)
+    pub fn black(desc: PixelDescriptor) -> Self {
+        Self::from_srgb_u8(0, 0, 0, 255, desc)
     }
 }
 
@@ -409,7 +409,7 @@ mod tests {
 
     #[test]
     fn solid_background_white() {
-        let bg = SolidBackground::white(PixelLayout::Rgba);
+        let bg = SolidBackground::white(PixelDescriptor::RGBA8_SRGB);
         assert!(bg.is_opaque());
         assert!(!bg.is_transparent());
         let pixel = bg.solid_pixel().unwrap();
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn solid_background_transparent() {
-        let bg = SolidBackground::transparent(PixelLayout::Rgba);
+        let bg = SolidBackground::transparent(PixelDescriptor::RGBA8_SRGB);
         assert!(bg.is_transparent());
         assert!(!bg.is_opaque());
         let pixel = bg.solid_pixel().unwrap();
@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn solid_background_from_srgb() {
-        let bg = SolidBackground::from_srgb_u8(128, 0, 0, 128, PixelLayout::Rgba);
+        let bg = SolidBackground::from_srgb_u8(128, 0, 0, 128, PixelDescriptor::RGBA8_SRGB);
         assert!(!bg.is_opaque());
         assert!(!bg.is_transparent());
         let pixel = bg.solid_pixel().unwrap();
@@ -500,7 +500,7 @@ mod tests {
 
     #[test]
     fn composite_dispatch_solid_opaque() {
-        let mut bg = SolidBackground::white(PixelLayout::Rgba);
+        let mut bg = SolidBackground::white(PixelDescriptor::RGBA8_SRGB);
         let mut src = [0.0, 0.0, 0.0, 0.0]; // transparent fg
         let mut buf = Vec::new(); // not used for solid
         composite_dispatch(&mut src, &mut bg, &mut buf, 0, 4);

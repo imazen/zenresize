@@ -41,10 +41,11 @@ use alloc::{vec, vec::Vec};
 use crate::color;
 use crate::composite::{self, Background, CompositeError, NoBackground};
 use crate::filter::InterpolationDetails;
-use crate::pixel::{PixelFormat, ResizeConfig, Transfer};
+use crate::pixel::ResizeConfig;
 use crate::simd;
 use crate::transfer::{Bt709, Hlg, Pq, Srgb, TransferCurve};
 use crate::weights::{F32WeightTable, I16WeightTable};
+use zenpixels::{AlphaMode, ChannelType, TransferFunction};
 
 /// Build V-filter row references from a ring buffer cache.
 ///
@@ -105,7 +106,7 @@ enum StreamingPath {
 /// push via [`push_row_i16()`](StreamingResize::push_row_i16).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkingFormat {
-    /// f32 linear-light (or f32 gamma for `Transfer::None`).
+    /// f32 linear-light (or f32 gamma for `TransferFunction::Linear`).
     F32,
     /// i16 in sRGB gamma space (u8 values zero-extended to i16).
     /// Only for 4ch, no linearization, u8 I/O.
@@ -248,7 +249,7 @@ impl<B: Background> StreamingResize<B> {
     /// Returns [`CompositeError::PremultipliedInput`] if the input format
     /// is `RgbaPremul` (compositing premultiplied input is mathematically incorrect).
     pub fn with_background(config: &ResizeConfig, background: B) -> Result<Self, CompositeError> {
-        if config.input_format.layout().is_premultiplied() {
+        if config.input.alpha == Some(AlphaMode::Premultiplied) {
             return Err(CompositeError::PremultipliedInput);
         }
         Ok(Self::new_inner(config, background, true, 0))
@@ -272,10 +273,9 @@ impl<B: Background> StreamingResize<B> {
         let filter = InterpolationDetails::create(config.filter);
         let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
 
-        let layout = config.input_format.layout();
-        let channels = layout.channels() as usize;
-        let needs_premul = layout.needs_premultiply();
-        let alpha_is_last = layout.alpha_is_last_channel();
+        let channels = config.channels();
+        let needs_premul = config.needs_premultiply();
+        let alpha_is_last = config.input.has_alpha();
 
         // Path selection: mirrors fullframe Resizer paths 0/1.
         // I16Srgb: identity transfer (no linearization), u8 4ch.
@@ -284,18 +284,18 @@ impl<B: Background> StreamingResize<B> {
         // exact match — any other transfer (BT.709, PQ, HLG) goes to f32.
         let input_tf = config.effective_input_transfer();
         let output_tf = config.effective_output_transfer();
-        let is_u8_format = matches!(config.input_format, PixelFormat::Srgb8(_));
+        let is_u8_format = config.input.channel_type() == ChannelType::U8;
         let path = if !active_composite
             && is_u8_format
-            && input_tf.is_identity()
-            && output_tf.is_identity()
+            && input_tf == TransferFunction::Linear
+            && output_tf == TransferFunction::Linear
             && channels == 4
         {
             StreamingPath::I16Srgb
         } else if !active_composite
             && is_u8_format
-            && input_tf == Transfer::Srgb
-            && output_tf == Transfer::Srgb
+            && input_tf == TransferFunction::Srgb
+            && output_tf == TransferFunction::Srgb
             && channels == 4
             && !needs_premul
         {
@@ -585,7 +585,7 @@ impl<B: Background> StreamingResize<B> {
 
         // F32 path: linearize + premultiply → cache f32
         match self.config.effective_input_transfer() {
-            Transfer::Srgb => {
+            TransferFunction::Srgb => {
                 color::srgb_u8_to_linear_f32(
                     pixel_data,
                     &mut self.temp_input_f32[..pixel_len],
@@ -593,10 +593,10 @@ impl<B: Background> StreamingResize<B> {
                     self.alpha_is_last,
                 );
             }
-            Transfer::None => {
+            TransferFunction::Linear => {
                 simd::u8_to_f32_row(pixel_data, &mut self.temp_input_f32[..pixel_len]);
             }
-            Transfer::Bt709 => {
+            TransferFunction::Bt709 => {
                 Bt709.u8_to_linear_f32(
                     pixel_data,
                     &mut self.temp_input_f32[..pixel_len],
@@ -606,7 +606,7 @@ impl<B: Background> StreamingResize<B> {
                     false,
                 );
             }
-            Transfer::Pq => {
+            TransferFunction::Pq => {
                 Pq.u8_to_linear_f32(
                     pixel_data,
                     &mut self.temp_input_f32[..pixel_len],
@@ -616,7 +616,7 @@ impl<B: Background> StreamingResize<B> {
                     false,
                 );
             }
-            Transfer::Hlg => {
+            TransferFunction::Hlg => {
                 Hlg.u8_to_linear_f32(
                     pixel_data,
                     &mut self.temp_input_f32[..pixel_len],
@@ -625,6 +625,9 @@ impl<B: Background> StreamingResize<B> {
                     self.alpha_is_last,
                     false,
                 );
+            }
+            _ => {
+                simd::u8_to_f32_row(pixel_data, &mut self.temp_input_f32[..pixel_len]);
             }
         }
 
@@ -760,7 +763,7 @@ impl<B: Background> StreamingResize<B> {
         let pixel_data = &row[..pixel_len];
 
         match self.config.effective_input_transfer() {
-            Transfer::Srgb => {
+            TransferFunction::Srgb => {
                 Srgb.u16_to_linear_f32(
                     pixel_data,
                     &mut self.temp_input_f32[..pixel_len],
@@ -770,7 +773,7 @@ impl<B: Background> StreamingResize<B> {
                     self.needs_premul,
                 );
             }
-            Transfer::None => {
+            TransferFunction::Linear => {
                 crate::transfer::NoTransfer.u16_to_linear_f32(
                     pixel_data,
                     &mut self.temp_input_f32[..pixel_len],
@@ -780,7 +783,7 @@ impl<B: Background> StreamingResize<B> {
                     self.needs_premul,
                 );
             }
-            Transfer::Bt709 => {
+            TransferFunction::Bt709 => {
                 Bt709.u16_to_linear_f32(
                     pixel_data,
                     &mut self.temp_input_f32[..pixel_len],
@@ -790,7 +793,7 @@ impl<B: Background> StreamingResize<B> {
                     self.needs_premul,
                 );
             }
-            Transfer::Pq => {
+            TransferFunction::Pq => {
                 Pq.u16_to_linear_f32(
                     pixel_data,
                     &mut self.temp_input_f32[..pixel_len],
@@ -800,8 +803,18 @@ impl<B: Background> StreamingResize<B> {
                     self.needs_premul,
                 );
             }
-            Transfer::Hlg => {
+            TransferFunction::Hlg => {
                 Hlg.u16_to_linear_f32(
+                    pixel_data,
+                    &mut self.temp_input_f32[..pixel_len],
+                    &(),
+                    self.channels,
+                    self.alpha_is_last,
+                    self.needs_premul,
+                );
+            }
+            _ => {
+                crate::transfer::NoTransfer.u16_to_linear_f32(
                     pixel_data,
                     &mut self.temp_input_f32[..pixel_len],
                     &(),
@@ -1056,18 +1069,25 @@ impl<B: Background> StreamingResize<B> {
     fn encode_output_u8(
         src: &[f32],
         dst: &mut [u8],
-        tf: Transfer,
+        tf: TransferFunction,
         channels: usize,
         alpha_is_last: bool,
     ) {
         match tf {
-            Transfer::Srgb => color::linear_f32_to_srgb_u8(src, dst, channels, alpha_is_last),
-            Transfer::None => simd::f32_to_u8_row(src, dst),
-            Transfer::Bt709 => {
+            TransferFunction::Srgb => {
+                color::linear_f32_to_srgb_u8(src, dst, channels, alpha_is_last)
+            }
+            TransferFunction::Linear => simd::f32_to_u8_row(src, dst),
+            TransferFunction::Bt709 => {
                 Bt709.linear_f32_to_u8(src, dst, &(), channels, alpha_is_last, false)
             }
-            Transfer::Pq => Pq.linear_f32_to_u8(src, dst, &(), channels, alpha_is_last, false),
-            Transfer::Hlg => Hlg.linear_f32_to_u8(src, dst, &(), channels, alpha_is_last, false),
+            TransferFunction::Pq => {
+                Pq.linear_f32_to_u8(src, dst, &(), channels, alpha_is_last, false)
+            }
+            TransferFunction::Hlg => {
+                Hlg.linear_f32_to_u8(src, dst, &(), channels, alpha_is_last, false)
+            }
+            _ => simd::f32_to_u8_row(src, dst),
         }
     }
 
@@ -1075,13 +1095,15 @@ impl<B: Background> StreamingResize<B> {
     fn encode_output_u16(
         src: &[f32],
         dst: &mut [u16],
-        tf: Transfer,
+        tf: TransferFunction,
         channels: usize,
         alpha_is_last: bool,
     ) {
         match tf {
-            Transfer::Srgb => Srgb.linear_f32_to_u16(src, dst, &(), channels, alpha_is_last, false),
-            Transfer::None => crate::transfer::NoTransfer.linear_f32_to_u16(
+            TransferFunction::Srgb => {
+                Srgb.linear_f32_to_u16(src, dst, &(), channels, alpha_is_last, false)
+            }
+            TransferFunction::Linear => crate::transfer::NoTransfer.linear_f32_to_u16(
                 src,
                 dst,
                 &(),
@@ -1089,11 +1111,23 @@ impl<B: Background> StreamingResize<B> {
                 alpha_is_last,
                 false,
             ),
-            Transfer::Bt709 => {
+            TransferFunction::Bt709 => {
                 Bt709.linear_f32_to_u16(src, dst, &(), channels, alpha_is_last, false)
             }
-            Transfer::Pq => Pq.linear_f32_to_u16(src, dst, &(), channels, alpha_is_last, false),
-            Transfer::Hlg => Hlg.linear_f32_to_u16(src, dst, &(), channels, alpha_is_last, false),
+            TransferFunction::Pq => {
+                Pq.linear_f32_to_u16(src, dst, &(), channels, alpha_is_last, false)
+            }
+            TransferFunction::Hlg => {
+                Hlg.linear_f32_to_u16(src, dst, &(), channels, alpha_is_last, false)
+            }
+            _ => crate::transfer::NoTransfer.linear_f32_to_u16(
+                src,
+                dst,
+                &(),
+                channels,
+                alpha_is_last,
+                false,
+            ),
         }
     }
 
@@ -1304,11 +1338,11 @@ mod tests {
     use super::*;
     use crate::composite::SolidBackground;
     use crate::filter::Filter;
-    use crate::pixel::{PixelFormat, PixelLayout};
+    use zenpixels::{AlphaMode, PixelDescriptor, TransferFunction};
 
     fn make_config(in_w: u32, in_h: u32, out_w: u32, out_h: u32) -> ResizeConfig {
         ResizeConfig::builder(in_w, in_h, out_w, out_h)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .format(PixelDescriptor::RGBA8_SRGB)
             .srgb()
             .build()
     }
@@ -1464,7 +1498,7 @@ mod tests {
     #[test]
     fn test_input_output_row_len() {
         let config = ResizeConfig::builder(100, 100, 50, 50)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .format(PixelDescriptor::RGBA8_SRGB)
             .build();
         let resizer = StreamingResize::new(&config);
         assert_eq!(resizer.input_row_len(), 100 * 4);
@@ -1511,7 +1545,7 @@ mod tests {
     #[test]
     fn test_push_row_f32_with() {
         let config = ResizeConfig::builder(10, 10, 5, 5)
-            .format(PixelFormat::LinearF32(PixelLayout::Rgba))
+            .format(PixelDescriptor::RGBAF32_LINEAR)
             .build();
         let mut resizer = StreamingResize::new(&config);
 
@@ -1688,7 +1722,7 @@ mod tests {
         let mut r1 = StreamingResize::new(&config);
         let rows1 = push_drain_collect_u8(&mut r1, &row, 20);
 
-        let bg = SolidBackground::transparent(PixelLayout::Rgba);
+        let bg = SolidBackground::transparent(PixelDescriptor::RGBA8_SRGB);
         let mut r2 = StreamingResize::with_background(&config, bg).unwrap();
         let rows2 = push_drain_collect_u8(&mut r2, &row, 20);
 
@@ -1698,7 +1732,7 @@ mod tests {
     #[test]
     fn solid_opaque_bg_makes_output_opaque() {
         let config = ResizeConfig::builder(10, 10, 10, 10)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .format(PixelDescriptor::RGBA8_SRGB)
             .linear()
             .build();
 
@@ -1711,7 +1745,7 @@ mod tests {
             pixel[3] = 128; // 50% alpha
         }
 
-        let bg = SolidBackground::white(PixelLayout::Rgba);
+        let bg = SolidBackground::white(PixelDescriptor::RGBA8_SRGB);
         let mut resizer = StreamingResize::with_background(&config, bg).unwrap();
 
         for _ in 0..10 {
@@ -1735,10 +1769,10 @@ mod tests {
     #[test]
     fn rejects_premultiplied_input() {
         let config = ResizeConfig::builder(10, 10, 5, 5)
-            .format(PixelFormat::Srgb8(PixelLayout::RgbaPremul))
+            .format(PixelDescriptor::RGBA8_SRGB.with_alpha(Some(AlphaMode::Premultiplied)))
             .build();
 
-        let bg = SolidBackground::white(PixelLayout::RgbaPremul);
+        let bg = SolidBackground::white(PixelDescriptor::RGBA8_SRGB.with_alpha(Some(AlphaMode::Premultiplied)));
         let result = StreamingResize::with_background(&config, bg);
         assert!(
             matches!(result, Err(CompositeError::PremultipliedInput)),
@@ -1752,7 +1786,7 @@ mod tests {
     fn test_streaming_u16_constant_color() {
         let config = ResizeConfig::builder(20, 20, 10, 10)
             .filter(Filter::Lanczos)
-            .format(PixelFormat::Encoded16(PixelLayout::Rgba))
+            .format(PixelDescriptor::RGBA16_SRGB)
             .build();
 
         let mut resizer = StreamingResize::new(&config);
@@ -1807,7 +1841,7 @@ mod tests {
     fn test_streaming_u16_matches_fullframe() {
         let config = ResizeConfig::builder(40, 40, 20, 20)
             .filter(Filter::Lanczos)
-            .format(PixelFormat::Encoded16(PixelLayout::Rgba))
+            .format(PixelDescriptor::RGBA16_SRGB)
             .build();
 
         // Gradient input
@@ -1863,7 +1897,7 @@ mod tests {
     fn test_streaming_u16_rgb_3ch() {
         let config = ResizeConfig::builder(16, 16, 8, 8)
             .filter(Filter::Lanczos)
-            .format(PixelFormat::Encoded16(PixelLayout::Rgb))
+            .format(PixelDescriptor::RGB16_SRGB)
             .build();
 
         let mut resizer = StreamingResize::new(&config);
@@ -1917,7 +1951,7 @@ mod tests {
     fn test_i16_linear_path_selected() {
         // Srgb8 + linear() + Rgbx = I16Linear (linearize, 4ch, no premul)
         let config = ResizeConfig::builder(20, 20, 10, 10)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
+            .format(PixelDescriptor::RGBX8_SRGB)
             .linear()
             .build();
         let resizer = StreamingResize::new(&config);
@@ -1928,7 +1962,7 @@ mod tests {
     fn test_f32_path_for_rgba_linear() {
         // Srgb8 + linear() + Rgba = F32 (needs premul → not I16Linear)
         let config = ResizeConfig::builder(20, 20, 10, 10)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .format(PixelDescriptor::RGBA8_SRGB)
             .linear()
             .build();
         let resizer = StreamingResize::new(&config);
@@ -1939,7 +1973,7 @@ mod tests {
     fn test_f32_path_for_3ch() {
         // Srgb8 + srgb() + Rgb = F32 (3ch → not i16)
         let config = ResizeConfig::builder(20, 20, 10, 10)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgb))
+            .format(PixelDescriptor::RGB8_SRGB)
             .srgb()
             .build();
         let resizer = StreamingResize::new(&config);
@@ -1990,7 +2024,7 @@ mod tests {
     fn test_i16_linear_constant_color() {
         // Rgbx + linear = I16Linear path
         let config = ResizeConfig::builder(20, 20, 10, 10)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
+            .format(PixelDescriptor::RGBX8_SRGB)
             .linear()
             .build();
         let mut resizer = StreamingResize::new(&config);
@@ -2029,7 +2063,7 @@ mod tests {
     fn test_i16_srgb_matches_fullframe() {
         // Srgb8 + srgb + Rgba = both fullframe and streaming use i16 srgb path
         let config = ResizeConfig::builder(40, 40, 20, 20)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .format(PixelDescriptor::RGBA8_SRGB)
             .srgb()
             .build();
 
@@ -2086,7 +2120,7 @@ mod tests {
     fn test_i16_linear_matches_fullframe() {
         // Srgb8 + linear + Rgbx = both fullframe and streaming use i16 linear path
         let config = ResizeConfig::builder(40, 40, 20, 20)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
+            .format(PixelDescriptor::RGBX8_SRGB)
             .linear()
             .build();
 
@@ -2151,7 +2185,7 @@ mod tests {
     #[test]
     fn test_working_format_i16_linear() {
         let config = ResizeConfig::builder(20, 20, 10, 10)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
+            .format(PixelDescriptor::RGBX8_SRGB)
             .linear()
             .build();
         let resizer = StreamingResize::new(&config);
@@ -2161,7 +2195,7 @@ mod tests {
     #[test]
     fn test_working_format_f32() {
         let config = ResizeConfig::builder(20, 20, 10, 10)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .format(PixelDescriptor::RGBA8_SRGB)
             .linear()
             .build();
         let resizer = StreamingResize::new(&config);
@@ -2170,11 +2204,11 @@ mod tests {
 
     #[test]
     fn test_pq_forces_f32_path() {
+        let pq = PixelDescriptor::RGBA8_SRGB.with_transfer(TransferFunction::Pq);
         let config = ResizeConfig::builder(20, 20, 10, 10)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .input(pq)
+            .output(pq)
             .srgb()
-            .input_transfer(Transfer::Pq)
-            .output_transfer(Transfer::Pq)
             .build();
         let resizer = StreamingResize::new(&config);
         assert_eq!(resizer.working_format(), super::WorkingFormat::F32);
@@ -2182,11 +2216,11 @@ mod tests {
 
     #[test]
     fn test_hlg_forces_f32_path() {
+        let hlg = PixelDescriptor::RGBX8_SRGB.with_transfer(TransferFunction::Hlg);
         let config = ResizeConfig::builder(20, 20, 10, 10)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
+            .input(hlg)
+            .output(hlg)
             .linear()
-            .input_transfer(Transfer::Hlg)
-            .output_transfer(Transfer::Hlg)
             .build();
         let resizer = StreamingResize::new(&config);
         assert_eq!(resizer.working_format(), super::WorkingFormat::F32);
@@ -2194,13 +2228,11 @@ mod tests {
 
     #[test]
     fn test_bt709_allows_f32_path() {
-        // BT.709 doesn't require f32 on its own, but having an explicit transfer
-        // forces f32 through the has_explicit_transfer path in fullframe Resizer.
-        // In streaming, BT.709 is not identity/srgb so it goes to F32 anyway.
+        // BT.709 is not identity/srgb so it goes to F32 anyway.
+        let bt709 = PixelDescriptor::RGBA8_SRGB.with_transfer(TransferFunction::Bt709);
         let config = ResizeConfig::builder(20, 20, 10, 10)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
-            .input_transfer(Transfer::Bt709)
-            .output_transfer(Transfer::Bt709)
+            .input(bt709)
+            .output(bt709)
             .build();
         let resizer = StreamingResize::new(&config);
         assert_eq!(resizer.working_format(), super::WorkingFormat::F32);
@@ -2245,7 +2277,7 @@ mod tests {
     #[test]
     fn test_push_row_i16_linear_matches_push_row() {
         let config = ResizeConfig::builder(20, 20, 10, 10)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgbx))
+            .format(PixelDescriptor::RGBX8_SRGB)
             .linear()
             .build();
 
@@ -2288,7 +2320,7 @@ mod tests {
     fn test_push_row_linear_f32_matches_push_row() {
         // Use F32 path: Srgb8 + linear + Rgba
         let config = ResizeConfig::builder(20, 20, 10, 10)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .format(PixelDescriptor::RGBA8_SRGB)
             .linear()
             .build();
 
@@ -2329,10 +2361,10 @@ mod tests {
 
     #[test]
     fn test_bt709_resize_constant_color() {
+        let bt709 = PixelDescriptor::RGBA8_SRGB.with_transfer(TransferFunction::Bt709);
         let config = ResizeConfig::builder(20, 20, 10, 10)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
-            .input_transfer(Transfer::Bt709)
-            .output_transfer(Transfer::Bt709)
+            .input(bt709)
+            .output(bt709)
             .build();
 
         let mut resizer = StreamingResize::new(&config);
@@ -2367,10 +2399,10 @@ mod tests {
 
     #[test]
     fn test_pq_resize_streaming_matches_fullframe() {
+        let pq = PixelDescriptor::RGBA8_SRGB.with_transfer(TransferFunction::Pq);
         let config = ResizeConfig::builder(20, 20, 10, 10)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
-            .input_transfer(Transfer::Pq)
-            .output_transfer(Transfer::Pq)
+            .input(pq)
+            .output(pq)
             .build();
 
         let mut input = vec![0u8; 20 * 20 * 4];
@@ -2417,10 +2449,10 @@ mod tests {
 
     #[test]
     fn test_hlg_resize_constant_color() {
+        let hlg = PixelDescriptor::RGBA8_SRGB.with_transfer(TransferFunction::Hlg);
         let config = ResizeConfig::builder(20, 20, 10, 10)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
-            .input_transfer(Transfer::Hlg)
-            .output_transfer(Transfer::Hlg)
+            .input(hlg)
+            .output(hlg)
             .build();
 
         let mut resizer = StreamingResize::new(&config);
