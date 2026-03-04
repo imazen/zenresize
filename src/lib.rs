@@ -49,6 +49,7 @@ pub(crate) mod weights;
 pub(crate) mod working;
 
 #[doc(hidden)]
+#[allow(clippy::excessive_precision)]
 pub mod fastmath;
 mod proven;
 mod simd;

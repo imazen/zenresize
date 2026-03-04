@@ -12,6 +12,7 @@ mod scalar;
 use scalar::*;
 
 #[cfg(target_arch = "x86_64")]
+#[allow(clippy::excessive_precision)]
 mod x86;
 #[cfg(target_arch = "x86_64")]
 #[allow(unused_imports)]

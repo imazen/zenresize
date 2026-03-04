@@ -457,19 +457,7 @@ impl TransferCurve for Srgb {
         has_alpha: bool,
         premul: bool,
     ) {
-        // f32 encoded sRGB → linear
-        if has_alpha && channels >= 2 {
-            for pixel in row.chunks_exact_mut(channels) {
-                for v in &mut pixel[..channels - 1] {
-                    *v = self.to_linear(*v);
-                }
-                // Alpha stays as-is
-            }
-        } else {
-            for v in row.iter_mut() {
-                *v = self.to_linear(*v);
-            }
-        }
+        simd::srgb_to_linear_row(row, channels, has_alpha);
         if premul {
             simd::premultiply_alpha_row(row);
         }
@@ -485,18 +473,7 @@ impl TransferCurve for Srgb {
         if unpremul {
             simd::unpremultiply_alpha_row(row);
         }
-        // linear → f32 encoded sRGB (no clamp for f32 output)
-        if has_alpha && channels >= 2 {
-            for pixel in row.chunks_exact_mut(channels) {
-                for v in &mut pixel[..channels - 1] {
-                    *v = self.from_linear(*v);
-                }
-            }
-        } else {
-            for v in row.iter_mut() {
-                *v = self.from_linear(*v);
-            }
-        }
+        simd::srgb_from_linear_row(row, channels, has_alpha);
     }
 }
 
@@ -512,14 +489,7 @@ impl TransferCurve for Srgb {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Bt709;
 
-#[allow(clippy::excessive_precision)] // Exact values from ITU-R BT.709 that ensure C0 continuity.
-impl Bt709 {
-    // Mathematically exact constants where both value and slope are continuous
-    // at the piecewise boundary. The spec rounds these to 0.099 / 0.018,
-    // creating a small discontinuity; we use the precise values (as moxcms does).
-    const ALPHA: f32 = 0.09929682680944;
-    const BETA: f32 = 0.018053968510807;
-}
+// BT.709 constants are in fastmath.rs (used by fast polynomial approximation).
 
 impl TransferCurve for Bt709 {
     type Luts = ();
@@ -693,17 +663,7 @@ impl TransferCurve for Bt709 {
         has_alpha: bool,
         premul: bool,
     ) {
-        if has_alpha && channels >= 2 {
-            for pixel in row.chunks_exact_mut(channels) {
-                for v in &mut pixel[..channels - 1] {
-                    *v = self.to_linear(*v);
-                }
-            }
-        } else {
-            for v in row.iter_mut() {
-                *v = self.to_linear(*v);
-            }
-        }
+        simd::bt709_to_linear_row(row, channels, has_alpha);
         if premul {
             simd::premultiply_alpha_row(row);
         }
@@ -719,17 +679,7 @@ impl TransferCurve for Bt709 {
         if unpremul {
             simd::unpremultiply_alpha_row(row);
         }
-        if has_alpha && channels >= 2 {
-            for pixel in row.chunks_exact_mut(channels) {
-                for v in &mut pixel[..channels - 1] {
-                    *v = self.from_linear(*v);
-                }
-            }
-        } else {
-            for v in row.iter_mut() {
-                *v = self.from_linear(*v);
-            }
-        }
+        simd::bt709_from_linear_row(row, channels, has_alpha);
     }
 }
 
@@ -746,14 +696,7 @@ impl TransferCurve for Bt709 {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Pq;
 
-#[allow(clippy::excessive_precision)] // These are exact binary fractions from the PQ spec.
-impl Pq {
-    const M1: f32 = 0.1593017578125; // 2610/16384
-    const M2: f32 = 78.84375; // 2523/32 * 128
-    const C1: f32 = 0.8359375; // 3424/4096
-    const C2: f32 = 18.8515625; // 2413/128
-    const C3: f32 = 18.6875; // 2392/128
-}
+// PQ constants are in fastmath.rs (used by rational polynomial approximation).
 
 impl TransferCurve for Pq {
     type Luts = ();
@@ -927,17 +870,7 @@ impl TransferCurve for Pq {
         has_alpha: bool,
         premul: bool,
     ) {
-        if has_alpha && channels >= 2 {
-            for pixel in row.chunks_exact_mut(channels) {
-                for v in &mut pixel[..channels - 1] {
-                    *v = self.to_linear(*v);
-                }
-            }
-        } else {
-            for v in row.iter_mut() {
-                *v = self.to_linear(*v);
-            }
-        }
+        simd::pq_to_linear_row(row, channels, has_alpha);
         if premul {
             simd::premultiply_alpha_row(row);
         }
@@ -953,17 +886,7 @@ impl TransferCurve for Pq {
         if unpremul {
             simd::unpremultiply_alpha_row(row);
         }
-        if has_alpha && channels >= 2 {
-            for pixel in row.chunks_exact_mut(channels) {
-                for v in &mut pixel[..channels - 1] {
-                    *v = self.from_linear(*v);
-                }
-            }
-        } else {
-            for v in row.iter_mut() {
-                *v = self.from_linear(*v);
-            }
-        }
+        simd::pq_from_linear_row(row, channels, has_alpha);
     }
 }
 
@@ -979,12 +902,7 @@ impl TransferCurve for Pq {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Hlg;
 
-#[allow(clippy::excessive_precision)] // Spec constants from ARIB STD-B67.
-impl Hlg {
-    const A: f32 = 0.17883277;
-    const B: f32 = 0.28466892; // 1 - 4 * A
-    const C: f32 = 0.55991073; // 0.5 - A * ln(4 * A)
-}
+// HLG constants are in fastmath.rs (used by fast log2/pow2 approximation).
 
 impl TransferCurve for Hlg {
     type Luts = ();
@@ -1158,17 +1076,7 @@ impl TransferCurve for Hlg {
         has_alpha: bool,
         premul: bool,
     ) {
-        if has_alpha && channels >= 2 {
-            for pixel in row.chunks_exact_mut(channels) {
-                for v in &mut pixel[..channels - 1] {
-                    *v = self.to_linear(*v);
-                }
-            }
-        } else {
-            for v in row.iter_mut() {
-                *v = self.to_linear(*v);
-            }
-        }
+        simd::hlg_to_linear_row(row, channels, has_alpha);
         if premul {
             simd::premultiply_alpha_row(row);
         }
@@ -1184,17 +1092,7 @@ impl TransferCurve for Hlg {
         if unpremul {
             simd::unpremultiply_alpha_row(row);
         }
-        if has_alpha && channels >= 2 {
-            for pixel in row.chunks_exact_mut(channels) {
-                for v in &mut pixel[..channels - 1] {
-                    *v = self.from_linear(*v);
-                }
-            }
-        } else {
-            for v in row.iter_mut() {
-                *v = self.from_linear(*v);
-            }
-        }
+        simd::hlg_from_linear_row(row, channels, has_alpha);
     }
 }
 

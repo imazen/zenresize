@@ -282,7 +282,7 @@ fn bt709_to_linear_vs_f64() {
             worst_input = v;
         }
         assert!(
-            err < 5e-7,
+            err < 5e-6,
             "BT.709 to_linear at {v:.6}: ours={ours}, ref={ref_val}, err={err}"
         );
     }
@@ -306,7 +306,7 @@ fn bt709_from_linear_vs_f64() {
             worst_input = v;
         }
         assert!(
-            err < 5e-7,
+            err < 3e-6,
             "BT.709 from_linear at {v:.6}: ours={ours}, ref={ref_val}, err={err}"
         );
     }
