@@ -88,7 +88,6 @@ harness = false
 name = "planar_bench"
 harness = false
 
-
 [profile.test]
 opt-level = 2
 
