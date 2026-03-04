@@ -521,9 +521,13 @@ impl TransferCurve for Srgb {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Bt709;
 
+#[allow(clippy::excessive_precision)] // Exact values from ITU-R BT.709 that ensure C0 continuity.
 impl Bt709 {
-    const ALPHA: f32 = 0.099;
-    const BETA: f32 = 0.018;
+    // Mathematically exact constants where both value and slope are continuous
+    // at the piecewise boundary. The spec rounds these to 0.099 / 0.018,
+    // creating a small discontinuity; we use the precise values (as moxcms does).
+    const ALPHA: f32 = 0.09929682680944;
+    const BETA: f32 = 0.018053968510807;
 }
 
 impl TransferCurve for Bt709 {

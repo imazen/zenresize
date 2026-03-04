@@ -25,9 +25,9 @@ mod reference {
         }
     }
 
-    /// BT.709 OETF (ITU-R BT.709)
-    const BT709_ALPHA: f64 = 0.099;
-    const BT709_BETA: f64 = 0.018;
+    /// BT.709 OETF (ITU-R BT.709) — exact constants for C0/C1 continuity
+    const BT709_ALPHA: f64 = 0.09929682680944;
+    const BT709_BETA: f64 = 0.018053968510807;
 
     pub fn bt709_to_linear(v: f64) -> f64 {
         if v < 4.5 * BT709_BETA {
@@ -608,7 +608,6 @@ fn test_u16_vs_f64<T: TransferCurve>(
     tf.linear_f32_to_u16(&linear_inputs, &mut u16_out, &luts, 1, false, false);
 
     let mut max_diff: u32 = 0;
-    let mut boundary_max: u32 = 0;
     for (idx, &v) in linear_inputs.iter().enumerate() {
         let ref_encoded = from_linear_f64(v as f64);
         let ref_u16 = (ref_encoded * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
@@ -616,33 +615,13 @@ fn test_u16_vs_f64<T: TransferCurve>(
         if diff > max_diff {
             max_diff = diff;
         }
-        // Piecewise TFs (BT.709, HLG) have transition points where f32 can't
-        // represent the boundary exactly. At these points, f32 and f64 may take
-        // different branches, causing larger divergence. Allow up to 20 at
-        // exact boundary values, <=2 elsewhere.
-        let is_boundary = diff > 2;
-        if is_boundary {
-            if diff > boundary_max {
-                boundary_max = diff;
-            }
-            assert!(
-                diff <= 20,
-                "{name} linear_to_u16 at {v}: ours={}, ref={ref_u16}, diff={diff} (boundary)",
-                u16_out[idx]
-            );
-        } else {
-            assert!(
-                diff <= 2,
-                "{name} linear_to_u16 at {v}: ours={}, ref={ref_u16}, diff={diff}",
-                u16_out[idx]
-            );
-        }
+        assert!(
+            diff <= 2,
+            "{name} linear_to_u16 at {v}: ours={}, ref={ref_u16}, diff={diff}",
+            u16_out[idx]
+        );
     }
-    if boundary_max > 0 {
-        eprintln!("{name} u16: max_diff={max_diff} (boundary_max={boundary_max})");
-    } else {
-        eprintln!("{name} u16: max_diff={max_diff}");
-    }
+    eprintln!("{name} u16: max_diff={max_diff}");
 }
 
 #[test]
