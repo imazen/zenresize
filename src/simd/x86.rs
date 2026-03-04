@@ -11,6 +11,7 @@ use core::arch::x86_64::*;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
+use crate::fastmath;
 use crate::proven::{idx, idx_mut, sub};
 use crate::weights::{F32WeightTable, I16_PRECISION, I16WeightTable};
 use archmage::X64V3Token;
@@ -1905,6 +1906,447 @@ pub(crate) fn filter_v_all_f16_v3(
             for x in base8..h_row_len {
                 output[out_start + x] += super::scalar::f16_to_f32_soft(row[x]) * w_scalar;
             }
+        }
+    }
+}
+
+// =============================================================================
+// Transfer function SIMD kernels
+// =============================================================================
+
+/// Evaluate degree-4 rational polynomial P(x)/Q(x) on 8 f32 values using FMA.
+///
+/// Horner's method: P(x) = p[4]*x^4 + p[3]*x^3 + ... + p[0]
+///                        = ((((p[4]*x + p[3])*x + p[2])*x + p[1])*x + p[0]
+#[archmage::rite]
+fn eval_rational_poly_x8(
+    _token: X64V3Token,
+    x: __m256,
+    p: [f32; 5],
+    q: [f32; 5],
+) -> __m256 {
+    let mut yp = _mm256_set1_ps(p[4]);
+    yp = _mm256_fmadd_ps(yp, x, _mm256_set1_ps(p[3]));
+    yp = _mm256_fmadd_ps(yp, x, _mm256_set1_ps(p[2]));
+    yp = _mm256_fmadd_ps(yp, x, _mm256_set1_ps(p[1]));
+    yp = _mm256_fmadd_ps(yp, x, _mm256_set1_ps(p[0]));
+
+    let mut yq = _mm256_set1_ps(q[4]);
+    yq = _mm256_fmadd_ps(yq, x, _mm256_set1_ps(q[3]));
+    yq = _mm256_fmadd_ps(yq, x, _mm256_set1_ps(q[2]));
+    yq = _mm256_fmadd_ps(yq, x, _mm256_set1_ps(q[1]));
+    yq = _mm256_fmadd_ps(yq, x, _mm256_set1_ps(q[0]));
+
+    _mm256_div_ps(yp, yq)
+}
+
+/// fast_log2f on 8 f32 values using AVX2 integer arithmetic.
+#[archmage::rite]
+fn fast_log2f_x8(_token: X64V3Token, x: __m256) -> __m256 {
+    const LOG2_P: [f32; 3] = [-1.8503833400518310e-6, 1.4287160470083755, 7.4245873327820566e-1];
+    const LOG2_Q: [f32; 3] = [9.9032814277590719e-1, 1.0096718572241148, 1.7409343003366853e-1];
+
+    let x_bits = _mm256_castps_si256(x);
+    let magic = _mm256_set1_epi32(0x3f2aaaab_u32 as i32);
+    let exp_bits = _mm256_sub_epi32(x_bits, magic);
+    let exp_shifted = _mm256_srai_epi32::<23>(exp_bits);
+
+    // Reconstruct mantissa: x_bits - (exp_shifted << 23)
+    let shifted_back = _mm256_slli_epi32::<23>(exp_shifted);
+    let mantissa_bits = _mm256_sub_epi32(x_bits, shifted_back);
+    let mantissa = _mm256_castsi256_ps(mantissa_bits);
+
+    let exp_f = _mm256_cvtepi32_ps(exp_shifted);
+    let one = _mm256_set1_ps(1.0);
+    let m = _mm256_sub_ps(mantissa, one);
+
+    // Degree-2 rational polynomial on (mantissa - 1.0)
+    let mut yp = _mm256_set1_ps(LOG2_P[2]);
+    yp = _mm256_fmadd_ps(yp, m, _mm256_set1_ps(LOG2_P[1]));
+    yp = _mm256_fmadd_ps(yp, m, _mm256_set1_ps(LOG2_P[0]));
+
+    let mut yq = _mm256_set1_ps(LOG2_Q[2]);
+    yq = _mm256_fmadd_ps(yq, m, _mm256_set1_ps(LOG2_Q[1]));
+    yq = _mm256_fmadd_ps(yq, m, _mm256_set1_ps(LOG2_Q[0]));
+
+    let poly = _mm256_div_ps(yp, yq);
+    _mm256_add_ps(poly, exp_f)
+}
+
+/// fast_pow2f on 8 f32 values using AVX2.
+#[archmage::rite]
+fn fast_pow2f_x8(_token: X64V3Token, x: __m256) -> __m256 {
+    const NUM: [f32; 3] = [1.01749063e1, 4.88687798e1, 9.85506591e1];
+    const DEN: [f32; 4] = [2.10242958e-1, -2.22328856e-2, -1.94414990e1, 9.85506633e1];
+
+    let x_floor = _mm256_floor_ps(x);
+    let frac = _mm256_sub_ps(x, x_floor);
+
+    // exp = 2^floor(x) via integer bit manipulation
+    let x_floor_i = _mm256_cvtps_epi32(x_floor);
+    let bias = _mm256_set1_epi32(127);
+    let exp_bits = _mm256_slli_epi32::<23>(_mm256_add_epi32(x_floor_i, bias));
+    let exp = _mm256_castsi256_ps(exp_bits);
+
+    // Numerator: ((frac + NUM[0]) * frac + NUM[1]) * frac + NUM[2]) * exp
+    let mut num = _mm256_add_ps(frac, _mm256_set1_ps(NUM[0]));
+    num = _mm256_fmadd_ps(num, frac, _mm256_set1_ps(NUM[1]));
+    num = _mm256_fmadd_ps(num, frac, _mm256_set1_ps(NUM[2]));
+    num = _mm256_mul_ps(num, exp);
+
+    // Denominator: ((DEN[0]*frac + DEN[1]) * frac + DEN[2]) * frac + DEN[3]
+    let mut den = _mm256_fmadd_ps(_mm256_set1_ps(DEN[0]), frac, _mm256_set1_ps(DEN[1]));
+    den = _mm256_fmadd_ps(den, frac, _mm256_set1_ps(DEN[2]));
+    den = _mm256_fmadd_ps(den, frac, _mm256_set1_ps(DEN[3]));
+
+    _mm256_div_ps(num, den)
+}
+
+/// fast_powf(base, exp) on 8 f32 values: pow2f(exp * log2f(base)).
+#[archmage::rite]
+fn fast_powf_x8(_token: X64V3Token, base: __m256, exponent: f32) -> __m256 {
+    let log2 = fast_log2f_x8(_token, base);
+    let scaled = _mm256_mul_ps(log2, _mm256_set1_ps(exponent));
+    fast_pow2f_x8(_token, scaled)
+}
+
+// --- sRGB SIMD kernels ---
+
+const SRGB_TO_LINEAR_P: [f32; 5] = [
+    2.200248328e-4, 1.043637593e-2, 1.624820318e-1, 7.961564959e-1, 8.210152774e-1,
+];
+const SRGB_TO_LINEAR_Q: [f32; 5] = [
+    2.631846970e-1, 1.076976492, 4.987528350e-1, -5.512498495e-2, 6.521209011e-3,
+];
+const SRGB_FROM_LINEAR_P: [f32; 5] = [
+    -5.135152395e-4, 5.287254571e-3, 3.903842876e-1, 1.474205315, 7.352629620e-1,
+];
+const SRGB_FROM_LINEAR_Q: [f32; 5] = [
+    1.004519624e-2, 3.036675394e-1, 1.340816930, 9.258482155e-1, 2.424867759e-2,
+];
+
+/// Apply sRGB EOTF (encoded→linear) to 8 f32 values.
+#[archmage::rite]
+fn srgb_to_linear_x8(_token: X64V3Token, v: __m256) -> __m256 {
+    let threshold = _mm256_set1_ps(0.04045);
+    let inv_12_92 = _mm256_set1_ps(1.0 / 12.92);
+
+    let linear = _mm256_mul_ps(v, inv_12_92);
+    let poly = eval_rational_poly_x8(_token, v, SRGB_TO_LINEAR_P, SRGB_TO_LINEAR_Q);
+
+    // v <= threshold ? linear : poly
+    let mask = _mm256_cmp_ps::<{ _CMP_LE_OQ }>(v, threshold);
+    _mm256_blendv_ps(poly, linear, mask)
+}
+
+/// Apply sRGB inverse EOTF (linear→encoded) to 8 f32 values.
+#[archmage::rite]
+fn srgb_from_linear_x8(_token: X64V3Token, v: __m256) -> __m256 {
+    let threshold = _mm256_set1_ps(0.0031308);
+    let scale = _mm256_set1_ps(12.92);
+
+    let linear = _mm256_mul_ps(v, scale);
+    let s = _mm256_sqrt_ps(v); // sqrt of input for polynomial
+    let poly = eval_rational_poly_x8(_token, s, SRGB_FROM_LINEAR_P, SRGB_FROM_LINEAR_Q);
+
+    let mask = _mm256_cmp_ps::<{ _CMP_LE_OQ }>(v, threshold);
+    _mm256_blendv_ps(poly, linear, mask)
+}
+
+// --- PQ SIMD kernels ---
+
+const PQ_EOTF_P: [f32; 5] = [
+    2.6297566e-4, -6.235531e-3, 7.386023e-1, 2.6455317, 5.500349e-1,
+];
+const PQ_EOTF_Q: [f32; 5] = [4.213501e2, -4.2873682e2, 1.7436467e2, -3.3907887e1, 2.6771877];
+
+const PQ_INV_P_LARGE: [f32; 5] = [1.351392e-2, -1.095778, 5.522776e1, 1.492516e2, 4.838434e1];
+const PQ_INV_Q_LARGE: [f32; 5] = [1.012416, 2.016708e1, 9.26371e1, 1.120607e2, 2.590418e1];
+
+const PQ_INV_P_SMALL: [f32; 5] = [9.863406e-6, 3.881234e-1, 1.352821e2, 6.889862e4, -2.864824e5];
+const PQ_INV_Q_SMALL: [f32; 5] = [3.371868e1, 1.477719e3, 1.608477e4, -4.389884e4, -2.072546e5];
+
+/// PQ EOTF (signal→linear) on 8 f32 values. Zero powf calls.
+#[archmage::rite]
+fn pq_to_linear_x8(_token: X64V3Token, v: __m256) -> __m256 {
+    let zero = _mm256_setzero_ps();
+    let a = _mm256_max_ps(v, zero);
+    // x = a + a*a
+    let x = _mm256_fmadd_ps(a, a, a);
+    let result = eval_rational_poly_x8(_token, x, PQ_EOTF_P, PQ_EOTF_Q);
+    // Clamp negative inputs to 0
+    let mask = _mm256_cmp_ps::<{ _CMP_GT_OQ }>(v, zero);
+    _mm256_and_ps(result, mask)
+}
+
+/// PQ inverse EOTF (linear→signal) on 8 f32 values.
+#[archmage::rite]
+fn pq_from_linear_x8(_token: X64V3Token, v: __m256) -> __m256 {
+    let zero = _mm256_setzero_ps();
+    let a = _mm256_max_ps(v, zero);
+    // Fourth root: sqrt(sqrt(x))
+    let a4 = _mm256_sqrt_ps(_mm256_sqrt_ps(a));
+
+    // Two-range approximation
+    let threshold = _mm256_set1_ps(0.1);
+    let large = eval_rational_poly_x8(_token, a4, PQ_INV_P_LARGE, PQ_INV_Q_LARGE);
+    let small = eval_rational_poly_x8(_token, a4, PQ_INV_P_SMALL, PQ_INV_Q_SMALL);
+
+    let mask = _mm256_cmp_ps::<{ _CMP_LT_OQ }>(a4, threshold);
+    let result = _mm256_blendv_ps(large, small, mask);
+
+    // Clamp negative inputs to 0
+    let pos_mask = _mm256_cmp_ps::<{ _CMP_GT_OQ }>(v, zero);
+    _mm256_and_ps(result, pos_mask)
+}
+
+// --- BT.709 SIMD kernels ---
+
+const BT709_ALPHA_F: f32 = 0.09929682680944;
+const BT709_BETA_F: f32 = 0.018053968510807;
+
+/// BT.709 EOTF (encoded→linear) on 8 f32 values.
+#[archmage::rite]
+fn bt709_to_linear_x8(_token: X64V3Token, v: __m256) -> __m256 {
+    let threshold = _mm256_set1_ps(4.5 * BT709_BETA_F);
+    let inv_4_5 = _mm256_set1_ps(1.0 / 4.5);
+    let alpha = _mm256_set1_ps(BT709_ALPHA_F);
+    let one_plus_alpha = _mm256_set1_ps(1.0 + BT709_ALPHA_F);
+
+    let linear = _mm256_mul_ps(v, inv_4_5);
+
+    // Power region: powf((v + alpha) / (1 + alpha), 1/0.45)
+    let normalized = _mm256_div_ps(_mm256_add_ps(v, alpha), one_plus_alpha);
+    let one = _mm256_set1_ps(1.0);
+    let clamped = _mm256_max_ps(normalized, _mm256_setzero_ps());
+    // Clamp to avoid log2 of 0/negative
+    let safe = _mm256_max_ps(clamped, _mm256_set1_ps(f32::MIN_POSITIVE));
+    let power = fast_powf_x8(_token, safe, 1.0 / 0.45);
+
+    let mask = _mm256_cmp_ps::<{ _CMP_LT_OQ }>(v, threshold);
+    _mm256_blendv_ps(power, linear, mask)
+}
+
+/// BT.709 inverse EOTF (linear→encoded) on 8 f32 values.
+#[archmage::rite]
+fn bt709_from_linear_x8(_token: X64V3Token, v: __m256) -> __m256 {
+    let threshold = _mm256_set1_ps(BT709_BETA_F);
+    let scale_4_5 = _mm256_set1_ps(4.5);
+    let one_plus_alpha = _mm256_set1_ps(1.0 + BT709_ALPHA_F);
+    let alpha = _mm256_set1_ps(BT709_ALPHA_F);
+
+    let linear = _mm256_mul_ps(v, scale_4_5);
+
+    // Power region: (1+alpha) * powf(v, 0.45) - alpha
+    let safe = _mm256_max_ps(v, _mm256_set1_ps(f32::MIN_POSITIVE));
+    let power = fast_powf_x8(_token, safe, 0.45);
+    let power = _mm256_fmsub_ps(one_plus_alpha, power, alpha);
+
+    let mask = _mm256_cmp_ps::<{ _CMP_LT_OQ }>(v, threshold);
+    _mm256_blendv_ps(power, linear, mask)
+}
+
+// --- HLG SIMD kernels ---
+
+/// HLG inverse OETF (signal→linear) on 8 f32 values.
+#[archmage::rite]
+fn hlg_to_linear_x8(_token: X64V3Token, v: __m256) -> __m256 {
+    let zero = _mm256_setzero_ps();
+    let half = _mm256_set1_ps(0.5);
+    let third = _mm256_set1_ps(1.0 / 3.0);
+    let inv_12 = _mm256_set1_ps(1.0 / 12.0);
+    let hlg_b = _mm256_set1_ps(0.28466892);
+    let hlg_c = _mm256_set1_ps(0.55991073);
+    let hlg_inv_a_log2e = _mm256_set1_ps(core::f32::consts::LOG2_E / 0.17883277);
+
+    let a = _mm256_max_ps(v, zero);
+
+    // Low region: v^2 / 3
+    let low = _mm256_mul_ps(_mm256_mul_ps(a, a), third);
+
+    // High region: (exp((v - C) / A) + B) / 12 = (pow2((v-C) * log2e/A) + B) / 12
+    let exp_arg = _mm256_mul_ps(_mm256_sub_ps(a, hlg_c), hlg_inv_a_log2e);
+    let exp_val = fast_pow2f_x8(_token, exp_arg);
+    let high = _mm256_mul_ps(_mm256_add_ps(exp_val, hlg_b), inv_12);
+
+    // v <= 0.5 ? low : high
+    let mask = _mm256_cmp_ps::<{ _CMP_LE_OQ }>(a, half);
+    let result = _mm256_blendv_ps(high, low, mask);
+
+    // v <= 0 ? 0 : result
+    let pos_mask = _mm256_cmp_ps::<{ _CMP_GT_OQ }>(v, zero);
+    _mm256_and_ps(result, pos_mask)
+}
+
+/// HLG OETF (linear→signal) on 8 f32 values.
+#[archmage::rite]
+fn hlg_from_linear_x8(_token: X64V3Token, v: __m256) -> __m256 {
+    let zero = _mm256_setzero_ps();
+    let threshold = _mm256_set1_ps(1.0 / 12.0);
+    let three = _mm256_set1_ps(3.0);
+    let twelve = _mm256_set1_ps(12.0);
+    let hlg_a_ln2 = _mm256_set1_ps(0.17883277 * core::f32::consts::LN_2);
+    let hlg_b = _mm256_set1_ps(0.28466892);
+    let hlg_c = _mm256_set1_ps(0.55991073);
+
+    let a = _mm256_max_ps(v, zero);
+
+    // Low region: sqrt(3 * v)
+    let low = _mm256_sqrt_ps(_mm256_mul_ps(three, a));
+
+    // High region: A * ln(12*v - B) + C = A*ln2 * log2(12*v - B) + C
+    let arg = _mm256_sub_ps(_mm256_mul_ps(twelve, a), hlg_b);
+    let safe_arg = _mm256_max_ps(arg, _mm256_set1_ps(f32::MIN_POSITIVE));
+    let log2_val = fast_log2f_x8(_token, safe_arg);
+    let high = _mm256_fmadd_ps(hlg_a_ln2, log2_val, hlg_c);
+
+    // v <= 1/12 ? low : high
+    let mask = _mm256_cmp_ps::<{ _CMP_LE_OQ }>(a, threshold);
+    let result = _mm256_blendv_ps(high, low, mask);
+
+    let pos_mask = _mm256_cmp_ps::<{ _CMP_GT_OQ }>(v, zero);
+    _mm256_and_ps(result, pos_mask)
+}
+
+// --- Batch transfer function row processors ---
+
+/// Apply transfer function to a row of f32 values in-place.
+/// Processes 8 values at a time. `channels` and `has_alpha` control alpha skipping.
+/// When `has_alpha` is true and channels >= 2, the last channel per pixel is preserved.
+#[archmage::arcane]
+pub(crate) fn srgb_to_linear_row_v3(
+    _token: X64V3Token,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
+    tf_row_inplace(_token, row, channels, has_alpha, srgb_to_linear_x8, fastmath::srgb_to_linear);
+}
+
+#[archmage::arcane]
+pub(crate) fn srgb_from_linear_row_v3(
+    _token: X64V3Token,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
+    tf_row_inplace(_token, row, channels, has_alpha, srgb_from_linear_x8, fastmath::srgb_from_linear);
+}
+
+#[archmage::arcane]
+pub(crate) fn bt709_to_linear_row_v3(
+    _token: X64V3Token,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
+    tf_row_inplace(_token, row, channels, has_alpha, bt709_to_linear_x8, fastmath::bt709_to_linear);
+}
+
+#[archmage::arcane]
+pub(crate) fn bt709_from_linear_row_v3(
+    _token: X64V3Token,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
+    tf_row_inplace(_token, row, channels, has_alpha, bt709_from_linear_x8, fastmath::bt709_from_linear);
+}
+
+#[archmage::arcane]
+pub(crate) fn pq_to_linear_row_v3(
+    _token: X64V3Token,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
+    tf_row_inplace(_token, row, channels, has_alpha, pq_to_linear_x8, fastmath::pq_to_linear);
+}
+
+#[archmage::arcane]
+pub(crate) fn pq_from_linear_row_v3(
+    _token: X64V3Token,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
+    tf_row_inplace(_token, row, channels, has_alpha, pq_from_linear_x8, fastmath::pq_from_linear);
+}
+
+#[archmage::arcane]
+pub(crate) fn hlg_to_linear_row_v3(
+    _token: X64V3Token,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
+    tf_row_inplace(_token, row, channels, has_alpha, hlg_to_linear_x8, fastmath::hlg_to_linear);
+}
+
+#[archmage::arcane]
+pub(crate) fn hlg_from_linear_row_v3(
+    _token: X64V3Token,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
+    tf_row_inplace(_token, row, channels, has_alpha, hlg_from_linear_x8, fastmath::hlg_from_linear);
+}
+
+/// Common implementation for applying a SIMD transfer function to a row.
+///
+/// For RGBA (4ch, has_alpha): processes 8 floats (2 pixels) at a time,
+/// restoring alpha channels after TF application.
+///
+/// For no-alpha: processes 8 floats at a time, all values through TF.
+#[archmage::rite]
+fn tf_row_inplace(
+    _token: X64V3Token,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+    tf_x8: fn(X64V3Token, __m256) -> __m256,
+    tf_scalar: fn(f32) -> f32,
+) {
+    if has_alpha && channels == 4 {
+        // RGBA: process 8 floats (2 RGBA pixels) at a time, restore alpha
+        let alpha_mask = _mm256_castsi256_ps(_mm256_set_epi32(
+            -1, 0, 0, 0, // pixel 1: alpha lane mask
+            -1, 0, 0, 0, // pixel 0: alpha lane mask
+        ));
+
+        let (chunks, tail) = row.as_chunks_mut::<8>();
+        for chunk in chunks.iter_mut() {
+            let v = _mm256_loadu_ps(chunk);
+            let converted = tf_x8(_token, v);
+            // Blend: keep original alpha (lanes 3, 7), use converted for RGB
+            let result = _mm256_blendv_ps(converted, v, alpha_mask);
+            _mm256_storeu_ps(chunk, result);
+        }
+
+        // Scalar tail: 0 or 1 pixel (4 floats)
+        for pixel in tail.chunks_exact_mut(4) {
+            for v in &mut pixel[..3] {
+                *v = tf_scalar(*v);
+            }
+        }
+    } else if has_alpha && channels >= 2 {
+        // Non-4ch with alpha: per-pixel, skip last channel
+        for pixel in row.chunks_exact_mut(channels) {
+            for v in &mut pixel[..channels - 1] {
+                *v = tf_scalar(*v);
+            }
+        }
+    } else {
+        // No alpha: process all values flat
+        let (chunks, tail) = row.as_chunks_mut::<8>();
+        for chunk in chunks.iter_mut() {
+            let v = _mm256_loadu_ps(chunk);
+            let converted = tf_x8(_token, v);
+            _mm256_storeu_ps(chunk, converted);
+        }
+        for v in tail.iter_mut() {
+            *v = tf_scalar(*v);
         }
     }
 }

@@ -188,6 +188,31 @@ pub(crate) fn filter_v_all_f16_wasm128(
     super::wide_kernels::filter_v_all_f16(intermediate, output, h_row_len, in_h, out_h, weights)
 }
 
+// Transfer function batch processors — delegate to scalar fastmath on WASM.
+
+macro_rules! tf_wasm_delegate {
+    ($name_wasm:ident, $name_scalar:ident) => {
+        #[archmage::arcane]
+        pub(crate) fn $name_wasm(
+            _token: Wasm128Token,
+            row: &mut [f32],
+            channels: usize,
+            has_alpha: bool,
+        ) {
+            super::scalar::$name_scalar(archmage::ScalarToken, row, channels, has_alpha);
+        }
+    };
+}
+
+tf_wasm_delegate!(srgb_to_linear_row_wasm128, srgb_to_linear_row_scalar);
+tf_wasm_delegate!(srgb_from_linear_row_wasm128, srgb_from_linear_row_scalar);
+tf_wasm_delegate!(bt709_to_linear_row_wasm128, bt709_to_linear_row_scalar);
+tf_wasm_delegate!(bt709_from_linear_row_wasm128, bt709_from_linear_row_scalar);
+tf_wasm_delegate!(pq_to_linear_row_wasm128, pq_to_linear_row_scalar);
+tf_wasm_delegate!(pq_from_linear_row_wasm128, pq_from_linear_row_scalar);
+tf_wasm_delegate!(hlg_to_linear_row_wasm128, hlg_to_linear_row_scalar);
+tf_wasm_delegate!(hlg_from_linear_row_wasm128, hlg_from_linear_row_scalar);
+
 #[archmage::arcane]
 pub(crate) fn srgb_u8_to_linear_f32_wasm128(
     _token: Wasm128Token,

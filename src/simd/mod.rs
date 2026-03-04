@@ -223,6 +223,27 @@ pub(crate) fn filter_v_all_f16(
     ))
 }
 
+// =========================================================================
+// Transfer function batch processors (SIMD-dispatched)
+// =========================================================================
+
+macro_rules! tf_dispatch {
+    ($name:ident) => {
+        pub(crate) fn $name(row: &mut [f32], channels: usize, has_alpha: bool) {
+            archmage::incant!($name(row, channels, has_alpha))
+        }
+    };
+}
+
+tf_dispatch!(srgb_to_linear_row);
+tf_dispatch!(srgb_from_linear_row);
+tf_dispatch!(bt709_to_linear_row);
+tf_dispatch!(bt709_from_linear_row);
+tf_dispatch!(pq_to_linear_row);
+tf_dispatch!(pq_from_linear_row);
+tf_dispatch!(hlg_to_linear_row);
+tf_dispatch!(hlg_from_linear_row);
+
 /// Batch vertical filter: i16 intermediate → i16 output, all rows at once.
 /// For linear-light i12 path (values 0-4095).
 pub(crate) fn filter_v_all_i16_i16(

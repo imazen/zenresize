@@ -526,6 +526,101 @@ pub(crate) fn linear_f32_to_srgb_u8_scalar(
     crate::color::linear_f32_to_srgb_u8_impl(input, output, channels, has_alpha);
 }
 
+// ============================================================================
+// Transfer function batch processors (scalar fallback)
+// ============================================================================
+
+fn tf_row_inplace_scalar(
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+    tf: fn(f32) -> f32,
+) {
+    if has_alpha && channels >= 2 {
+        for pixel in row.chunks_exact_mut(channels) {
+            for v in &mut pixel[..channels - 1] {
+                *v = tf(*v);
+            }
+        }
+    } else {
+        for v in row.iter_mut() {
+            *v = tf(*v);
+        }
+    }
+}
+
+pub(crate) fn srgb_to_linear_row_scalar(
+    _token: ScalarToken,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
+    tf_row_inplace_scalar(row, channels, has_alpha, crate::fastmath::srgb_to_linear);
+}
+
+pub(crate) fn srgb_from_linear_row_scalar(
+    _token: ScalarToken,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
+    tf_row_inplace_scalar(row, channels, has_alpha, crate::fastmath::srgb_from_linear);
+}
+
+pub(crate) fn bt709_to_linear_row_scalar(
+    _token: ScalarToken,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
+    tf_row_inplace_scalar(row, channels, has_alpha, crate::fastmath::bt709_to_linear);
+}
+
+pub(crate) fn bt709_from_linear_row_scalar(
+    _token: ScalarToken,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
+    tf_row_inplace_scalar(row, channels, has_alpha, crate::fastmath::bt709_from_linear);
+}
+
+pub(crate) fn pq_to_linear_row_scalar(
+    _token: ScalarToken,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
+    tf_row_inplace_scalar(row, channels, has_alpha, crate::fastmath::pq_to_linear);
+}
+
+pub(crate) fn pq_from_linear_row_scalar(
+    _token: ScalarToken,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
+    tf_row_inplace_scalar(row, channels, has_alpha, crate::fastmath::pq_from_linear);
+}
+
+pub(crate) fn hlg_to_linear_row_scalar(
+    _token: ScalarToken,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
+    tf_row_inplace_scalar(row, channels, has_alpha, crate::fastmath::hlg_to_linear);
+}
+
+pub(crate) fn hlg_from_linear_row_scalar(
+    _token: ScalarToken,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
+) {
+    tf_row_inplace_scalar(row, channels, has_alpha, crate::fastmath::hlg_from_linear);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

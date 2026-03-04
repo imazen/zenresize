@@ -187,6 +187,32 @@ pub(crate) fn filter_v_all_f16_neon(
     super::wide_kernels::filter_v_all_f16(intermediate, output, h_row_len, in_h, out_h, weights)
 }
 
+// Transfer function batch processors — use scalar fastmath loop on NEON.
+// wide::f32x4 lacks bitcast operations needed for fast_log2f/fast_pow2f SIMD.
+
+macro_rules! tf_neon_delegate {
+    ($name_neon:ident, $name_scalar:ident) => {
+        #[archmage::arcane]
+        pub(crate) fn $name_neon(
+            _token: NeonToken,
+            row: &mut [f32],
+            channels: usize,
+            has_alpha: bool,
+        ) {
+            super::scalar::$name_scalar(archmage::ScalarToken, row, channels, has_alpha);
+        }
+    };
+}
+
+tf_neon_delegate!(srgb_to_linear_row_neon, srgb_to_linear_row_scalar);
+tf_neon_delegate!(srgb_from_linear_row_neon, srgb_from_linear_row_scalar);
+tf_neon_delegate!(bt709_to_linear_row_neon, bt709_to_linear_row_scalar);
+tf_neon_delegate!(bt709_from_linear_row_neon, bt709_from_linear_row_scalar);
+tf_neon_delegate!(pq_to_linear_row_neon, pq_to_linear_row_scalar);
+tf_neon_delegate!(pq_from_linear_row_neon, pq_from_linear_row_scalar);
+tf_neon_delegate!(hlg_to_linear_row_neon, hlg_to_linear_row_scalar);
+tf_neon_delegate!(hlg_from_linear_row_neon, hlg_from_linear_row_scalar);
+
 #[archmage::arcane]
 pub(crate) fn srgb_u8_to_linear_f32_neon(
     _token: NeonToken,

@@ -189,7 +189,9 @@ pub fn bt709_from_linear(v: f32) -> f32 {
 
 /// PQ EOTF: signal → linear. Rational polynomial, max error ~7e-7.
 ///
-/// Zero `powf()` calls — uses `x + x*x` input transformation and rational polynomial.
+/// Zero `powf()` calls for signal > 0.02 — uses `x + x*x` input transformation
+/// and rational polynomial. Very small signal values use exact formula to
+/// maintain u8 roundtrip precision in the steep near-zero region.
 /// Coefficients from libjxl.
 #[inline(always)]
 pub fn pq_to_linear(v: f32) -> f32 {
@@ -205,15 +207,39 @@ pub fn pq_to_linear(v: f32) -> f32 {
     if v <= 0.0 {
         return 0.0;
     }
-    let a = v.abs();
+    // Very small signal values: use exact formula for u8 roundtrip precision.
+    // PQ signal 0.02 ≈ u8 value 5; below this the curve is extremely steep.
+    if v < 0.02 {
+        return pq_to_linear_exact(v);
+    }
+    let a = v;
     let x = a + a * a;
     eval_rational_poly(x, P, Q)
+}
+
+/// Exact PQ EOTF for very small signal values.
+#[inline(always)]
+fn pq_to_linear_exact(v: f32) -> f32 {
+    const M1: f32 = 0.1593017578125;
+    const M2: f32 = 78.84375;
+    const C1: f32 = 0.8359375;
+    const C2: f32 = 18.8515625;
+    const C3: f32 = 18.6875;
+    let vp = v.powf(1.0 / M2);
+    let num = (vp - C1).max(0.0);
+    let den = C2 - C3 * vp;
+    if den <= 0.0 {
+        return 1.0;
+    }
+    (num / den).powf(1.0 / M1)
 }
 
 /// PQ inverse EOTF: linear → signal. Rational polynomial on x^(1/4), max error ~3e-6.
 ///
 /// Uses sqrt(sqrt(x)) to extract the fourth root, then rational polynomial.
-/// Two-range approximation with threshold at sqrt(sqrt(x)) < 1e-4.
+/// Two-range approximation with threshold at sqrt(sqrt(x)) < 0.1.
+/// Very small values (v < 1e-4) use exact powf to avoid polynomial imprecision
+/// near zero where the PQ curve is extremely steep.
 /// Coefficients from libjxl.
 #[inline(always)]
 pub fn pq_from_linear(v: f32) -> f32 {
@@ -238,14 +264,33 @@ pub fn pq_from_linear(v: f32) -> f32 {
     if v <= 0.0 {
         return 0.0;
     }
-    let a = v.abs().sqrt().sqrt(); // fourth root
-    // Small-range polynomial is more accurate for a < 0.1 (v < ~1e-4).
+    // Very small linear values: the polynomial can't track PQ's extreme steepness
+    // near zero (PQ maps u8=1 to linear ~6e-7). Use exact formula for these.
+    if v < 1e-4 {
+        return pq_from_linear_exact(v);
+    }
+    let a = v.sqrt().sqrt(); // fourth root
+    // Small-range polynomial is more accurate for a < 0.1.
     // Large-range polynomial is more accurate above that.
     if a < 0.1 {
         eval_rational_poly(a, P_SMALL, Q_SMALL)
     } else {
         eval_rational_poly(a, P_LARGE, Q_LARGE)
     }
+}
+
+/// Exact PQ inverse EOTF for very small linear values where the polynomial is imprecise.
+#[inline(always)]
+fn pq_from_linear_exact(v: f32) -> f32 {
+    const M1: f32 = 0.1593017578125;
+    const M2: f32 = 78.84375;
+    const C1: f32 = 0.8359375;
+    const C2: f32 = 18.8515625;
+    const C3: f32 = 18.6875;
+    let vp = v.powf(M1);
+    let num = C1 + C2 * vp;
+    let den = 1.0 + C3 * vp;
+    (num / den).powf(M2)
 }
 
 // =============================================================================
