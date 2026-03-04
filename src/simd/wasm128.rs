@@ -188,10 +188,10 @@ pub(crate) fn filter_v_all_f16_wasm128(
     super::wide_kernels::filter_v_all_f16(intermediate, output, h_row_len, in_h, out_h, weights)
 }
 
-// Transfer function batch processors — delegate to scalar fastmath on WASM.
+// Transfer function batch processors — SIMD via magetypes f32x4 (WASM128).
 
-macro_rules! tf_wasm_delegate {
-    ($name_wasm:ident, $name_scalar:ident) => {
+macro_rules! tf_wasm {
+    ($name_wasm:ident, $name_portable:ident) => {
         #[archmage::arcane]
         pub(crate) fn $name_wasm(
             _token: Wasm128Token,
@@ -199,19 +199,19 @@ macro_rules! tf_wasm_delegate {
             channels: usize,
             has_alpha: bool,
         ) {
-            super::scalar::$name_scalar(archmage::ScalarToken, row, channels, has_alpha);
+            super::tf_portable::$name_portable(_token, row, channels, has_alpha);
         }
     };
 }
 
-tf_wasm_delegate!(srgb_to_linear_row_wasm128, srgb_to_linear_row_scalar);
-tf_wasm_delegate!(srgb_from_linear_row_wasm128, srgb_from_linear_row_scalar);
-tf_wasm_delegate!(bt709_to_linear_row_wasm128, bt709_to_linear_row_scalar);
-tf_wasm_delegate!(bt709_from_linear_row_wasm128, bt709_from_linear_row_scalar);
-tf_wasm_delegate!(pq_to_linear_row_wasm128, pq_to_linear_row_scalar);
-tf_wasm_delegate!(pq_from_linear_row_wasm128, pq_from_linear_row_scalar);
-tf_wasm_delegate!(hlg_to_linear_row_wasm128, hlg_to_linear_row_scalar);
-tf_wasm_delegate!(hlg_from_linear_row_wasm128, hlg_from_linear_row_scalar);
+tf_wasm!(srgb_to_linear_row_wasm128, srgb_to_linear_row);
+tf_wasm!(srgb_from_linear_row_wasm128, srgb_from_linear_row);
+tf_wasm!(bt709_to_linear_row_wasm128, bt709_to_linear_row);
+tf_wasm!(bt709_from_linear_row_wasm128, bt709_from_linear_row);
+tf_wasm!(pq_to_linear_row_wasm128, pq_to_linear_row);
+tf_wasm!(pq_from_linear_row_wasm128, pq_from_linear_row);
+tf_wasm!(hlg_to_linear_row_wasm128, hlg_to_linear_row);
+tf_wasm!(hlg_from_linear_row_wasm128, hlg_from_linear_row);
 
 #[archmage::arcane]
 pub(crate) fn srgb_u8_to_linear_f32_wasm128(

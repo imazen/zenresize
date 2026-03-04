@@ -1598,6 +1598,7 @@ dependencies = [
  "image",
  "imgref",
  "linear-srgb",
+ "magetypes",
  "palette",
  "pic-scale",
  "pic-scale-safe",
