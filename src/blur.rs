@@ -67,13 +67,7 @@ pub(crate) fn gaussian_weight_table(size: u32, sigma: f32) -> F32WeightTable {
 /// In-place Gaussian blur of an f32 buffer (width × height × channels).
 ///
 /// Uses separable H+V passes with SIMD-accelerated convolution.
-pub(crate) fn blur_f32(
-    data: &mut [f32],
-    width: u32,
-    height: u32,
-    channels: usize,
-    sigma: f32,
-) {
+pub(crate) fn blur_f32(data: &mut [f32], width: u32, height: u32, channels: usize, sigma: f32) {
     if sigma <= 0.0 || width == 0 || height == 0 {
         return;
     }
@@ -126,7 +120,11 @@ pub(crate) fn blur_f32(
         }
 
         let out_start = out_y * row_len;
-        simd::filter_v_row_f32(&row_ptrs, &mut data[out_start..out_start + row_len], weights);
+        simd::filter_v_row_f32(
+            &row_ptrs,
+            &mut data[out_start..out_start + row_len],
+            weights,
+        );
     }
 }
 
@@ -134,13 +132,7 @@ pub(crate) fn blur_f32(
 ///
 /// Converts to f32, blurs, converts back. The blur operates in the same
 /// color space as the input (typically sRGB gamma).
-pub(crate) fn blur_u8(
-    data: &mut [u8],
-    width: u32,
-    height: u32,
-    channels: usize,
-    sigma: f32,
-) {
+pub(crate) fn blur_u8(data: &mut [u8], width: u32, height: u32, channels: usize, sigma: f32) {
     if sigma <= 0.0 || width == 0 || height == 0 {
         return;
     }
@@ -231,10 +223,7 @@ mod tests {
         for pixel in 0..100 {
             let weights = table.weights(pixel);
             let sum: f32 = weights.iter().sum();
-            assert!(
-                (sum - 1.0).abs() < 1e-5,
-                "pixel {pixel}: sum = {sum}"
-            );
+            assert!((sum - 1.0).abs() < 1e-5, "pixel {pixel}: sum = {sum}");
         }
     }
 
@@ -267,7 +256,9 @@ mod tests {
         // sigma=0.1 means radius=ceil(0.3)=1, but center weight dominates
         blur_f32(&mut data, w as u32, h as u32, ch, 0.1);
 
-        let max_diff: f32 = data.iter().zip(original.iter())
+        let max_diff: f32 = data
+            .iter()
+            .zip(original.iter())
             .map(|(a, b)| (a - b).abs())
             .fold(0.0f32, f32::max);
         assert!(max_diff < 0.02, "max_diff = {max_diff}");

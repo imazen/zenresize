@@ -46,12 +46,10 @@ use crate::simd;
 use crate::transfer::{Bt709, Hlg, Pq, Srgb, TransferFunction};
 use crate::weights::{F32WeightTable, I16WeightTable};
 
-/// Build V-filter row references from a ring buffer cache using a stack array.
+/// Build V-filter row references from a ring buffer cache.
 ///
-/// Uses a 128-slot stack array covering up to ~21× downscale with Lanczos3.
-/// Panics in debug builds if tap_count exceeds the stack limit.
-/// In release builds, excess taps are silently clamped (produces incorrect output
-/// but avoids allocation — this case is extremely rare in practice).
+/// Uses a 128-slot stack array for the common case (up to ~21× downscale with
+/// Lanczos3). Falls back to heap allocation for extreme downscale ratios.
 fn with_v_rows<T: Copy, R>(
     cache: &[Vec<T>],
     cache_size: usize,
@@ -62,19 +60,25 @@ fn with_v_rows<T: Copy, R>(
     f: impl FnOnce(&[&[T]]) -> R,
 ) -> R {
     const STACK_LIMIT: usize = 128;
-    debug_assert!(
-        tap_count <= STACK_LIMIT,
-        "V-filter tap count {tap_count} exceeds stack limit {STACK_LIMIT}"
-    );
-    let effective_taps = tap_count.min(STACK_LIMIT);
     let clamp_max = in_height as i32 - 1;
     let empty: &[T] = &[];
-    let mut rows = [empty; STACK_LIMIT];
-    for (t, slot) in rows.iter_mut().enumerate().take(effective_taps) {
-        let input_y = (left + t as i32).clamp(0, clamp_max) as usize;
-        *slot = &cache[input_y % cache_size][..in_row_len];
+
+    if tap_count <= STACK_LIMIT {
+        let mut rows = [empty; STACK_LIMIT];
+        for (t, slot) in rows.iter_mut().enumerate().take(tap_count) {
+            let input_y = (left + t as i32).clamp(0, clamp_max) as usize;
+            *slot = &cache[input_y % cache_size][..in_row_len];
+        }
+        f(&rows[..tap_count])
+    } else {
+        let rows: Vec<&[T]> = (0..tap_count)
+            .map(|t| {
+                let input_y = (left + t as i32).clamp(0, clamp_max) as usize;
+                &cache[input_y % cache_size][..in_row_len]
+            })
+            .collect();
+        f(&rows)
     }
-    f(&rows[..effective_taps])
 }
 
 /// Internal path selection for streaming resize.
