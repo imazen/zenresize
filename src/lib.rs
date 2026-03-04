@@ -48,7 +48,8 @@ pub(crate) mod transfer;
 pub(crate) mod weights;
 pub(crate) mod working;
 
-pub(crate) mod fastmath;
+#[doc(hidden)]
+pub mod fastmath;
 mod proven;
 mod simd;
 

@@ -22,6 +22,7 @@
 use alloc::vec::Vec;
 
 use crate::color;
+use crate::fastmath;
 use crate::simd;
 
 // =============================================================================
@@ -321,22 +322,12 @@ impl TransferCurve for Srgb {
 
     #[inline]
     fn to_linear(&self, encoded: f32) -> f32 {
-        // Standard sRGB EOTF
-        if encoded <= 0.04045 {
-            encoded / 12.92
-        } else {
-            ((encoded + 0.055) / 1.055).powf(2.4)
-        }
+        fastmath::srgb_to_linear(encoded)
     }
 
     #[inline]
     fn from_linear(&self, linear: f32) -> f32 {
-        // Standard sRGB inverse EOTF
-        if linear <= 0.0031308 {
-            linear * 12.92
-        } else {
-            1.055 * linear.powf(1.0 / 2.4) - 0.055
-        }
+        fastmath::srgb_from_linear(linear)
     }
 
     #[inline]
@@ -535,20 +526,12 @@ impl TransferCurve for Bt709 {
 
     #[inline]
     fn to_linear(&self, v: f32) -> f32 {
-        if v < 4.5 * Self::BETA {
-            v / 4.5
-        } else {
-            ((v + Self::ALPHA) / (1.0 + Self::ALPHA)).powf(1.0 / 0.45)
-        }
+        fastmath::bt709_to_linear(v)
     }
 
     #[inline]
     fn from_linear(&self, v: f32) -> f32 {
-        if v < Self::BETA {
-            4.5 * v
-        } else {
-            (1.0 + Self::ALPHA) * v.powf(0.45) - Self::ALPHA
-        }
+        fastmath::bt709_from_linear(v)
     }
 
     fn build_luts(&self) -> Self::Luts {}
@@ -777,27 +760,12 @@ impl TransferCurve for Pq {
 
     #[inline]
     fn to_linear(&self, v: f32) -> f32 {
-        if v <= 0.0 {
-            return 0.0;
-        }
-        let vp = v.powf(1.0 / Self::M2);
-        let num = (vp - Self::C1).max(0.0);
-        let den = Self::C2 - Self::C3 * vp;
-        if den <= 0.0 {
-            return 1.0;
-        }
-        (num / den).powf(1.0 / Self::M1)
+        fastmath::pq_to_linear(v)
     }
 
     #[inline]
     fn from_linear(&self, v: f32) -> f32 {
-        if v <= 0.0 {
-            return 0.0;
-        }
-        let vp = v.powf(Self::M1);
-        let num = Self::C1 + Self::C2 * vp;
-        let den = 1.0 + Self::C3 * vp;
-        (num / den).powf(Self::M2)
+        fastmath::pq_from_linear(v)
     }
 
     fn build_luts(&self) -> Self::Luts {}
@@ -1023,26 +991,12 @@ impl TransferCurve for Hlg {
 
     #[inline]
     fn to_linear(&self, v: f32) -> f32 {
-        // Inverse OETF: signal → scene linear
-        if v <= 0.0 {
-            0.0
-        } else if v <= 0.5 {
-            (v * v) / 3.0
-        } else {
-            (((v - Self::C) / Self::A).exp() + Self::B) / 12.0
-        }
+        fastmath::hlg_to_linear(v)
     }
 
     #[inline]
     fn from_linear(&self, v: f32) -> f32 {
-        // OETF: scene linear → signal
-        if v <= 0.0 {
-            0.0
-        } else if v <= 1.0 / 12.0 {
-            (3.0 * v).sqrt()
-        } else {
-            Self::A * (12.0 * v - Self::B).ln() + Self::C
-        }
+        fastmath::hlg_from_linear(v)
     }
 
     fn build_luts(&self) -> Self::Luts {}

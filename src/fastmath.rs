@@ -22,7 +22,7 @@
 ///
 /// Coefficients are stored lowest-degree-first: `p[0] + p[1]*x + p[2]*x^2 + ...`
 #[inline(always)]
-pub(crate) fn eval_rational_poly<const P: usize, const Q: usize>(
+pub fn eval_rational_poly<const P: usize, const Q: usize>(
     x: f32,
     p: [f32; P],
     q: [f32; Q],
@@ -48,7 +48,7 @@ pub(crate) fn eval_rational_poly<const P: usize, const Q: usize>(
 /// Uses integer bit extraction for exponent + rational polynomial on mantissa.
 /// Coefficients from libjxl (via jxl crate).
 #[inline(always)]
-pub(crate) fn fast_log2f(x: f32) -> f32 {
+pub fn fast_log2f(x: f32) -> f32 {
     const LOG2_P: [f32; 3] = [-1.8503833400518310e-6, 1.4287160470083755, 7.4245873327820566e-1];
     const LOG2_Q: [f32; 3] = [9.9032814277590719e-1, 1.0096718572241148, 1.7409343003366853e-1];
 
@@ -67,7 +67,7 @@ pub(crate) fn fast_log2f(x: f32) -> f32 {
 /// Splits into integer exponent (bit shift) + fractional part (rational polynomial).
 /// Coefficients from libjxl (via jxl crate).
 #[inline(always)]
-pub(crate) fn fast_pow2f(x: f32) -> f32 {
+pub fn fast_pow2f(x: f32) -> f32 {
     const NUM: [f32; 3] = [1.01749063e1, 4.88687798e1, 9.85506591e1];
     const DEN: [f32; 4] = [2.10242958e-1, -2.22328856e-2, -1.94414990e1, 9.85506633e1];
 
@@ -91,7 +91,7 @@ pub(crate) fn fast_pow2f(x: f32) -> f32 {
 ///
 /// Computed as `pow2(exp * log2(base))`.
 #[inline(always)]
-pub(crate) fn fast_powf(base: f32, exp: f32) -> f32 {
+pub fn fast_powf(base: f32, exp: f32) -> f32 {
     fast_pow2f(fast_log2f(base) * exp)
 }
 
@@ -103,7 +103,7 @@ pub(crate) fn fast_powf(base: f32, exp: f32) -> f32 {
 ///
 /// Coefficients from libjxl.
 #[inline(always)]
-pub(crate) fn srgb_to_linear(v: f32) -> f32 {
+pub fn srgb_to_linear(v: f32) -> f32 {
     const P: [f32; 5] = [
         2.200248328e-4,
         1.043637593e-2,
@@ -131,7 +131,7 @@ pub(crate) fn srgb_to_linear(v: f32) -> f32 {
 ///
 /// Coefficients from libjxl.
 #[inline(always)]
-pub(crate) fn srgb_from_linear(v: f32) -> f32 {
+pub fn srgb_from_linear(v: f32) -> f32 {
     const P: [f32; 5] = [
         -5.135152395e-4,
         5.287254571e-3,
@@ -165,7 +165,7 @@ const BT709_BETA: f32 = 0.018053968510807;
 
 /// BT.709 EOTF: encoded → linear. Uses fast_powf, max error ~3e-6.
 #[inline(always)]
-pub(crate) fn bt709_to_linear(v: f32) -> f32 {
+pub fn bt709_to_linear(v: f32) -> f32 {
     if v < 4.5 * BT709_BETA {
         v / 4.5
     } else {
@@ -175,7 +175,7 @@ pub(crate) fn bt709_to_linear(v: f32) -> f32 {
 
 /// BT.709 inverse EOTF: linear → encoded. Uses fast_powf, max error ~3e-5.
 #[inline(always)]
-pub(crate) fn bt709_from_linear(v: f32) -> f32 {
+pub fn bt709_from_linear(v: f32) -> f32 {
     if v < BT709_BETA {
         4.5 * v
     } else {
@@ -192,7 +192,7 @@ pub(crate) fn bt709_from_linear(v: f32) -> f32 {
 /// Zero `powf()` calls — uses `x + x*x` input transformation and rational polynomial.
 /// Coefficients from libjxl.
 #[inline(always)]
-pub(crate) fn pq_to_linear(v: f32) -> f32 {
+pub fn pq_to_linear(v: f32) -> f32 {
     const P: [f32; 5] = [
         2.6297566e-4,
         -6.235531e-3,
@@ -216,7 +216,7 @@ pub(crate) fn pq_to_linear(v: f32) -> f32 {
 /// Two-range approximation with threshold at sqrt(sqrt(x)) < 1e-4.
 /// Coefficients from libjxl.
 #[inline(always)]
-pub(crate) fn pq_from_linear(v: f32) -> f32 {
+pub fn pq_from_linear(v: f32) -> f32 {
     const P_LARGE: [f32; 5] = [1.351392e-2, -1.095778, 5.522776e1, 1.492516e2, 4.838434e1];
     const Q_LARGE: [f32; 5] = [1.012416, 2.016708e1, 9.26371e1, 1.120607e2, 2.590418e1];
 
@@ -260,7 +260,7 @@ const HLG_INV_A_LOG2E: f32 = core::f32::consts::LOG2_E / HLG_A; // log2(e) / A f
 
 /// HLG inverse OETF: signal → scene linear. Uses fast_pow2f for exp().
 #[inline(always)]
-pub(crate) fn hlg_to_linear(v: f32) -> f32 {
+pub fn hlg_to_linear(v: f32) -> f32 {
     if v <= 0.0 {
         0.0
     } else if v <= 0.5 {
@@ -273,7 +273,7 @@ pub(crate) fn hlg_to_linear(v: f32) -> f32 {
 
 /// HLG OETF: scene linear → signal. Uses fast_log2f for ln().
 #[inline(always)]
-pub(crate) fn hlg_from_linear(v: f32) -> f32 {
+pub fn hlg_from_linear(v: f32) -> f32 {
     if v <= 0.0 {
         0.0
     } else if v <= 1.0 / 12.0 {

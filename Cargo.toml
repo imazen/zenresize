@@ -89,6 +89,10 @@ harness = false
 name = "planar_bench"
 harness = false
 
+[[bench]]
+name = "transfer_bench"
+harness = false
+
 [profile.test]
 opt-level = 2
 
