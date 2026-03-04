@@ -43,6 +43,7 @@ pic-scale-safe = "0.1"
 fast_image_resize = "6"
 resize = "0.8"
 rgb = "0.8"
+palette = "0.7"
 
 [[bench]]
 name = "resize_bench"
