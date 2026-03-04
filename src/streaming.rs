@@ -43,7 +43,7 @@ use crate::composite::{self, Background, CompositeError, NoBackground};
 use crate::filter::InterpolationDetails;
 use crate::pixel::{PixelFormat, ResizeConfig, Transfer};
 use crate::simd;
-use crate::transfer::{Bt709, Hlg, Pq, Srgb, TransferFunction};
+use crate::transfer::{Bt709, Hlg, Pq, Srgb, TransferCurve};
 use crate::weights::{F32WeightTable, I16WeightTable};
 
 /// Build V-filter row references from a ring buffer cache.

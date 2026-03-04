@@ -3,7 +3,7 @@
 //! A transfer function (TF) maps between a perceptual/encoded space and linear light.
 //! sRGB, PQ (HDR10), HLG, and gamma curves are all transfer functions.
 //!
-//! The [`TransferFunction`] trait provides batch methods for converting pixel rows
+//! The [`TransferCurve`] trait provides batch methods for converting pixel rows
 //! between encoded and working space. Implementations fuse linearization with
 //! premultiply/unpremultiply for efficiency.
 //!
@@ -25,7 +25,7 @@ use crate::color;
 use crate::simd;
 
 // =============================================================================
-// TransferFunction trait
+// TransferCurve trait
 // =============================================================================
 
 /// Transfer function for encoding/decoding pixel values to/from linear light.
@@ -41,7 +41,7 @@ use crate::simd;
 /// methods have default implementations that call these in a loop, but
 /// optimized implementations should override the batch methods with LUT-based
 /// or SIMD-based versions.
-pub trait TransferFunction: Send + Sync + 'static {
+pub trait TransferCurve: Send + Sync + 'static {
     /// Cached state (LUTs, etc.). Built once by `build_luts()`, passed to batch methods.
     ///
     /// Standard TFs use `&'static RuntimeLuts` (permanently cached via `OnceLock`).
@@ -166,7 +166,7 @@ pub trait TransferFunction: Send + Sync + 'static {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoTransfer;
 
-impl TransferFunction for NoTransfer {
+impl TransferCurve for NoTransfer {
     type Luts = ();
 
     #[inline]
@@ -316,7 +316,7 @@ impl TransferFunction for NoTransfer {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Srgb;
 
-impl TransferFunction for Srgb {
+impl TransferCurve for Srgb {
     type Luts = ();
 
     #[inline]
@@ -526,7 +526,7 @@ impl Bt709 {
     const BETA: f32 = 0.018;
 }
 
-impl TransferFunction for Bt709 {
+impl TransferCurve for Bt709 {
     type Luts = ();
 
     #[inline]
@@ -768,7 +768,7 @@ impl Pq {
     const C3: f32 = 18.6875; // 2392/128
 }
 
-impl TransferFunction for Pq {
+impl TransferCurve for Pq {
     type Luts = ();
 
     #[inline]
@@ -1014,7 +1014,7 @@ impl Hlg {
     const C: f32 = 0.55991073; // 0.5 - A * ln(4 * A)
 }
 
-impl TransferFunction for Hlg {
+impl TransferCurve for Hlg {
     type Luts = ();
 
     #[inline]

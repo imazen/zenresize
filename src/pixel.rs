@@ -3,58 +3,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
-// =============================================================================
-// Transfer function selection
-// =============================================================================
-
-/// Transfer function selection for format conversion.
-///
-/// Controls how encoded pixel values (u8 sRGB, u16 encoded) map to/from
-/// linear light during resize. `LinearF32` data is always identity regardless
-/// of this setting.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
-pub enum Transfer {
-    /// sRGB gamma curve. Use for standard sRGB images (the common case).
-    #[default]
-    Srgb,
-    /// Identity (no conversion). Use for data already in the desired space,
-    /// or when gamma-space resize is intentional.
-    None,
-    /// BT.709/BT.601 transfer curve. Close to sRGB but with a different toe.
-    Bt709,
-    /// SMPTE ST 2084 (PQ / HDR10). Wide dynamic range — requires f32 path.
-    Pq,
-    /// ARIB STD-B67 (HLG). Wide dynamic range — requires f32 path.
-    Hlg,
-}
-
-impl Transfer {
-    /// Whether this transfer requires the f32 path (can't be handled by i16 LUTs).
-    #[inline]
-    pub fn requires_f32(&self) -> bool {
-        matches!(self, Self::Pq | Self::Hlg)
-    }
-
-    /// Whether this is an identity (no-op) transfer.
-    #[inline]
-    pub fn is_identity(&self) -> bool {
-        matches!(self, Self::None)
-    }
-
-    /// Create from ITU-T H.273 `transfer_characteristics` code.
-    ///
-    /// Returns `None` for unrecognized codes.
-    pub fn from_cicp_transfer(tc: u8) -> Option<Self> {
-        match tc {
-            1 | 6 => Some(Transfer::Bt709),
-            8 => Some(Transfer::None),
-            13 => Some(Transfer::Srgb),
-            16 => Some(Transfer::Pq),
-            18 => Some(Transfer::Hlg),
-            _ => None,
-        }
-    }
-}
+use zenpixels::{AlphaMode, ChannelType, PixelDescriptor, TransferFunction};
 
 // =============================================================================
 // Element trait
@@ -92,172 +41,8 @@ impl Element for f32 {
 }
 
 // =============================================================================
-// PixelLayout
+// ResizeConfig
 // =============================================================================
-
-/// Pixel memory layout.
-///
-/// Describes the number of channels and how alpha is handled.
-/// Channel order doesn't matter — RGBA, BGRA, ARGB all work identically
-/// because the sRGB transfer function is the same for R, G, and B,
-/// and the convolution kernels just operate on N floats per pixel.
-#[non_exhaustive]
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum PixelLayout {
-    /// Single-channel grayscale.
-    Gray,
-    /// 3-channel (RGB, BGR, etc.). No alpha.
-    Rgb,
-    /// 4-channel with padding (RGBX, BGRX). The 4th channel is processed
-    /// identically to the others — it's not skipped, just not treated as alpha.
-    Rgbx,
-    /// 4-channel with straight (non-premultiplied) alpha.
-    /// The pipeline premultiplies before filtering and unpremultiplies after.
-    Rgba,
-    /// 4-channel with premultiplied alpha.
-    /// Skips premultiply/unpremultiply — data is filtered as-is.
-    RgbaPremul,
-    /// 4-channel CMYK. No alpha — all 4 channels are color data.
-    /// Filtered identically to Rgbx (each channel independently).
-    Cmyk,
-}
-
-impl PixelLayout {
-    /// Number of channels per pixel.
-    #[inline]
-    pub fn channels(&self) -> u8 {
-        match self {
-            Self::Gray => 1,
-            Self::Rgb => 3,
-            Self::Rgbx | Self::Rgba | Self::RgbaPremul | Self::Cmyk => 4,
-        }
-    }
-
-    /// Whether the format carries meaningful alpha.
-    #[inline]
-    pub fn has_alpha(&self) -> bool {
-        matches!(self, Self::Rgba | Self::RgbaPremul)
-    }
-
-    /// Whether the pipeline needs to premultiply/unpremultiply alpha.
-    ///
-    /// True only for straight alpha ([`Rgba`](Self::Rgba)).
-    /// Premultiplied and non-alpha layouts skip this step.
-    #[inline]
-    pub fn needs_premultiply(&self) -> bool {
-        matches!(self, Self::Rgba)
-    }
-
-    /// Whether the data is already premultiplied.
-    #[inline]
-    pub fn is_premultiplied(&self) -> bool {
-        matches!(self, Self::RgbaPremul)
-    }
-
-    /// Whether the last channel is alpha (and should skip sRGB linearization).
-    #[inline]
-    pub fn alpha_is_last_channel(&self) -> bool {
-        matches!(self, Self::Rgba | Self::RgbaPremul)
-    }
-}
-
-/// Pixel format descriptor.
-///
-/// Combines a data type (u8 sRGB or f32 linear) with a [`PixelLayout`].
-///
-/// The pipeline is channel-order-agnostic: RGBA, BGRA, ARGB all work
-/// identically because the sRGB transfer function is the same for R, G, and B,
-/// and the convolution kernels just operate on N floats per pixel.
-#[non_exhaustive]
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum PixelFormat {
-    /// sRGB gamma-encoded u8 pixels (the common case).
-    ///
-    /// Channel order doesn't matter — RGBA, BGRA, ARGB all work identically.
-    Srgb8(PixelLayout),
-    /// Linear light f32 pixels (HDR, scientific, pipeline use).
-    LinearF32(PixelLayout),
-    /// Transfer-function-encoded u16 pixels.
-    ///
-    /// Used for 16-bit sRGB PNG and other 16-bit encoded formats.
-    /// Values span the full 0-65535 range. The transfer function
-    /// (sRGB, PQ, HLG, etc.) is specified separately on the Resizer.
-    Encoded16(PixelLayout),
-}
-
-impl PixelFormat {
-    /// The pixel layout.
-    #[inline]
-    pub fn layout(&self) -> PixelLayout {
-        match self {
-            Self::Srgb8(layout) | Self::LinearF32(layout) | Self::Encoded16(layout) => *layout,
-        }
-    }
-
-    /// Number of channels per pixel.
-    #[inline]
-    pub fn channels(&self) -> u8 {
-        self.layout().channels()
-    }
-
-    /// Whether the format carries meaningful alpha.
-    #[inline]
-    pub fn has_alpha(&self) -> bool {
-        self.layout().has_alpha()
-    }
-
-    /// Components per pixel (same as channels).
-    #[inline]
-    pub fn components_per_pixel(&self) -> usize {
-        self.channels() as usize
-    }
-
-    /// Whether this is a u8-based format.
-    #[inline]
-    pub fn is_u8(&self) -> bool {
-        matches!(self, Self::Srgb8(..))
-    }
-
-    /// Whether this is a u16-based format.
-    #[inline]
-    pub fn is_u16(&self) -> bool {
-        matches!(self, Self::Encoded16(..))
-    }
-
-    /// Whether this is an f32-based format.
-    #[inline]
-    pub fn is_f32(&self) -> bool {
-        matches!(self, Self::LinearF32(..))
-    }
-
-    /// Whether this format uses sRGB gamma encoding.
-    #[inline]
-    pub fn is_srgb(&self) -> bool {
-        matches!(self, Self::Srgb8(..))
-    }
-
-    /// Whether this format uses linear light values.
-    #[inline]
-    pub fn is_linear(&self) -> bool {
-        matches!(self, Self::LinearF32(..))
-    }
-
-    /// Bytes per element for this format.
-    #[inline]
-    pub fn bytes_per_element(&self) -> usize {
-        match self {
-            Self::Srgb8(..) => 1,
-            Self::Encoded16(..) => 2,
-            Self::LinearF32(..) => 4,
-        }
-    }
-
-    /// Bytes per pixel.
-    #[inline]
-    pub fn bytes_per_pixel(&self) -> usize {
-        self.bytes_per_element() * self.components_per_pixel()
-    }
-}
 
 /// Resize configuration built with [`ResizeConfigBuilder`].
 ///
@@ -275,10 +60,10 @@ pub struct ResizeConfig {
     pub out_width: u32,
     /// Output image height in pixels.
     pub out_height: u32,
-    /// Input pixel format.
-    pub input_format: PixelFormat,
-    /// Output pixel format.
-    pub output_format: PixelFormat,
+    /// Input pixel descriptor.
+    pub input: PixelDescriptor,
+    /// Output pixel descriptor.
+    pub output: PixelDescriptor,
     /// Sharpening amount (0.0 = none).
     pub sharpen: f32,
     /// Gaussian blur sigma applied after resize (0.0 = none).
@@ -299,16 +84,6 @@ pub struct ResizeConfig {
     pub in_stride: usize,
     /// Output row stride in elements (0 = tightly packed).
     pub out_stride: usize,
-    /// Transfer function for decoding input pixels to linear working space.
-    ///
-    /// `None` means infer from `input_format` and the `linear` flag (backwards compatible).
-    /// `Some(t)` overrides the inferred transfer function.
-    pub input_transfer: Option<Transfer>,
-    /// Transfer function for encoding linear working space to output pixels.
-    ///
-    /// `None` means infer from `output_format` and the `linear` flag (backwards compatible).
-    /// `Some(t)` overrides the inferred transfer function.
-    pub output_transfer: Option<Transfer>,
 }
 
 impl ResizeConfig {
@@ -324,14 +99,45 @@ impl ResizeConfig {
 
     /// Validate the configuration.
     pub fn validate(&self) -> Result<(), &'static str> {
+        use zenpixels::{ChannelLayout, SignalRange};
+
         if self.in_width == 0 || self.in_height == 0 {
             return Err("input dimensions must be positive");
         }
         if self.out_width == 0 || self.out_height == 0 {
             return Err("output dimensions must be positive");
         }
-        if self.input_format.layout() != self.output_format.layout() {
-            return Err("input and output must have same layout");
+        // Channel count must match between input and output
+        if self.input.channels() != self.output.channels() {
+            return Err("input and output must have the same number of channels");
+        }
+        // Reject unsupported channel types
+        if self.input.channel_type() == ChannelType::F16
+            || self.output.channel_type() == ChannelType::F16
+        {
+            return Err("F16 channel type is not supported; convert to F32 first");
+        }
+        // Reject unsupported layouts
+        let reject_layout = |l: ChannelLayout| {
+            matches!(
+                l,
+                ChannelLayout::GrayAlpha | ChannelLayout::Oklab | ChannelLayout::OklabA
+            )
+        };
+        if reject_layout(self.input.layout()) || reject_layout(self.output.layout()) {
+            return Err("unsupported channel layout; convert to a supported layout first");
+        }
+        // Reject unknown transfer
+        if self.input.transfer == TransferFunction::Unknown
+            || self.output.transfer == TransferFunction::Unknown
+        {
+            return Err("unknown transfer function; specify Srgb, Linear, Bt709, Pq, or Hlg");
+        }
+        // Reject narrow range
+        if self.input.signal_range == SignalRange::Narrow
+            || self.output.signal_range == SignalRange::Narrow
+        {
+            return Err("narrow signal range is not supported; expand to full range first");
         }
         Ok(())
     }
@@ -339,7 +145,7 @@ impl ResizeConfig {
     /// Effective input row stride in elements.
     pub fn effective_in_stride(&self) -> usize {
         if self.in_stride == 0 {
-            self.in_width as usize * self.input_format.components_per_pixel()
+            self.in_width as usize * self.input.channels()
         } else {
             self.in_stride
         }
@@ -348,7 +154,7 @@ impl ResizeConfig {
     /// Effective output row stride in elements.
     pub fn effective_out_stride(&self) -> usize {
         if self.out_stride == 0 {
-            self.out_width as usize * self.output_format.components_per_pixel()
+            self.out_width as usize * self.output.channels()
         } else {
             self.out_stride
         }
@@ -356,80 +162,92 @@ impl ResizeConfig {
 
     /// Pixel-packed input row length (no padding).
     pub fn input_row_len(&self) -> usize {
-        self.in_width as usize * self.input_format.components_per_pixel()
+        self.in_width as usize * self.input.channels()
     }
 
     /// Pixel-packed output row length (no padding).
     pub fn output_row_len(&self) -> usize {
-        self.out_width as usize * self.output_format.components_per_pixel()
+        self.out_width as usize * self.output.channels()
     }
 
     /// Whether linear-light processing is needed.
     ///
-    /// True when `linear` is set and the input is sRGB u8.
-    /// Premultiplied alpha layouts skip linearization (linearizing
-    /// premultiplied sRGB data is mathematically incorrect).
+    /// True when `linear` is set and the input uses an integer type with
+    /// a non-linear transfer function, and alpha is not premultiplied
+    /// (linearizing premultiplied sRGB data is mathematically incorrect).
     pub fn needs_linearization(&self) -> bool {
-        self.linear && self.input_format.is_srgb() && !self.input_format.layout().is_premultiplied()
+        self.linear
+            && self.input.channel_type().is_integer()
+            && self.input.transfer != TransferFunction::Linear
+            && self.input.alpha != Some(AlphaMode::Premultiplied)
     }
 
     /// Effective input transfer function after inference.
     ///
-    /// If `input_transfer` is explicitly set, returns that.
-    /// Otherwise infers from `input_format` and the `linear` flag:
-    /// - Premultiplied layout → `Transfer::None` (linearizing premul sRGB is wrong)
-    /// - `LinearF32` → `Transfer::None` (already linear)
-    /// - `Srgb8` + `linear=true` → `Transfer::Srgb`
-    /// - `Srgb8` + `linear=false` → `Transfer::None`
-    /// - `Encoded16` → `Transfer::Srgb`
-    pub fn effective_input_transfer(&self) -> Transfer {
-        if let Some(t) = self.input_transfer {
-            return t;
-        }
+    /// Returns `TransferFunction::Linear` (identity) when no linearization
+    /// should occur:
+    /// - Premultiplied alpha → identity (linearizing premul sRGB is wrong)
+    /// - Already linear transfer → identity
+    /// - `linear=false` and u8 input → identity (gamma-space filtering)
+    /// - f32 input with linear transfer → identity
+    ///
+    /// Otherwise returns the descriptor's transfer function.
+    pub fn effective_input_transfer(&self) -> TransferFunction {
         // Premultiplied sRGB data must not be linearized
-        if self.input_format.layout().is_premultiplied() {
-            return Transfer::None;
+        if self.input.alpha == Some(AlphaMode::Premultiplied) {
+            return TransferFunction::Linear;
         }
-        match self.input_format {
-            PixelFormat::LinearF32(_) => Transfer::None,
-            PixelFormat::Srgb8(_) => {
-                if self.linear {
-                    Transfer::Srgb
-                } else {
-                    Transfer::None
-                }
-            }
-            PixelFormat::Encoded16(_) => Transfer::Srgb,
+        // Already linear → identity
+        if self.input.transfer == TransferFunction::Linear {
+            return TransferFunction::Linear;
         }
+        // For u8: linear=false means gamma-space filtering (no linearization)
+        if !self.linear && self.input.channel_type() == ChannelType::U8 {
+            return TransferFunction::Linear;
+        }
+        // Use the descriptor's transfer
+        self.input.transfer
     }
 
     /// Effective output transfer function after inference.
     ///
-    /// If `output_transfer` is explicitly set, returns that.
-    /// Otherwise infers from `output_format` and the `linear` flag:
-    /// - Premultiplied layout → `Transfer::None`
-    /// - `LinearF32` → `Transfer::None` (already linear)
-    /// - `Srgb8` + `linear=true` → `Transfer::Srgb`
-    /// - `Srgb8` + `linear=false` → `Transfer::None`
-    /// - `Encoded16` → `Transfer::Srgb`
-    pub fn effective_output_transfer(&self) -> Transfer {
-        if let Some(t) = self.output_transfer {
-            return t;
+    /// Same logic as [`effective_input_transfer()`](Self::effective_input_transfer)
+    /// but for the output descriptor.
+    pub fn effective_output_transfer(&self) -> TransferFunction {
+        if self.output.alpha == Some(AlphaMode::Premultiplied) {
+            return TransferFunction::Linear;
         }
-        if self.output_format.layout().is_premultiplied() {
-            return Transfer::None;
+        if self.output.transfer == TransferFunction::Linear {
+            return TransferFunction::Linear;
         }
-        match self.output_format {
-            PixelFormat::LinearF32(_) => Transfer::None,
-            PixelFormat::Srgb8(_) => {
-                if self.linear {
-                    Transfer::Srgb
-                } else {
-                    Transfer::None
-                }
-            }
-            PixelFormat::Encoded16(_) => Transfer::Srgb,
+        if !self.linear && self.output.channel_type() == ChannelType::U8 {
+            return TransferFunction::Linear;
         }
+        self.output.transfer
+    }
+
+    /// Number of channels per pixel (from input descriptor).
+    #[inline]
+    pub fn channels(&self) -> usize {
+        self.input.channels()
+    }
+
+    /// Whether the pipeline needs to premultiply alpha.
+    #[inline]
+    pub fn needs_premultiply(&self) -> bool {
+        self.input.alpha == Some(AlphaMode::Straight)
+    }
+
+    /// Input channel type.
+    #[inline]
+    pub fn input_channel_type(&self) -> ChannelType {
+        self.input.channel_type()
+    }
+
+    /// Output channel type.
+    #[inline]
+    pub fn output_channel_type(&self) -> ChannelType {
+        self.output.channel_type()
     }
 }
 
@@ -437,11 +255,11 @@ impl ResizeConfig {
 ///
 /// # Example
 /// ```
-/// use zenresize::{ResizeConfig, Filter, PixelFormat, PixelLayout};
+/// use zenresize::{ResizeConfig, Filter, PixelDescriptor};
 ///
 /// let config = ResizeConfig::builder(1024, 768, 512, 384)
 ///     .filter(Filter::Lanczos)
-///     .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+///     .format(PixelDescriptor::RGBA8_SRGB)
 ///     .linear()
 ///     .build();
 /// ```
@@ -451,15 +269,13 @@ pub struct ResizeConfigBuilder {
     out_width: u32,
     out_height: u32,
     filter: crate::filter::Filter,
-    input_format: PixelFormat,
-    output_format: Option<PixelFormat>,
+    input: PixelDescriptor,
+    output: Option<PixelDescriptor>,
     sharpen: f32,
     post_blur_sigma: f32,
     linear: bool,
     in_stride: usize,
     out_stride: usize,
-    input_transfer: Option<Transfer>,
-    output_transfer: Option<Transfer>,
 }
 
 impl ResizeConfigBuilder {
@@ -470,15 +286,13 @@ impl ResizeConfigBuilder {
             out_width,
             out_height,
             filter: crate::filter::Filter::default(),
-            input_format: PixelFormat::Srgb8(PixelLayout::Rgba),
-            output_format: None,
+            input: PixelDescriptor::RGBA8_SRGB,
+            output: None,
             sharpen: 0.0,
             post_blur_sigma: 0.0,
             linear: true,
             in_stride: 0,
             out_stride: 0,
-            input_transfer: None,
-            output_transfer: None,
         }
     }
 
@@ -488,22 +302,22 @@ impl ResizeConfigBuilder {
         self
     }
 
-    /// Set both input and output pixel format.
-    pub fn format(mut self, format: PixelFormat) -> Self {
-        self.input_format = format;
-        self.output_format = Some(format);
+    /// Set both input and output pixel descriptor.
+    pub fn format(mut self, desc: PixelDescriptor) -> Self {
+        self.input = desc;
+        self.output = Some(desc);
         self
     }
 
-    /// Set input pixel format separately.
-    pub fn input_format(mut self, format: PixelFormat) -> Self {
-        self.input_format = format;
+    /// Set input pixel descriptor.
+    pub fn input(mut self, desc: PixelDescriptor) -> Self {
+        self.input = desc;
         self
     }
 
-    /// Set output pixel format separately.
-    pub fn output_format(mut self, format: PixelFormat) -> Self {
-        self.output_format = Some(format);
+    /// Set output pixel descriptor.
+    pub fn output(mut self, desc: PixelDescriptor) -> Self {
+        self.output = Some(desc);
         self
     }
 
@@ -543,40 +357,22 @@ impl ResizeConfigBuilder {
         self
     }
 
-    /// Set the input transfer function explicitly.
-    ///
-    /// Overrides the automatic inference from `input_format` and `linear`.
-    pub fn input_transfer(mut self, transfer: Transfer) -> Self {
-        self.input_transfer = Some(transfer);
-        self
-    }
-
-    /// Set the output transfer function explicitly.
-    ///
-    /// Overrides the automatic inference from `output_format` and `linear`.
-    pub fn output_transfer(mut self, transfer: Transfer) -> Self {
-        self.output_transfer = Some(transfer);
-        self
-    }
-
     /// Build the configuration.
     pub fn build(self) -> ResizeConfig {
-        let output_format = self.output_format.unwrap_or(self.input_format);
+        let output = self.output.unwrap_or(self.input);
         ResizeConfig {
             filter: self.filter,
             in_width: self.in_width,
             in_height: self.in_height,
             out_width: self.out_width,
             out_height: self.out_height,
-            input_format: self.input_format,
-            output_format,
+            input: self.input,
+            output,
             sharpen: self.sharpen,
             post_blur_sigma: self.post_blur_sigma,
             linear: self.linear,
             in_stride: self.in_stride,
             out_stride: self.out_stride,
-            input_transfer: self.input_transfer,
-            output_transfer: self.output_transfer,
         }
     }
 }

@@ -24,7 +24,7 @@ use alloc::{vec, vec::Vec};
 use crate::filter::InterpolationDetails;
 use crate::pixel::Element;
 use crate::simd;
-use crate::transfer::{NoTransfer, Srgb, TransferFunction};
+use crate::transfer::{NoTransfer, Srgb, TransferCurve};
 use crate::weights::{F32WeightTable, I16WeightTable};
 
 // =============================================================================
@@ -252,10 +252,10 @@ impl WorkingType for F32Work {
 ///
 /// The conversion includes type conversion, transfer function (linearization),
 /// and optionally premultiply. The specific combination of (Element, WorkingType,
-/// TransferFunction) determines what operations are performed.
+/// TransferCurve) determines what operations are performed.
 ///
 /// Not all combinations are valid — only those with an `IntoWorking` impl compile.
-pub(crate) trait IntoWorking<W: WorkingType, TF: TransferFunction>: Element {
+pub(crate) trait IntoWorking<W: WorkingType, TF: TransferCurve>: Element {
     fn convert(
         src: &[Self],
         dst: &mut [W::Value],
@@ -320,7 +320,7 @@ impl IntoWorking<I16Work, NoTransfer> for u8 {
 
 // --- u8 → F32Work (linearize to f32, any TF) ---
 
-impl<TF: TransferFunction> IntoWorking<F32Work, TF> for u8 {
+impl<TF: TransferCurve> IntoWorking<F32Work, TF> for u8 {
     fn convert(
         src: &[u8],
         dst: &mut [f32],
@@ -336,7 +336,7 @@ impl<TF: TransferFunction> IntoWorking<F32Work, TF> for u8 {
 
 // --- u16 → F32Work (linearize to f32, any TF) ---
 
-impl<TF: TransferFunction> IntoWorking<F32Work, TF> for u16 {
+impl<TF: TransferCurve> IntoWorking<F32Work, TF> for u16 {
     fn convert(
         src: &[u16],
         dst: &mut [f32],
@@ -352,7 +352,7 @@ impl<TF: TransferFunction> IntoWorking<F32Work, TF> for u16 {
 
 // --- f32 → F32Work (in-place linearization if TF is not identity) ---
 
-impl<TF: TransferFunction> IntoWorking<F32Work, TF> for f32 {
+impl<TF: TransferCurve> IntoWorking<F32Work, TF> for f32 {
     fn convert(
         src: &[f32],
         dst: &mut [f32],
@@ -375,7 +375,7 @@ impl<TF: TransferFunction> IntoWorking<F32Work, TF> for f32 {
 ///
 /// The conversion includes unpremultiply (if needed), transfer function
 /// (delinearization), and type conversion with quantization/clamping.
-pub(crate) trait FromWorking<W: WorkingType, TF: TransferFunction>: Element {
+pub(crate) trait FromWorking<W: WorkingType, TF: TransferCurve>: Element {
     fn convert(
         src: &[W::Value],
         dst: &mut [Self],
@@ -438,7 +438,7 @@ impl FromWorking<I16Work, NoTransfer> for u8 {
 
 // --- F32Work → u8 (delinearize + quantize, any TF) ---
 
-impl<TF: TransferFunction> FromWorking<F32Work, TF> for u8 {
+impl<TF: TransferCurve> FromWorking<F32Work, TF> for u8 {
     fn convert(
         src: &[f32],
         dst: &mut [u8],
@@ -454,7 +454,7 @@ impl<TF: TransferFunction> FromWorking<F32Work, TF> for u8 {
 
 // --- F32Work → u16 (delinearize + quantize, any TF) ---
 
-impl<TF: TransferFunction> FromWorking<F32Work, TF> for u16 {
+impl<TF: TransferCurve> FromWorking<F32Work, TF> for u16 {
     fn convert(
         src: &[f32],
         dst: &mut [u16],
@@ -470,7 +470,7 @@ impl<TF: TransferFunction> FromWorking<F32Work, TF> for u16 {
 
 // --- F32Work → f32 (in-place delinearization, no clamp) ---
 
-impl<TF: TransferFunction> FromWorking<F32Work, TF> for f32 {
+impl<TF: TransferCurve> FromWorking<F32Work, TF> for f32 {
     fn convert(
         src: &[f32],
         dst: &mut [f32],

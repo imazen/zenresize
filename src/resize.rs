@@ -10,35 +10,54 @@ use alloc::{vec, vec::Vec};
 use crate::color;
 use crate::composite::{self, Background, CompositeError, NoBackground};
 use crate::filter::InterpolationDetails;
-use crate::pixel::{ResizeConfig, Transfer};
+use crate::pixel::ResizeConfig;
 use crate::proven;
 use crate::simd;
-use crate::transfer::{Bt709, Hlg, Pq, Srgb, TransferFunction};
+use crate::transfer::{Bt709, Hlg, Pq, Srgb, TransferCurve};
 use crate::weights::{F32WeightTable, I16WeightTable};
+use zenpixels::{AlphaMode, ChannelType, TransferFunction};
 
 // =============================================================================
 // Transfer-function-aware decode/encode helpers
 // =============================================================================
 
 /// Decode a u8 row to f32 using the specified transfer function.
-fn decode_u8_row(src: &[u8], dst: &mut [f32], tf: Transfer, channels: usize, has_alpha: bool) {
+fn decode_u8_row(
+    src: &[u8],
+    dst: &mut [f32],
+    tf: TransferFunction,
+    channels: usize,
+    has_alpha: bool,
+) {
     match tf {
-        Transfer::Srgb => color::srgb_u8_to_linear_f32(src, dst, channels, has_alpha),
-        Transfer::None => simd::u8_to_f32_row(src, dst),
-        Transfer::Bt709 => Bt709.u8_to_linear_f32(src, dst, &(), channels, has_alpha, false),
-        Transfer::Pq => Pq.u8_to_linear_f32(src, dst, &(), channels, has_alpha, false),
-        Transfer::Hlg => Hlg.u8_to_linear_f32(src, dst, &(), channels, has_alpha, false),
+        TransferFunction::Srgb => color::srgb_u8_to_linear_f32(src, dst, channels, has_alpha),
+        TransferFunction::Linear => simd::u8_to_f32_row(src, dst),
+        TransferFunction::Bt709 => {
+            Bt709.u8_to_linear_f32(src, dst, &(), channels, has_alpha, false)
+        }
+        TransferFunction::Pq => Pq.u8_to_linear_f32(src, dst, &(), channels, has_alpha, false),
+        TransferFunction::Hlg => Hlg.u8_to_linear_f32(src, dst, &(), channels, has_alpha, false),
+        _ => simd::u8_to_f32_row(src, dst), // Unknown → identity
     }
 }
 
 /// Encode f32 to u8 row using the specified transfer function.
-fn encode_u8_row(src: &[f32], dst: &mut [u8], tf: Transfer, channels: usize, has_alpha: bool) {
+fn encode_u8_row(
+    src: &[f32],
+    dst: &mut [u8],
+    tf: TransferFunction,
+    channels: usize,
+    has_alpha: bool,
+) {
     match tf {
-        Transfer::Srgb => color::linear_f32_to_srgb_u8(src, dst, channels, has_alpha),
-        Transfer::None => simd::f32_to_u8_row(src, dst),
-        Transfer::Bt709 => Bt709.linear_f32_to_u8(src, dst, &(), channels, has_alpha, false),
-        Transfer::Pq => Pq.linear_f32_to_u8(src, dst, &(), channels, has_alpha, false),
-        Transfer::Hlg => Hlg.linear_f32_to_u8(src, dst, &(), channels, has_alpha, false),
+        TransferFunction::Srgb => color::linear_f32_to_srgb_u8(src, dst, channels, has_alpha),
+        TransferFunction::Linear => simd::f32_to_u8_row(src, dst),
+        TransferFunction::Bt709 => {
+            Bt709.linear_f32_to_u8(src, dst, &(), channels, has_alpha, false)
+        }
+        TransferFunction::Pq => Pq.linear_f32_to_u8(src, dst, &(), channels, has_alpha, false),
+        TransferFunction::Hlg => Hlg.linear_f32_to_u8(src, dst, &(), channels, has_alpha, false),
+        _ => simd::f32_to_u8_row(src, dst), // Unknown → identity
     }
 }
 
@@ -46,14 +65,16 @@ fn encode_u8_row(src: &[f32], dst: &mut [u8], tf: Transfer, channels: usize, has
 fn decode_u16_row(
     src: &[u16],
     dst: &mut [f32],
-    tf: Transfer,
+    tf: TransferFunction,
     channels: usize,
     has_alpha: bool,
     premul: bool,
 ) {
     match tf {
-        Transfer::Srgb => Srgb.u16_to_linear_f32(src, dst, &(), channels, has_alpha, premul),
-        Transfer::None => {
+        TransferFunction::Srgb => {
+            Srgb.u16_to_linear_f32(src, dst, &(), channels, has_alpha, premul)
+        }
+        TransferFunction::Linear => {
             crate::transfer::NoTransfer.u16_to_linear_f32(
                 src,
                 dst,
@@ -63,9 +84,21 @@ fn decode_u16_row(
                 premul,
             );
         }
-        Transfer::Bt709 => Bt709.u16_to_linear_f32(src, dst, &(), channels, has_alpha, premul),
-        Transfer::Pq => Pq.u16_to_linear_f32(src, dst, &(), channels, has_alpha, premul),
-        Transfer::Hlg => Hlg.u16_to_linear_f32(src, dst, &(), channels, has_alpha, premul),
+        TransferFunction::Bt709 => {
+            Bt709.u16_to_linear_f32(src, dst, &(), channels, has_alpha, premul)
+        }
+        TransferFunction::Pq => Pq.u16_to_linear_f32(src, dst, &(), channels, has_alpha, premul),
+        TransferFunction::Hlg => Hlg.u16_to_linear_f32(src, dst, &(), channels, has_alpha, premul),
+        _ => {
+            crate::transfer::NoTransfer.u16_to_linear_f32(
+                src,
+                dst,
+                &(),
+                channels,
+                has_alpha,
+                premul,
+            );
+        }
     }
 }
 
@@ -73,14 +106,16 @@ fn decode_u16_row(
 fn encode_u16_row(
     src: &[f32],
     dst: &mut [u16],
-    tf: Transfer,
+    tf: TransferFunction,
     channels: usize,
     has_alpha: bool,
     unpremul: bool,
 ) {
     match tf {
-        Transfer::Srgb => Srgb.linear_f32_to_u16(src, dst, &(), channels, has_alpha, unpremul),
-        Transfer::None => {
+        TransferFunction::Srgb => {
+            Srgb.linear_f32_to_u16(src, dst, &(), channels, has_alpha, unpremul)
+        }
+        TransferFunction::Linear => {
             crate::transfer::NoTransfer.linear_f32_to_u16(
                 src,
                 dst,
@@ -90,9 +125,25 @@ fn encode_u16_row(
                 unpremul,
             );
         }
-        Transfer::Bt709 => Bt709.linear_f32_to_u16(src, dst, &(), channels, has_alpha, unpremul),
-        Transfer::Pq => Pq.linear_f32_to_u16(src, dst, &(), channels, has_alpha, unpremul),
-        Transfer::Hlg => Hlg.linear_f32_to_u16(src, dst, &(), channels, has_alpha, unpremul),
+        TransferFunction::Bt709 => {
+            Bt709.linear_f32_to_u16(src, dst, &(), channels, has_alpha, unpremul)
+        }
+        TransferFunction::Pq => {
+            Pq.linear_f32_to_u16(src, dst, &(), channels, has_alpha, unpremul)
+        }
+        TransferFunction::Hlg => {
+            Hlg.linear_f32_to_u16(src, dst, &(), channels, has_alpha, unpremul)
+        }
+        _ => {
+            crate::transfer::NoTransfer.linear_f32_to_u16(
+                src,
+                dst,
+                &(),
+                channels,
+                has_alpha,
+                unpremul,
+            );
+        }
     }
 }
 
@@ -113,11 +164,11 @@ fn encode_u16_row(
 /// # Example
 ///
 /// ```
-/// use zenresize::{Resizer, ResizeConfig, Filter, PixelFormat, PixelLayout};
+/// use zenresize::{Resizer, ResizeConfig, Filter, PixelDescriptor};
 ///
 /// let config = ResizeConfig::builder(20, 20, 10, 10)
 ///     .filter(Filter::Lanczos)
-///     .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+///     .format(PixelDescriptor::RGBA8_SRGB)
 ///     .build();
 ///
 /// let mut resizer = Resizer::new(&config);
@@ -173,7 +224,7 @@ impl<B: Background> Resizer<B> {
     /// Returns [`CompositeError::PremultipliedInput`] if the input format
     /// is `RgbaPremul` (compositing premultiplied input is mathematically incorrect).
     pub fn with_background(config: &ResizeConfig, background: B) -> Result<Self, CompositeError> {
-        if config.input_format.layout().is_premultiplied() {
+        if config.input.alpha == Some(AlphaMode::Premultiplied) {
             return Err(CompositeError::PremultipliedInput);
         }
         Ok(Self::new_inner(config, background, true))
@@ -190,21 +241,22 @@ impl<B: Background> Resizer<B> {
             config.linear = true;
         }
 
-        // Force f32 path when data types differ, transfer functions are explicit,
-        // or the transfer requires wide-range f32 (PQ, HLG).
+        // Force f32 path when data types differ or the transfer requires
+        // wide-range f32 (PQ, HLG).
         let cross_format =
-            config.input_format.bytes_per_element() != config.output_format.bytes_per_element();
-        let has_explicit_transfer =
-            config.input_transfer.is_some() || config.output_transfer.is_some();
-        let transfer_needs_f32 = config.effective_input_transfer().requires_f32()
-            || config.effective_output_transfer().requires_f32();
-        let force_f32 =
-            composite_f32 || cross_format || has_explicit_transfer || transfer_needs_f32;
+            config.input.channel_type().byte_size() != config.output.channel_type().byte_size();
+        let transfer_needs_f32 = matches!(
+            config.effective_input_transfer(),
+            TransferFunction::Pq | TransferFunction::Hlg
+        ) || matches!(
+            config.effective_output_transfer(),
+            TransferFunction::Pq | TransferFunction::Hlg
+        );
+        let force_f32 = composite_f32 || cross_format || transfer_needs_f32;
 
         let filter = InterpolationDetails::create(config.filter);
-        let layout = config.input_format.layout();
-        let channels = layout.channels() as usize;
-        let needs_premul = layout.needs_premultiply();
+        let channels = config.channels();
+        let needs_premul = config.needs_premultiply();
         let linearize = config.needs_linearization();
         let in_h = config.in_height as usize;
         let out_w = config.out_width as usize;
@@ -220,7 +272,7 @@ impl<B: Background> Resizer<B> {
         };
 
         // u16 input — always use f32 working path
-        if config.input_format.is_u16() {
+        if config.input.channel_type() == ChannelType::U16 {
             let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
             let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
             let in_w = config.in_width as usize;
@@ -247,7 +299,7 @@ impl<B: Background> Resizer<B> {
         }
 
         // f32 native input — always use f32 path
-        if config.input_format.is_f32() {
+        if config.input.channel_type() == ChannelType::F32 {
             let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
             let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
             let in_w = config.in_width as usize;
@@ -369,7 +421,7 @@ impl<B: Background> Resizer<B> {
     /// Panics if the config uses `LinearF32` format (use [`resize_f32`](Self::resize_f32) instead).
     pub fn resize(&mut self, input: &[u8]) -> Vec<u8> {
         assert!(
-            self.config.input_format.is_u8(),
+            self.config.input.channel_type() == ChannelType::U8,
             "resize() requires Srgb8 format; use resize_f32() for LinearF32 or resize_u16() for Encoded16"
         );
         let out_row_len = self.config.output_row_len();
@@ -385,16 +437,16 @@ impl<B: Background> Resizer<B> {
     /// Panics if the config uses `LinearF32` format.
     pub fn resize_into(&mut self, input: &[u8], output: &mut [u8]) {
         assert!(
-            self.config.input_format.is_u8(),
+            self.config.input.channel_type() == ChannelType::U8,
             "resize_into() requires Srgb8 format; use resize_f32_into() for LinearF32 or resize_u16_into() for Encoded16"
         );
         let config = &self.config;
         let in_stride = config.effective_in_stride();
         let in_row_len = config.input_row_len();
         let out_row_len = config.output_row_len();
-        let layout = config.input_format.layout();
-        let channels = layout.channels() as usize;
-        let needs_premul = layout.needs_premultiply();
+        let layout = config.input;
+        let channels = layout.channels();
+        let needs_premul = layout.alpha == Some(AlphaMode::Straight);
         let in_h = config.in_height as usize;
         let out_w = config.out_width as usize;
         let out_h = config.out_height as usize;
@@ -545,7 +597,7 @@ impl<B: Background> Resizer<B> {
                         &mut temp_row[..in_row_len],
                         input_tf,
                         channels,
-                        layout.alpha_is_last_channel(),
+                        layout.has_alpha(),
                     );
 
                     if needs_premul {
@@ -600,7 +652,7 @@ impl<B: Background> Resizer<B> {
                         out_slice,
                         output_tf,
                         channels,
-                        layout.alpha_is_last_channel(),
+                        layout.has_alpha(),
                     );
                 }
             }
@@ -636,7 +688,7 @@ impl<B: Background> Resizer<B> {
     /// Panics if the config uses `Srgb8` format (use [`resize`](Self::resize) instead).
     pub fn resize_f32(&mut self, input: &[f32]) -> Vec<f32> {
         assert!(
-            self.config.input_format.is_f32(),
+            self.config.input.channel_type() == ChannelType::F32,
             "resize_f32() requires LinearF32 format; use resize() for Srgb8 or resize_u16() for Encoded16"
         );
         let out_row_len = self.config.output_row_len();
@@ -652,16 +704,16 @@ impl<B: Background> Resizer<B> {
     /// Panics if the config uses `Srgb8` format.
     pub fn resize_f32_into(&mut self, input: &[f32], output: &mut [f32]) {
         assert!(
-            self.config.input_format.is_f32(),
+            self.config.input.channel_type() == ChannelType::F32,
             "resize_f32_into() requires LinearF32 format; use resize_into() for Srgb8 or resize_u16_into() for Encoded16"
         );
         let config = &self.config;
         let in_stride = config.effective_in_stride();
         let in_row_len = config.input_row_len();
         let out_row_len = config.output_row_len();
-        let layout = config.input_format.layout();
-        let channels = layout.channels() as usize;
-        let needs_premul = layout.needs_premultiply();
+        let layout = config.input;
+        let channels = layout.channels();
+        let needs_premul = layout.alpha == Some(AlphaMode::Straight);
         let in_h = config.in_height as usize;
         let out_w = config.out_width as usize;
         let out_h = config.out_height as usize;
@@ -740,7 +792,7 @@ impl<B: Background> Resizer<B> {
 
         // Post-resize sharpening (unsharp mask).
         let config = &self.config;
-        let out_channels = config.output_format.layout().channels() as usize;
+        let out_channels = config.output.channels();
         if config.sharpen > 0.0 {
             crate::blur::unsharp_mask_f32(
                 output,
@@ -773,7 +825,7 @@ impl<B: Background> Resizer<B> {
     /// Panics if the config doesn't use `Encoded16` format.
     pub fn resize_u16(&mut self, input: &[u16]) -> Vec<u16> {
         assert!(
-            self.config.input_format.is_u16(),
+            self.config.input.channel_type() == ChannelType::U16,
             "resize_u16() requires Encoded16 format"
         );
         let out_row_len = self.config.output_row_len();
@@ -789,7 +841,7 @@ impl<B: Background> Resizer<B> {
     /// Panics if the config doesn't use `Encoded16` format.
     pub fn resize_u16_into(&mut self, input: &[u16], output: &mut [u16]) {
         assert!(
-            self.config.input_format.is_u16(),
+            self.config.input.channel_type() == ChannelType::U16,
             "resize_u16_into() requires Encoded16 format"
         );
 
@@ -797,10 +849,10 @@ impl<B: Background> Resizer<B> {
         let in_stride = config.effective_in_stride();
         let in_row_len = config.input_row_len();
         let out_row_len = config.output_row_len();
-        let layout = config.input_format.layout();
-        let channels = layout.channels() as usize;
+        let layout = config.input;
+        let channels = layout.channels();
         let has_alpha = layout.has_alpha();
-        let needs_premul = layout.needs_premultiply();
+        let needs_premul = layout.alpha == Some(AlphaMode::Straight);
         let in_h = config.in_height as usize;
         let out_w = config.out_width as usize;
         let out_h = config.out_height as usize;
@@ -886,9 +938,9 @@ impl<B: Background> Resizer<B> {
         let config = &self.config;
         let in_stride = config.effective_in_stride();
         let in_row_len = config.input_row_len();
-        let layout = config.input_format.layout();
-        let channels = layout.channels() as usize;
-        let needs_premul = layout.needs_premultiply();
+        let layout = config.input;
+        let channels = layout.channels();
+        let needs_premul = layout.alpha == Some(AlphaMode::Straight);
         let in_h = config.in_height as usize;
         let out_w = config.out_width as usize;
         let h_row_len = out_w * channels;
@@ -905,7 +957,7 @@ impl<B: Background> Resizer<B> {
                 &mut self.temp_row_f32[..in_row_len],
                 input_tf,
                 channels,
-                layout.alpha_is_last_channel(),
+                layout.has_alpha(),
             );
 
             if needs_premul {
@@ -927,9 +979,9 @@ impl<B: Background> Resizer<B> {
         let config = &self.config;
         let in_stride = config.effective_in_stride();
         let in_row_len = config.input_row_len();
-        let layout = config.input_format.layout();
-        let channels = layout.channels() as usize;
-        let needs_premul = layout.needs_premultiply();
+        let layout = config.input;
+        let channels = layout.channels();
+        let needs_premul = layout.alpha == Some(AlphaMode::Straight);
         let in_h = config.in_height as usize;
         let out_w = config.out_width as usize;
         let h_row_len = out_w * channels;
@@ -960,9 +1012,9 @@ impl<B: Background> Resizer<B> {
         let config = &self.config;
         let in_stride = config.effective_in_stride();
         let in_row_len = config.input_row_len();
-        let layout = config.input_format.layout();
-        let channels = layout.channels() as usize;
-        let needs_premul = layout.needs_premultiply();
+        let layout = config.input;
+        let channels = layout.channels();
+        let needs_premul = layout.alpha == Some(AlphaMode::Straight);
         let has_alpha = layout.has_alpha();
         let in_h = config.in_height as usize;
         let out_w = config.out_width as usize;
@@ -997,9 +1049,9 @@ impl<B: Background> Resizer<B> {
     /// Internal: f32-path vertical pass, encoding output as u8.
     fn f32_v_pass_to_u8(&mut self, output: &mut [u8]) {
         let config = &self.config;
-        let layout = config.output_format.layout();
-        let channels = layout.channels() as usize;
-        let needs_premul = layout.needs_premultiply();
+        let layout = config.output;
+        let channels = layout.channels();
+        let needs_premul = layout.alpha == Some(AlphaMode::Straight);
         let in_h = config.in_height as usize;
         let out_w = config.out_width as usize;
         let out_h = config.out_height as usize;
@@ -1043,7 +1095,7 @@ impl<B: Background> Resizer<B> {
                 &mut output[out_start..out_start + out_row_len],
                 output_tf,
                 channels,
-                layout.alpha_is_last_channel(),
+                layout.has_alpha(),
             );
         }
     }
@@ -1051,9 +1103,9 @@ impl<B: Background> Resizer<B> {
     /// Internal: f32-path vertical pass, encoding output as f32.
     fn f32_v_pass_to_f32(&mut self, output: &mut [f32]) {
         let config = &self.config;
-        let layout = config.output_format.layout();
-        let channels = layout.channels() as usize;
-        let needs_premul = layout.needs_premultiply();
+        let layout = config.output;
+        let channels = layout.channels();
+        let needs_premul = layout.alpha == Some(AlphaMode::Straight);
         let in_h = config.in_height as usize;
         let out_w = config.out_width as usize;
         let out_h = config.out_height as usize;
@@ -1109,9 +1161,9 @@ impl<B: Background> Resizer<B> {
     /// Internal: f32-path vertical pass, encoding output as u16.
     fn f32_v_pass_to_u16(&mut self, output: &mut [u16]) {
         let config = &self.config;
-        let layout = config.output_format.layout();
-        let channels = layout.channels() as usize;
-        let needs_premul = layout.needs_premultiply();
+        let layout = config.output;
+        let channels = layout.channels();
+        let needs_premul = layout.alpha == Some(AlphaMode::Straight);
         let has_alpha = layout.has_alpha();
         let in_h = config.in_height as usize;
         let out_w = config.out_width as usize;
@@ -1160,9 +1212,9 @@ impl<B: Background> Resizer<B> {
 
     /// Resize u8 input to f32 output, allocating and returning the output.
     pub fn resize_u8_to_f32(&mut self, input: &[u8]) -> Vec<f32> {
-        assert!(self.config.input_format.is_u8(), "input must be Srgb8");
+        assert!(self.config.input.channel_type() == ChannelType::U8, "input must be u8");
         assert!(
-            self.config.output_format.is_f32(),
+            self.config.output.channel_type() == ChannelType::F32,
             "output must be LinearF32"
         );
         let len = self.config.out_height as usize * self.config.output_row_len();
@@ -1173,9 +1225,9 @@ impl<B: Background> Resizer<B> {
 
     /// Resize u8 input to f32 output into a caller-provided buffer.
     pub fn resize_u8_to_f32_into(&mut self, input: &[u8], output: &mut [f32]) {
-        assert!(self.config.input_format.is_u8(), "input must be Srgb8");
+        assert!(self.config.input.channel_type() == ChannelType::U8, "input must be u8");
         assert!(
-            self.config.output_format.is_f32(),
+            self.config.output.channel_type() == ChannelType::F32,
             "output must be LinearF32"
         );
         self.f32_h_pass_u8(input);
@@ -1184,8 +1236,8 @@ impl<B: Background> Resizer<B> {
 
     /// Resize f32 input to u8 output, allocating and returning the output.
     pub fn resize_f32_to_u8(&mut self, input: &[f32]) -> Vec<u8> {
-        assert!(self.config.input_format.is_f32(), "input must be LinearF32");
-        assert!(self.config.output_format.is_u8(), "output must be Srgb8");
+        assert!(self.config.input.channel_type() == ChannelType::F32, "input must be f32");
+        assert!(self.config.output.channel_type() == ChannelType::U8, "output must be u8");
         let len = self.config.out_height as usize * self.config.output_row_len();
         let mut output = proven::alloc_output::<u8>(len);
         self.resize_f32_to_u8_into(input, &mut output);
@@ -1194,17 +1246,17 @@ impl<B: Background> Resizer<B> {
 
     /// Resize f32 input to u8 output into a caller-provided buffer.
     pub fn resize_f32_to_u8_into(&mut self, input: &[f32], output: &mut [u8]) {
-        assert!(self.config.input_format.is_f32(), "input must be LinearF32");
-        assert!(self.config.output_format.is_u8(), "output must be Srgb8");
+        assert!(self.config.input.channel_type() == ChannelType::F32, "input must be f32");
+        assert!(self.config.output.channel_type() == ChannelType::U8, "output must be u8");
         self.f32_h_pass_f32(input);
         self.f32_v_pass_to_u8(output);
     }
 
     /// Resize u8 input to u16 output, allocating and returning the output.
     pub fn resize_u8_to_u16(&mut self, input: &[u8]) -> Vec<u16> {
-        assert!(self.config.input_format.is_u8(), "input must be Srgb8");
+        assert!(self.config.input.channel_type() == ChannelType::U8, "input must be u8");
         assert!(
-            self.config.output_format.is_u16(),
+            self.config.output.channel_type() == ChannelType::U16,
             "output must be Encoded16"
         );
         let len = self.config.out_height as usize * self.config.output_row_len();
@@ -1215,9 +1267,9 @@ impl<B: Background> Resizer<B> {
 
     /// Resize u8 input to u16 output into a caller-provided buffer.
     pub fn resize_u8_to_u16_into(&mut self, input: &[u8], output: &mut [u16]) {
-        assert!(self.config.input_format.is_u8(), "input must be Srgb8");
+        assert!(self.config.input.channel_type() == ChannelType::U8, "input must be u8");
         assert!(
-            self.config.output_format.is_u16(),
+            self.config.output.channel_type() == ChannelType::U16,
             "output must be Encoded16"
         );
         self.f32_h_pass_u8(input);
@@ -1226,8 +1278,8 @@ impl<B: Background> Resizer<B> {
 
     /// Resize u16 input to u8 output, allocating and returning the output.
     pub fn resize_u16_to_u8(&mut self, input: &[u16]) -> Vec<u8> {
-        assert!(self.config.input_format.is_u16(), "input must be Encoded16");
-        assert!(self.config.output_format.is_u8(), "output must be Srgb8");
+        assert!(self.config.input.channel_type() == ChannelType::U16, "input must be u16");
+        assert!(self.config.output.channel_type() == ChannelType::U8, "output must be u8");
         let len = self.config.out_height as usize * self.config.output_row_len();
         let mut output = proven::alloc_output::<u8>(len);
         self.resize_u16_to_u8_into(input, &mut output);
@@ -1236,17 +1288,17 @@ impl<B: Background> Resizer<B> {
 
     /// Resize u16 input to u8 output into a caller-provided buffer.
     pub fn resize_u16_to_u8_into(&mut self, input: &[u16], output: &mut [u8]) {
-        assert!(self.config.input_format.is_u16(), "input must be Encoded16");
-        assert!(self.config.output_format.is_u8(), "output must be Srgb8");
+        assert!(self.config.input.channel_type() == ChannelType::U16, "input must be u16");
+        assert!(self.config.output.channel_type() == ChannelType::U8, "output must be u8");
         self.f32_h_pass_u16(input);
         self.f32_v_pass_to_u8(output);
     }
 
     /// Resize u16 input to f32 output, allocating and returning the output.
     pub fn resize_u16_to_f32(&mut self, input: &[u16]) -> Vec<f32> {
-        assert!(self.config.input_format.is_u16(), "input must be Encoded16");
+        assert!(self.config.input.channel_type() == ChannelType::U16, "input must be u16");
         assert!(
-            self.config.output_format.is_f32(),
+            self.config.output.channel_type() == ChannelType::F32,
             "output must be LinearF32"
         );
         let len = self.config.out_height as usize * self.config.output_row_len();
@@ -1257,9 +1309,9 @@ impl<B: Background> Resizer<B> {
 
     /// Resize u16 input to f32 output into a caller-provided buffer.
     pub fn resize_u16_to_f32_into(&mut self, input: &[u16], output: &mut [f32]) {
-        assert!(self.config.input_format.is_u16(), "input must be Encoded16");
+        assert!(self.config.input.channel_type() == ChannelType::U16, "input must be u16");
         assert!(
-            self.config.output_format.is_f32(),
+            self.config.output.channel_type() == ChannelType::F32,
             "output must be LinearF32"
         );
         self.f32_h_pass_u16(input);
@@ -1268,9 +1320,9 @@ impl<B: Background> Resizer<B> {
 
     /// Resize f32 input to u16 output, allocating and returning the output.
     pub fn resize_f32_to_u16(&mut self, input: &[f32]) -> Vec<u16> {
-        assert!(self.config.input_format.is_f32(), "input must be LinearF32");
+        assert!(self.config.input.channel_type() == ChannelType::F32, "input must be f32");
         assert!(
-            self.config.output_format.is_u16(),
+            self.config.output.channel_type() == ChannelType::U16,
             "output must be Encoded16"
         );
         let len = self.config.out_height as usize * self.config.output_row_len();
@@ -1281,9 +1333,9 @@ impl<B: Background> Resizer<B> {
 
     /// Resize f32 input to u16 output into a caller-provided buffer.
     pub fn resize_f32_to_u16_into(&mut self, input: &[f32], output: &mut [u16]) {
-        assert!(self.config.input_format.is_f32(), "input must be LinearF32");
+        assert!(self.config.input.channel_type() == ChannelType::F32, "input must be f32");
         assert!(
-            self.config.output_format.is_u16(),
+            self.config.output.channel_type() == ChannelType::U16,
             "output must be Encoded16"
         );
         self.f32_h_pass_f32(input);
@@ -1303,38 +1355,37 @@ mod imgref_impl {
     #[cfg(not(feature = "std"))]
     use alloc::vec::Vec;
 
-    use crate::pixel::{PixelFormat, PixelLayout, ResizeConfig};
+    use crate::pixel::ResizeConfig;
     use crate::streaming::StreamingResize;
     use imgref::{Img, ImgRef, ImgVec};
     use rgb::ComponentSlice;
+    use zenpixels::PixelDescriptor;
 
     /// Resize a 4-channel u8 image. Works with any pixel type that implements
     /// `ComponentSlice` (RGBA, BGRA, ARGB, ABGR from the `rgb` crate).
     ///
     /// Channel order is preserved — the pipeline doesn't care whether
-    /// the bytes represent RGBA or BGRA. Use a 4-channel layout
-    /// ([`Rgba`](PixelLayout::Rgba), [`Rgbx`](PixelLayout::Rgbx),
-    /// or [`RgbaPremul`](PixelLayout::RgbaPremul)).
+    /// the bytes represent RGBA or BGRA.
     pub fn resize_4ch<P>(
         img: ImgRef<P>,
         out_width: u32,
         out_height: u32,
-        layout: PixelLayout,
+        desc: PixelDescriptor,
         config: &ResizeConfig,
     ) -> ImgVec<P>
     where
         P: Copy + ComponentSlice<u8> + Default,
     {
         assert_eq!(core::mem::size_of::<P>(), 4, "pixel type must be 4 bytes");
-        assert_eq!(layout.channels(), 4, "layout must be 4-channel");
+        assert_eq!(desc.channels(), 4, "descriptor must be 4-channel");
 
         let mut cfg = config.clone();
         cfg.in_width = img.width() as u32;
         cfg.in_height = img.height() as u32;
         cfg.out_width = out_width;
         cfg.out_height = out_height;
-        cfg.input_format = PixelFormat::Srgb8(layout);
-        cfg.output_format = PixelFormat::Srgb8(layout);
+        cfg.input = desc;
+        cfg.output = desc;
         cfg.in_stride = 0;
 
         let mut resizer = StreamingResize::new(&cfg);
@@ -1387,8 +1438,8 @@ mod imgref_impl {
         cfg.in_height = img.height() as u32;
         cfg.out_width = out_width;
         cfg.out_height = out_height;
-        cfg.input_format = PixelFormat::Srgb8(PixelLayout::Rgb);
-        cfg.output_format = PixelFormat::Srgb8(PixelLayout::Rgb);
+        cfg.input = PixelDescriptor::RGB8_SRGB;
+        cfg.output = PixelDescriptor::RGB8_SRGB;
         cfg.in_stride = 0;
 
         let mut resizer = StreamingResize::new(&cfg);
@@ -1436,8 +1487,8 @@ mod imgref_impl {
         cfg.in_height = img.height() as u32;
         cfg.out_width = out_width;
         cfg.out_height = out_height;
-        cfg.input_format = PixelFormat::Srgb8(PixelLayout::Gray);
-        cfg.output_format = PixelFormat::Srgb8(PixelLayout::Gray);
+        cfg.input = PixelDescriptor::GRAY8_SRGB;
+        cfg.output = PixelDescriptor::GRAY8_SRGB;
         cfg.in_stride = 0;
 
         let mut resizer = StreamingResize::new(&cfg);
@@ -1465,12 +1516,12 @@ mod tests {
     use super::*;
     use crate::composite::SolidBackground;
     use crate::filter::Filter;
-    use crate::pixel::{PixelFormat, PixelLayout};
+    use zenpixels::{AlphaMode, PixelDescriptor};
 
     fn test_config(in_w: u32, in_h: u32, out_w: u32, out_h: u32) -> ResizeConfig {
         ResizeConfig::builder(in_w, in_h, out_w, out_h)
             .filter(Filter::Lanczos)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .format(PixelDescriptor::RGBA8_SRGB)
             .srgb()
             .build()
     }
@@ -1537,7 +1588,7 @@ mod tests {
     #[test]
     fn test_resize_with_stride() {
         let config = ResizeConfig::builder(10, 10, 5, 5)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .format(PixelDescriptor::RGBA8_SRGB)
             .srgb()
             .in_stride(10 * 4 + 8)
             .build();
@@ -1574,7 +1625,7 @@ mod tests {
     fn test_resize_f32() {
         let config = ResizeConfig::builder(20, 20, 10, 10)
             .filter(Filter::Lanczos)
-            .format(PixelFormat::LinearF32(PixelLayout::Rgbx))
+            .format(PixelDescriptor::RGBAF32_LINEAR.with_alpha(Some(AlphaMode::Undefined)))
             .build();
 
         let input = vec![0.5f32; 20 * 20 * 4];
@@ -1599,7 +1650,7 @@ mod tests {
         let pixels = vec![RGBA::new(128u8, 128, 128, 255); 20 * 20];
         let img = Img::new(pixels, 20, 20);
 
-        let out = resize_4ch(img.as_ref(), 10, 10, PixelLayout::Rgba, &config);
+        let out = resize_4ch(img.as_ref(), 10, 10, PixelDescriptor::RGBA8_SRGB, &config);
         assert_eq!(out.width(), 10);
         assert_eq!(out.height(), 10);
 
@@ -1634,7 +1685,7 @@ mod tests {
         // Use linear mode so composite path is engaged (path 2)
         let config = ResizeConfig::builder(10, 10, 10, 10)
             .filter(Filter::Lanczos)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .format(PixelDescriptor::RGBA8_SRGB)
             .linear()
             .build();
 
@@ -1647,7 +1698,7 @@ mod tests {
             pixel[3] = 128;
         }
 
-        let bg = SolidBackground::white(PixelLayout::Rgba);
+        let bg = SolidBackground::white(PixelDescriptor::RGBA8_SRGB);
         let output = Resizer::with_background(&config, bg)
             .unwrap()
             .resize(&input);
@@ -1663,7 +1714,7 @@ mod tests {
     fn resizer_composite_matches_streaming() {
         let config = ResizeConfig::builder(20, 20, 10, 10)
             .filter(Filter::Lanczos)
-            .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+            .format(PixelDescriptor::RGBA8_SRGB)
             .linear()
             .build();
 
@@ -1676,14 +1727,14 @@ mod tests {
         }
 
         // Resizer path
-        let bg1 = SolidBackground::white(PixelLayout::Rgba);
+        let bg1 = SolidBackground::white(PixelDescriptor::RGBA8_SRGB);
         let resizer_output = Resizer::with_background(&config, bg1)
             .unwrap()
             .resize(&input);
 
         // Streaming path
         use crate::streaming::StreamingResize;
-        let bg2 = SolidBackground::white(PixelLayout::Rgba);
+        let bg2 = SolidBackground::white(PixelDescriptor::RGBA8_SRGB);
         let mut streamer = StreamingResize::with_background(&config, bg2).unwrap();
         let mut streaming_output = Vec::new();
         for y in 0..20 {
@@ -1719,10 +1770,10 @@ mod tests {
     #[test]
     fn rejects_premultiplied_input() {
         let config = ResizeConfig::builder(10, 10, 5, 5)
-            .format(PixelFormat::Srgb8(PixelLayout::RgbaPremul))
+            .format(PixelDescriptor::RGBA8_SRGB.with_alpha(Some(AlphaMode::Premultiplied)))
             .build();
 
-        let bg = SolidBackground::white(PixelLayout::RgbaPremul);
+        let bg = SolidBackground::white(PixelDescriptor::RGBA8_SRGB.with_alpha(Some(AlphaMode::Premultiplied)));
         let result = Resizer::with_background(&config, bg);
         assert!(
             matches!(result, Err(CompositeError::PremultipliedInput)),
@@ -1734,7 +1785,7 @@ mod tests {
     fn f32_composite_opaque_bg() {
         let config = ResizeConfig::builder(10, 10, 10, 10)
             .filter(Filter::Lanczos)
-            .format(PixelFormat::LinearF32(PixelLayout::Rgba))
+            .format(PixelDescriptor::RGBAF32_LINEAR)
             .build();
 
         // Semi-transparent input: RGBA = [0.5, 0.3, 0.1, 0.5]
@@ -1746,7 +1797,7 @@ mod tests {
             pixel[3] = 0.5;
         }
 
-        let bg = SolidBackground::from_linear(1.0, 1.0, 1.0, 1.0, PixelLayout::Rgba);
+        let bg = SolidBackground::from_linear(1.0, 1.0, 1.0, 1.0, PixelDescriptor::RGBAF32_LINEAR);
         let output = Resizer::with_background(&config, bg)
             .unwrap()
             .resize_f32(&input);
@@ -1768,7 +1819,7 @@ mod tests {
     fn test_resize_u16_constant_color() {
         let config = ResizeConfig::builder(20, 20, 10, 10)
             .filter(Filter::Lanczos)
-            .format(PixelFormat::Encoded16(PixelLayout::Rgba))
+            .format(PixelDescriptor::RGBA16_SRGB)
             .build();
 
         let mut input = vec![0u16; 20 * 20 * 4];
@@ -1800,7 +1851,7 @@ mod tests {
     fn test_resize_u16_into_matches_alloc() {
         let config = ResizeConfig::builder(20, 20, 10, 10)
             .filter(Filter::Lanczos)
-            .format(PixelFormat::Encoded16(PixelLayout::Rgba))
+            .format(PixelDescriptor::RGBA16_SRGB)
             .build();
 
         let input = vec![40000u16; 20 * 20 * 4];
@@ -1816,7 +1867,7 @@ mod tests {
     fn test_resize_u16_upscale() {
         let config = ResizeConfig::builder(10, 10, 20, 20)
             .filter(Filter::Lanczos)
-            .format(PixelFormat::Encoded16(PixelLayout::Rgba))
+            .format(PixelDescriptor::RGBA16_SRGB)
             .build();
 
         let mut input = vec![0u16; 10 * 10 * 4];
@@ -1844,7 +1895,7 @@ mod tests {
     fn test_resize_u16_rgb_3ch() {
         let config = ResizeConfig::builder(16, 16, 8, 8)
             .filter(Filter::Lanczos)
-            .format(PixelFormat::Encoded16(PixelLayout::Rgb))
+            .format(PixelDescriptor::RGB16_SRGB)
             .build();
 
         let mut input = vec![0u16; 16 * 16 * 3];
@@ -1870,7 +1921,7 @@ mod tests {
     fn test_resize_u16_gray() {
         let config = ResizeConfig::builder(16, 16, 8, 8)
             .filter(Filter::Lanczos)
-            .format(PixelFormat::Encoded16(PixelLayout::Gray))
+            .format(PixelDescriptor::GRAY16_SRGB)
             .build();
 
         let input = vec![50000u16; 16 * 16];

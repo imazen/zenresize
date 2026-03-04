@@ -12,14 +12,14 @@
 //! # Quick Start
 //!
 //! ```
-//! use zenresize::{Resizer, ResizeConfig, Filter, PixelFormat, PixelLayout};
+//! use zenresize::{Resizer, ResizeConfig, Filter, PixelDescriptor};
 //!
 //! // Create a 4×4 RGBA test image
 //! let input_pixels = vec![128u8; 4 * 4 * 4];
 //!
 //! let config = ResizeConfig::builder(4, 4, 2, 2)
 //!     .filter(Filter::Lanczos)
-//!     .format(PixelFormat::Srgb8(PixelLayout::Rgba))
+//!     .format(PixelDescriptor::RGBA8_SRGB)
 //!     .build();
 //!
 //! let output = Resizer::new(&config).resize(&input_pixels);
@@ -51,6 +51,9 @@ pub(crate) mod working;
 mod proven;
 mod simd;
 
+// Re-exports from zenpixels
+pub use zenpixels::{AlphaMode, ChannelLayout, ChannelType, PixelDescriptor, TransferFunction};
+
 // Re-exports: minimal public API
 #[cfg(feature = "layout")]
 pub use execute::{
@@ -64,7 +67,7 @@ pub use layout::{
     CanvasColor, Constraint, ConstraintMode, DecoderOffer, DecoderRequest, Gravity, IdealLayout,
     Layout, LayoutError, LayoutPlan, Orientation, Pipeline, Rect, Size, SourceCrop,
 };
-pub use pixel::{PixelFormat, PixelLayout, ResizeConfig, ResizeConfigBuilder, Transfer};
+pub use pixel::{Element, ResizeConfig, ResizeConfigBuilder};
 pub use plane::PlaneResizer;
 pub use resize::Resizer;
 pub use streaming::{StreamingError, StreamingResize, WorkingFormat};
@@ -75,5 +78,4 @@ pub use composite::{
 
 pub use resize::{resize_3ch, resize_4ch, resize_gray8};
 
-pub use pixel::Element;
-pub use transfer::{Bt709, Hlg, NoTransfer, Pq, Srgb, TransferFunction};
+pub use transfer::{Bt709, Hlg, NoTransfer, Pq, Srgb, TransferCurve};
