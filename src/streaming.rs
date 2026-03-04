@@ -1772,7 +1772,9 @@ mod tests {
             .format(PixelDescriptor::RGBA8_SRGB.with_alpha(Some(AlphaMode::Premultiplied)))
             .build();
 
-        let bg = SolidBackground::white(PixelDescriptor::RGBA8_SRGB.with_alpha(Some(AlphaMode::Premultiplied)));
+        let bg = SolidBackground::white(
+            PixelDescriptor::RGBA8_SRGB.with_alpha(Some(AlphaMode::Premultiplied)),
+        );
         let result = StreamingResize::with_background(&config, bg);
         assert!(
             matches!(result, Err(CompositeError::PremultipliedInput)),

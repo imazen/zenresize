@@ -198,7 +198,10 @@ fn run_picscale_safe_f32(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
 fn run_zenresize_f32(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     let config = zenresize::ResizeConfig::builder(img.width, img.height, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelDescriptor::RGBAF32_LINEAR.with_alpha(Some(zenresize::AlphaMode::Undefined)))
+        .format(
+            zenresize::PixelDescriptor::RGBAF32_LINEAR
+                .with_alpha(Some(zenresize::AlphaMode::Undefined)),
+        )
         .build();
     let result_f32 = zenresize::Resizer::new(&config).resize_f32(&img.rgba_f32);
     let bytes: Vec<u8> = result_f32.iter().flat_map(|v| v.to_ne_bytes()).collect();

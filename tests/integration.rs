@@ -575,11 +575,7 @@ fn no_catastrophic_errors_across_all_combinations() {
     let path_configs: Vec<(PixelDescriptor, bool, &str)> = vec![
         (PixelDescriptor::RGBX8_SRGB, false, "srgb-noalpha"),
         (PixelDescriptor::RGBA8_SRGB, false, "srgb-alpha"),
-        (
-            PixelDescriptor::RGBX8_SRGB,
-            true,
-            "linear-noalpha",
-        ),
+        (PixelDescriptor::RGBX8_SRGB, true, "linear-noalpha"),
         (PixelDescriptor::RGBA8_SRGB, true, "linear-alpha"),
     ];
 

@@ -128,9 +128,7 @@ fn encode_u16_row(
         TransferFunction::Bt709 => {
             Bt709.linear_f32_to_u16(src, dst, &(), channels, has_alpha, unpremul)
         }
-        TransferFunction::Pq => {
-            Pq.linear_f32_to_u16(src, dst, &(), channels, has_alpha, unpremul)
-        }
+        TransferFunction::Pq => Pq.linear_f32_to_u16(src, dst, &(), channels, has_alpha, unpremul),
         TransferFunction::Hlg => {
             Hlg.linear_f32_to_u16(src, dst, &(), channels, has_alpha, unpremul)
         }
@@ -241,18 +239,20 @@ impl<B: Background> Resizer<B> {
             config.linear = true;
         }
 
-        // Force f32 path when data types differ or the transfer requires
-        // wide-range f32 (PQ, HLG).
+        // Force f32 path when data types differ or the transfer pair is
+        // non-standard. The i16 paths only handle (Linear,Linear) for path 0
+        // and (Srgb,Srgb) for path 1 — everything else needs f32.
         let cross_format =
             config.input.channel_type().byte_size() != config.output.channel_type().byte_size();
-        let transfer_needs_f32 = matches!(
-            config.effective_input_transfer(),
-            TransferFunction::Pq | TransferFunction::Hlg
-        ) || matches!(
-            config.effective_output_transfer(),
-            TransferFunction::Pq | TransferFunction::Hlg
+        let non_standard_transfer = !matches!(
+            (
+                config.effective_input_transfer(),
+                config.effective_output_transfer()
+            ),
+            (TransferFunction::Linear, TransferFunction::Linear)
+                | (TransferFunction::Srgb, TransferFunction::Srgb)
         );
-        let force_f32 = composite_f32 || cross_format || transfer_needs_f32;
+        let force_f32 = composite_f32 || cross_format || non_standard_transfer;
 
         let filter = InterpolationDetails::create(config.filter);
         let channels = config.channels();
@@ -1212,7 +1212,10 @@ impl<B: Background> Resizer<B> {
 
     /// Resize u8 input to f32 output, allocating and returning the output.
     pub fn resize_u8_to_f32(&mut self, input: &[u8]) -> Vec<f32> {
-        assert!(self.config.input.channel_type() == ChannelType::U8, "input must be u8");
+        assert!(
+            self.config.input.channel_type() == ChannelType::U8,
+            "input must be u8"
+        );
         assert!(
             self.config.output.channel_type() == ChannelType::F32,
             "output must be LinearF32"
@@ -1225,7 +1228,10 @@ impl<B: Background> Resizer<B> {
 
     /// Resize u8 input to f32 output into a caller-provided buffer.
     pub fn resize_u8_to_f32_into(&mut self, input: &[u8], output: &mut [f32]) {
-        assert!(self.config.input.channel_type() == ChannelType::U8, "input must be u8");
+        assert!(
+            self.config.input.channel_type() == ChannelType::U8,
+            "input must be u8"
+        );
         assert!(
             self.config.output.channel_type() == ChannelType::F32,
             "output must be LinearF32"
@@ -1236,8 +1242,14 @@ impl<B: Background> Resizer<B> {
 
     /// Resize f32 input to u8 output, allocating and returning the output.
     pub fn resize_f32_to_u8(&mut self, input: &[f32]) -> Vec<u8> {
-        assert!(self.config.input.channel_type() == ChannelType::F32, "input must be f32");
-        assert!(self.config.output.channel_type() == ChannelType::U8, "output must be u8");
+        assert!(
+            self.config.input.channel_type() == ChannelType::F32,
+            "input must be f32"
+        );
+        assert!(
+            self.config.output.channel_type() == ChannelType::U8,
+            "output must be u8"
+        );
         let len = self.config.out_height as usize * self.config.output_row_len();
         let mut output = proven::alloc_output::<u8>(len);
         self.resize_f32_to_u8_into(input, &mut output);
@@ -1246,15 +1258,24 @@ impl<B: Background> Resizer<B> {
 
     /// Resize f32 input to u8 output into a caller-provided buffer.
     pub fn resize_f32_to_u8_into(&mut self, input: &[f32], output: &mut [u8]) {
-        assert!(self.config.input.channel_type() == ChannelType::F32, "input must be f32");
-        assert!(self.config.output.channel_type() == ChannelType::U8, "output must be u8");
+        assert!(
+            self.config.input.channel_type() == ChannelType::F32,
+            "input must be f32"
+        );
+        assert!(
+            self.config.output.channel_type() == ChannelType::U8,
+            "output must be u8"
+        );
         self.f32_h_pass_f32(input);
         self.f32_v_pass_to_u8(output);
     }
 
     /// Resize u8 input to u16 output, allocating and returning the output.
     pub fn resize_u8_to_u16(&mut self, input: &[u8]) -> Vec<u16> {
-        assert!(self.config.input.channel_type() == ChannelType::U8, "input must be u8");
+        assert!(
+            self.config.input.channel_type() == ChannelType::U8,
+            "input must be u8"
+        );
         assert!(
             self.config.output.channel_type() == ChannelType::U16,
             "output must be Encoded16"
@@ -1267,7 +1288,10 @@ impl<B: Background> Resizer<B> {
 
     /// Resize u8 input to u16 output into a caller-provided buffer.
     pub fn resize_u8_to_u16_into(&mut self, input: &[u8], output: &mut [u16]) {
-        assert!(self.config.input.channel_type() == ChannelType::U8, "input must be u8");
+        assert!(
+            self.config.input.channel_type() == ChannelType::U8,
+            "input must be u8"
+        );
         assert!(
             self.config.output.channel_type() == ChannelType::U16,
             "output must be Encoded16"
@@ -1278,8 +1302,14 @@ impl<B: Background> Resizer<B> {
 
     /// Resize u16 input to u8 output, allocating and returning the output.
     pub fn resize_u16_to_u8(&mut self, input: &[u16]) -> Vec<u8> {
-        assert!(self.config.input.channel_type() == ChannelType::U16, "input must be u16");
-        assert!(self.config.output.channel_type() == ChannelType::U8, "output must be u8");
+        assert!(
+            self.config.input.channel_type() == ChannelType::U16,
+            "input must be u16"
+        );
+        assert!(
+            self.config.output.channel_type() == ChannelType::U8,
+            "output must be u8"
+        );
         let len = self.config.out_height as usize * self.config.output_row_len();
         let mut output = proven::alloc_output::<u8>(len);
         self.resize_u16_to_u8_into(input, &mut output);
@@ -1288,15 +1318,24 @@ impl<B: Background> Resizer<B> {
 
     /// Resize u16 input to u8 output into a caller-provided buffer.
     pub fn resize_u16_to_u8_into(&mut self, input: &[u16], output: &mut [u8]) {
-        assert!(self.config.input.channel_type() == ChannelType::U16, "input must be u16");
-        assert!(self.config.output.channel_type() == ChannelType::U8, "output must be u8");
+        assert!(
+            self.config.input.channel_type() == ChannelType::U16,
+            "input must be u16"
+        );
+        assert!(
+            self.config.output.channel_type() == ChannelType::U8,
+            "output must be u8"
+        );
         self.f32_h_pass_u16(input);
         self.f32_v_pass_to_u8(output);
     }
 
     /// Resize u16 input to f32 output, allocating and returning the output.
     pub fn resize_u16_to_f32(&mut self, input: &[u16]) -> Vec<f32> {
-        assert!(self.config.input.channel_type() == ChannelType::U16, "input must be u16");
+        assert!(
+            self.config.input.channel_type() == ChannelType::U16,
+            "input must be u16"
+        );
         assert!(
             self.config.output.channel_type() == ChannelType::F32,
             "output must be LinearF32"
@@ -1309,7 +1348,10 @@ impl<B: Background> Resizer<B> {
 
     /// Resize u16 input to f32 output into a caller-provided buffer.
     pub fn resize_u16_to_f32_into(&mut self, input: &[u16], output: &mut [f32]) {
-        assert!(self.config.input.channel_type() == ChannelType::U16, "input must be u16");
+        assert!(
+            self.config.input.channel_type() == ChannelType::U16,
+            "input must be u16"
+        );
         assert!(
             self.config.output.channel_type() == ChannelType::F32,
             "output must be LinearF32"
@@ -1320,7 +1362,10 @@ impl<B: Background> Resizer<B> {
 
     /// Resize f32 input to u16 output, allocating and returning the output.
     pub fn resize_f32_to_u16(&mut self, input: &[f32]) -> Vec<u16> {
-        assert!(self.config.input.channel_type() == ChannelType::F32, "input must be f32");
+        assert!(
+            self.config.input.channel_type() == ChannelType::F32,
+            "input must be f32"
+        );
         assert!(
             self.config.output.channel_type() == ChannelType::U16,
             "output must be Encoded16"
@@ -1333,7 +1378,10 @@ impl<B: Background> Resizer<B> {
 
     /// Resize f32 input to u16 output into a caller-provided buffer.
     pub fn resize_f32_to_u16_into(&mut self, input: &[f32], output: &mut [u16]) {
-        assert!(self.config.input.channel_type() == ChannelType::F32, "input must be f32");
+        assert!(
+            self.config.input.channel_type() == ChannelType::F32,
+            "input must be f32"
+        );
         assert!(
             self.config.output.channel_type() == ChannelType::U16,
             "output must be Encoded16"
@@ -1773,7 +1821,9 @@ mod tests {
             .format(PixelDescriptor::RGBA8_SRGB.with_alpha(Some(AlphaMode::Premultiplied)))
             .build();
 
-        let bg = SolidBackground::white(PixelDescriptor::RGBA8_SRGB.with_alpha(Some(AlphaMode::Premultiplied)));
+        let bg = SolidBackground::white(
+            PixelDescriptor::RGBA8_SRGB.with_alpha(Some(AlphaMode::Premultiplied)),
+        );
         let result = Resizer::with_background(&config, bg);
         assert!(
             matches!(result, Err(CompositeError::PremultipliedInput)),

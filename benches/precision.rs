@@ -27,7 +27,10 @@ fn main() {
     // === zenresize f32 output ===
     let config_f32 = zenresize::ResizeConfig::builder(w, h, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelDescriptor::RGBAF32_LINEAR.with_alpha(Some(zenresize::AlphaMode::Undefined)))
+        .format(
+            zenresize::PixelDescriptor::RGBAF32_LINEAR
+                .with_alpha(Some(zenresize::AlphaMode::Undefined)),
+        )
         .build();
     let zen_f32 = zenresize::Resizer::new(&config_f32).resize_f32(&f32_rgba);
 

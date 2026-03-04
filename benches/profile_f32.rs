@@ -6,7 +6,10 @@ fn main() {
 
     let config = zenresize::ResizeConfig::builder(w, h, ow, oh)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelDescriptor::RGBAF32_LINEAR.with_alpha(Some(zenresize::AlphaMode::Undefined)))
+        .format(
+            zenresize::PixelDescriptor::RGBAF32_LINEAR
+                .with_alpha(Some(zenresize::AlphaMode::Undefined)),
+        )
         .build();
 
     for _ in 0..10 {

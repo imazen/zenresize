@@ -201,8 +201,12 @@ impl ResizeConfig {
         if self.input.transfer == TransferFunction::Linear {
             return TransferFunction::Linear;
         }
-        // For u8: linear=false means gamma-space filtering (no linearization)
-        if !self.linear && self.input.channel_type() == ChannelType::U8 {
+        // For u8 sRGB: linear=false means gamma-space filtering (no linearization).
+        // Non-standard transfers (PQ, HLG, Bt709) are always respected.
+        if !self.linear
+            && self.input.channel_type() == ChannelType::U8
+            && self.input.transfer == TransferFunction::Srgb
+        {
             return TransferFunction::Linear;
         }
         // Use the descriptor's transfer
@@ -220,7 +224,10 @@ impl ResizeConfig {
         if self.output.transfer == TransferFunction::Linear {
             return TransferFunction::Linear;
         }
-        if !self.linear && self.output.channel_type() == ChannelType::U8 {
+        if !self.linear
+            && self.output.channel_type() == ChannelType::U8
+            && self.output.transfer == TransferFunction::Srgb
+        {
             return TransferFunction::Linear;
         }
         self.output.transfer

@@ -591,15 +591,51 @@ fn streaming_matches_fullframe_u16_to_u8() {
 #[test]
 fn all_9_pairs_smoke_test() {
     let pairs: &[(PixelDescriptor, PixelDescriptor, &str)] = &[
-        (PixelDescriptor::RGBA8_SRGB, PixelDescriptor::RGBA8_SRGB, "u8→u8"),
-        (PixelDescriptor::RGBA8_SRGB, PixelDescriptor::RGBAF32_LINEAR, "u8→f32"),
-        (PixelDescriptor::RGBA8_SRGB, PixelDescriptor::RGBA16_SRGB, "u8→u16"),
-        (PixelDescriptor::RGBAF32_LINEAR, PixelDescriptor::RGBA8_SRGB, "f32→u8"),
-        (PixelDescriptor::RGBAF32_LINEAR, PixelDescriptor::RGBAF32_LINEAR, "f32→f32"),
-        (PixelDescriptor::RGBAF32_LINEAR, PixelDescriptor::RGBA16_SRGB, "f32→u16"),
-        (PixelDescriptor::RGBA16_SRGB, PixelDescriptor::RGBA8_SRGB, "u16→u8"),
-        (PixelDescriptor::RGBA16_SRGB, PixelDescriptor::RGBAF32_LINEAR, "u16→f32"),
-        (PixelDescriptor::RGBA16_SRGB, PixelDescriptor::RGBA16_SRGB, "u16→u16"),
+        (
+            PixelDescriptor::RGBA8_SRGB,
+            PixelDescriptor::RGBA8_SRGB,
+            "u8→u8",
+        ),
+        (
+            PixelDescriptor::RGBA8_SRGB,
+            PixelDescriptor::RGBAF32_LINEAR,
+            "u8→f32",
+        ),
+        (
+            PixelDescriptor::RGBA8_SRGB,
+            PixelDescriptor::RGBA16_SRGB,
+            "u8→u16",
+        ),
+        (
+            PixelDescriptor::RGBAF32_LINEAR,
+            PixelDescriptor::RGBA8_SRGB,
+            "f32→u8",
+        ),
+        (
+            PixelDescriptor::RGBAF32_LINEAR,
+            PixelDescriptor::RGBAF32_LINEAR,
+            "f32→f32",
+        ),
+        (
+            PixelDescriptor::RGBAF32_LINEAR,
+            PixelDescriptor::RGBA16_SRGB,
+            "f32→u16",
+        ),
+        (
+            PixelDescriptor::RGBA16_SRGB,
+            PixelDescriptor::RGBA8_SRGB,
+            "u16→u8",
+        ),
+        (
+            PixelDescriptor::RGBA16_SRGB,
+            PixelDescriptor::RGBAF32_LINEAR,
+            "u16→f32",
+        ),
+        (
+            PixelDescriptor::RGBA16_SRGB,
+            PixelDescriptor::RGBA16_SRGB,
+            "u16→u16",
+        ),
     ];
 
     for (in_fmt, out_fmt, label) in pairs {
@@ -675,7 +711,10 @@ fn all_9_pairs_smoke_test() {
 
 #[test]
 fn transfer_matrix_u8_to_u8() {
-    let tfs = [(TransferFunction::Srgb, "Srgb"), (TransferFunction::Linear, "Linear")];
+    let tfs = [
+        (TransferFunction::Srgb, "Srgb"),
+        (TransferFunction::Linear, "Linear"),
+    ];
 
     for (in_tf, in_name) in &tfs {
         for (out_tf, out_name) in &tfs {
@@ -709,7 +748,10 @@ fn transfer_matrix_u8_to_u8() {
 
 #[test]
 fn transfer_matrix_u16_to_u16() {
-    let tfs = [(TransferFunction::Srgb, "Srgb"), (TransferFunction::Linear, "Linear")];
+    let tfs = [
+        (TransferFunction::Srgb, "Srgb"),
+        (TransferFunction::Linear, "Linear"),
+    ];
 
     for (in_tf, in_name) in &tfs {
         for (out_tf, out_name) in &tfs {

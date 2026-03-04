@@ -13,8 +13,8 @@ use crate::composite::{Background, CompositeError};
 use crate::layout::{
     CanvasColor, DecoderOffer, DecoderRequest, IdealLayout, LayoutPlan, Orientation,
 };
-use zenpixels::{AlphaMode, ChannelLayout, ChannelType, PixelDescriptor};
 use crate::resize::Resizer;
+use zenpixels::{AlphaMode, ChannelLayout, ChannelType, PixelDescriptor};
 
 /// Execute a finalized [`LayoutPlan`] on decoder output.
 ///
@@ -29,7 +29,10 @@ pub fn execute_layout(
     desc: PixelDescriptor,
     filter: Filter,
 ) -> Vec<u8> {
-    assert!(desc.channel_type() == ChannelType::U8, "execute_layout only supports u8 formats");
+    assert!(
+        desc.channel_type() == ChannelType::U8,
+        "execute_layout only supports u8 formats"
+    );
     let ch = desc.channels();
 
     let expected_len = decoder_width as usize * decoder_height as usize * ch;

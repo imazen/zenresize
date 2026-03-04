@@ -1584,10 +1584,20 @@ mod tests {
     #[test]
     fn cicp_transfer_known_codes() {
         use zenpixels::TransferFunction;
-        assert_eq!(TransferFunction::from_cicp(1), Some(TransferFunction::Bt709));
-        assert_eq!(TransferFunction::from_cicp(6), Some(TransferFunction::Bt709));
-        assert_eq!(TransferFunction::from_cicp(8), Some(TransferFunction::Linear));
-        assert_eq!(TransferFunction::from_cicp(13), Some(TransferFunction::Srgb));
+        assert_eq!(
+            TransferFunction::from_cicp(1),
+            Some(TransferFunction::Bt709)
+        );
+        // TC=6 (BT.601) is not mapped by zenpixels
+        assert_eq!(TransferFunction::from_cicp(6), None);
+        assert_eq!(
+            TransferFunction::from_cicp(8),
+            Some(TransferFunction::Linear)
+        );
+        assert_eq!(
+            TransferFunction::from_cicp(13),
+            Some(TransferFunction::Srgb)
+        );
         assert_eq!(TransferFunction::from_cicp(16), Some(TransferFunction::Pq));
         assert_eq!(TransferFunction::from_cicp(18), Some(TransferFunction::Hlg));
     }

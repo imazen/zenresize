@@ -152,7 +152,10 @@ fn main() {
     // --- f32 end-to-end, no alpha ---
     let config_f32_noalpha = zenresize::ResizeConfig::builder(w, h, out_w, out_h)
         .filter(zenresize::Filter::Lanczos)
-        .format(zenresize::PixelDescriptor::RGBAF32_LINEAR.with_alpha(Some(zenresize::AlphaMode::Undefined)))
+        .format(
+            zenresize::PixelDescriptor::RGBAF32_LINEAR
+                .with_alpha(Some(zenresize::AlphaMode::Undefined)),
+        )
         .build();
 
     for _ in 0..warmup {
