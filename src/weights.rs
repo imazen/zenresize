@@ -818,15 +818,21 @@ mod tests {
         }
     }
 
-    /// Compute weights using imageflow's exact normalization path:
-    /// evaluate filter in f64, store as f32, normalize by (1.0/f64_total) as f32.
-    fn imageflow_weights_for_pixel(
+    /// Compute weights using imageflow's exact `populate_weights` normalization.
+    ///
+    /// Supports sharpen: pass `desired_sharpen_ratio > sharpen_ratio` to enable
+    /// separate pos/neg normalization. For default (no sharpen), both are 0.0.
+    /// Returns `None` for degenerate cases (total_weight == 0 with no negative
+    /// weights), matching imageflow's `Err(TotalWeightZero)`.
+    fn imageflow_populate_pixel(
         out_pixel: u32,
         in_size: u32,
         scale: f64,
         downscale_factor: f64,
         filter: &InterpolationDetails,
-    ) -> (u32, Vec<f32>) {
+        sharpen_ratio: f64,
+        desired_sharpen_ratio: f64,
+    ) -> Option<(u32, Vec<f32>)> {
         let center = (out_pixel as f64 + 0.5) / scale - 0.5;
         let left_edge = (center - filter.window / downscale_factor - 0.0001).ceil() as i32;
         let right_edge = (center + filter.window / downscale_factor + 0.0001).floor() as i32;
@@ -835,6 +841,8 @@ mod tests {
 
         let mut weights = Vec::new();
         let mut total_weight = 0.0f64;
+        let mut total_negative_weight = 0.0f64;
+        let mut total_positive_weight = 0.0f64;
 
         for ix in left_pixel..=right_pixel {
             let mut add = filter.filter(downscale_factor * (ix as f64 - center));
@@ -843,12 +851,36 @@ mod tests {
             }
             weights.push(add as f32);
             total_weight += add;
+            total_negative_weight += add.min(0.0);
+            total_positive_weight += add.max(0.0);
         }
 
-        // imageflow normalization: single f32 factor from f64 total
-        let factor = (1.0f64 / total_weight) as f32;
-        for w in weights.iter_mut() {
-            *w *= factor;
+        // imageflow normalization: matches populate_weights exactly
+        let mut neg_factor = (1.0f64 / total_weight) as f32;
+        let mut pos_factor = neg_factor;
+
+        if total_weight <= 0.0 || desired_sharpen_ratio > sharpen_ratio {
+            if total_negative_weight < 0.0 {
+                if desired_sharpen_ratio < 1.0 {
+                    let target_pos = 1.0 / (1.0 - desired_sharpen_ratio);
+                    let target_neg = desired_sharpen_ratio * -target_pos;
+                    pos_factor = (target_pos / total_positive_weight) as f32;
+                    neg_factor = (target_neg / total_negative_weight) as f32;
+                    if total_negative_weight == 0.0 {
+                        neg_factor = 1.0;
+                    }
+                }
+            } else if total_weight == 0.0 {
+                return None; // matches imageflow's Err(TotalWeightZero)
+            }
+        }
+
+        for v in weights.iter_mut() {
+            if *v < 0.0 {
+                *v *= neg_factor;
+            } else {
+                *v *= pos_factor;
+            }
         }
 
         // Trim zeros
@@ -861,7 +893,7 @@ mod tests {
             trimmed_left += 1;
         }
 
-        (trimmed_left, weights)
+        Some((trimmed_left, weights))
     }
 
     /// Generate weight output in imageflow's exact format for comparison.
@@ -922,13 +954,10 @@ mod tests {
                 ));
 
                 for o in 0..to_w {
-                    let (_left, weights) = imageflow_weights_for_pixel(
-                        o,
-                        from_w,
-                        scale,
-                        downscale_factor,
-                        &details,
-                    );
+                    let (_left, weights) = imageflow_populate_pixel(
+                        o, from_w, scale, downscale_factor, &details, 0.0, 0.0,
+                    )
+                    .expect("default weights should never fail");
                     output.push_str(&format!(" x={} from ", o));
                     for (w_idx, &w) in weights.iter().enumerate() {
                         output.push_str(if w_idx == 0 { "(" } else { " " });
@@ -979,13 +1008,10 @@ mod tests {
                 let table = F32WeightTable::new(from_w, to_w, &details);
 
                 for o in 0..to_w {
-                    let (_if_left, if_weights) = imageflow_weights_for_pixel(
-                        o,
-                        from_w,
-                        scale,
-                        downscale_factor,
-                        &details,
-                    );
+                    let (_if_left, if_weights) = imageflow_populate_pixel(
+                        o, from_w, scale, downscale_factor, &details, 0.0, 0.0,
+                    )
+                    .expect("default weights should never fail");
                     let zen_weights = table.weights(o as usize);
                     assert_eq!(
                         zen_weights.len(),
@@ -1077,6 +1103,191 @@ mod tests {
 
         // Verify the PSF width increase is reasonable
         assert!(equivalent_sigma > 0.0 && equivalent_sigma < 3.0);
+    }
+
+    /// Blur/sharpen parameter variation for weight parity tests.
+    #[derive(Clone, Copy)]
+    enum ParamVariation {
+        Default,
+        Blur(f64),
+        Sharpen(f32),
+    }
+
+    impl core::fmt::Display for ParamVariation {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            match self {
+                ParamVariation::Default => write!(f, "default"),
+                ParamVariation::Blur(b) => write!(f, "blur={:.2}", b),
+                ParamVariation::Sharpen(s) => write!(f, "sharpen={:.1}", s),
+            }
+        }
+    }
+
+    /// Generate weight output for blur/sharpen parameter combinations,
+    /// matching imageflow's `weights_params.rs` format exactly.
+    fn generate_param_weights() -> String {
+        let filters = [
+            Filter::Robidoux,
+            Filter::RobidouxSharp,
+            Filter::Lanczos,
+            Filter::Lanczos2,
+            Filter::Lanczos2Sharp,
+            Filter::CatmullRom,
+            Filter::Mitchell,
+            Filter::Ginseng,
+            Filter::CubicFast,
+            Filter::Hermite,
+            Filter::Triangle,
+            Filter::Box,
+        ];
+
+        let scalings: [(u32, u32); 10] = [
+            (1, 1),
+            (4, 1),
+            (7, 3),
+            (11, 7),
+            (2, 5),
+            (2, 9),
+            (8, 8),
+            (8, 5),
+            (8, 3),
+            (17, 11),
+        ];
+
+        let variations = [
+            ParamVariation::Default,
+            ParamVariation::Blur(0.8),
+            ParamVariation::Blur(0.9),
+            ParamVariation::Blur(1.1),
+            ParamVariation::Blur(1.2),
+            ParamVariation::Sharpen(5.0),
+            ParamVariation::Sharpen(15.0),
+            ParamVariation::Sharpen(50.0),
+        ];
+
+        let mut output = String::from("filter, param, from_width, to_width, weights");
+
+        for &filter_enum in &filters {
+            for &variation in &variations {
+                let mut details = InterpolationDetails::create(filter_enum);
+                match variation {
+                    ParamVariation::Default => {}
+                    ParamVariation::Blur(factor) => {
+                        details = details.with_blur(factor);
+                    }
+                    ParamVariation::Sharpen(pct) => {
+                        details = details.with_sharpen_percent(pct);
+                    }
+                }
+
+                // Compute sharpen ratios for imageflow-exact normalization
+                let sharpen_ratio = details.calculate_percent_negative_weight();
+                let desired_sharpen_ratio = match variation {
+                    ParamVariation::Sharpen(pct) => {
+                        1.0f64.min(sharpen_ratio.max(pct as f64 / 100.0))
+                    }
+                    _ => 0.0,
+                };
+
+                for &(from_w, to_w) in &scalings {
+                    let scale = to_w as f64 / from_w as f64;
+                    let downscale_factor = scale.min(1.0);
+
+                    // Compute all pixels; if any fails, it's an ERROR line
+                    let mut pixel_weights = Vec::new();
+                    let mut any_error = false;
+                    for o in 0..to_w {
+                        match imageflow_populate_pixel(
+                            o,
+                            from_w,
+                            scale,
+                            downscale_factor,
+                            &details,
+                            sharpen_ratio,
+                            desired_sharpen_ratio,
+                        ) {
+                            Some(pw) => pixel_weights.push(pw),
+                            None => {
+                                any_error = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if any_error {
+                        output.push_str(&format!(
+                            "\n{:?} {} ({: >3}px to {: >2}px): ERROR",
+                            filter_enum, variation, from_w, to_w
+                        ));
+                        continue;
+                    }
+
+                    output.push_str(&format!(
+                        "\n{:?} {} ({: >3}px to {: >2}px):",
+                        filter_enum, variation, from_w, to_w
+                    ));
+
+                    for (o, (_left, weights)) in pixel_weights.iter().enumerate() {
+                        output.push_str(&format!(" x={} from ", o));
+                        for (w_idx, &w) in weights.iter().enumerate() {
+                            output.push_str(if w_idx == 0 { "(" } else { " " });
+                            output.push_str(&format!("{:.6}", w));
+                        }
+                        output.push_str("),");
+                    }
+                }
+            }
+        }
+        output
+    }
+
+    /// Set to `true` to overwrite weights_params.txt with current output.
+    /// Must be set back to `false` before committing.
+    const UPDATE_PARAMS_REFERENCE: bool = false;
+
+    /// Verify our filter functions with blur/sharpen produce weights identical
+    /// to imageflow's reference across 12 filters × 8 variations × 10 scalings.
+    #[test]
+    fn weights_params_match_imageflow_reference() {
+        let generated = generate_param_weights();
+        let reference_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("weights_params.txt");
+
+        if UPDATE_PARAMS_REFERENCE {
+            std::fs::write(&reference_path, &generated).expect("Failed to write reference file");
+            panic!(
+                "UPDATE_PARAMS_REFERENCE is true — wrote {}. Set back to false before committing.",
+                reference_path.display()
+            );
+        }
+
+        let reference = std::fs::read_to_string(&reference_path)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Failed to read {}: {}. \
+                     Set UPDATE_PARAMS_REFERENCE = true to generate it.",
+                    reference_path.display(),
+                    e
+                )
+            })
+            .replace("\r\n", "\n");
+
+        assert_eq!(
+            generated.trim(),
+            reference.trim(),
+            "Generated param weights differ from reference file {}. \
+             Set UPDATE_PARAMS_REFERENCE = true, run the test, then set it back to false.",
+            reference_path.display()
+        );
+    }
+
+    #[test]
+    fn update_params_reference_is_false() {
+        assert!(
+            !UPDATE_PARAMS_REFERENCE,
+            "UPDATE_PARAMS_REFERENCE must be false in committed code"
+        );
     }
 
     #[test]
