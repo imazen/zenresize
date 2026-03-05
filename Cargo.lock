@@ -99,9 +99,9 @@ dependencies = [
 
 [[package]]
 name = "archmage"
-version = "0.9.2"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e470ca1f169b79284cc3bcdd61da7b16a17efaa1292bc949ab8b54456f90af0"
+checksum = "c06fce4ba08fb97a48343135a4a3a1306a402137650ce7f2e2d377af19135b6f"
 dependencies = [
  "archmage-macros",
  "safe_unaligned_simd",
@@ -109,9 +109,9 @@ dependencies = [
 
 [[package]]
 name = "archmage-macros"
-version = "0.9.2"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ab8c78724345a30e13e885591bcca870bc778f47cd2bf9bf01be83e8fe55945"
+checksum = "1313d66c52ca713bb53065953e1ecaa9bf69cb8f4e190aa08232ac5790a66dc1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -651,6 +651,8 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 [[package]]
 name = "linear-srgb"
 version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11250b8422bbf1dc12e954298efc0f4d59ddcd0d13f14c56163268c35690fc20"
 dependencies = [
  "archmage",
  "bytemuck",
@@ -678,9 +680,9 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "magetypes"
-version = "0.9.2"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "803ee0717e254afbe023ad6cfcc5af101771ffa38d22e2a218f5ec745c5a3edc"
+checksum = "06ba39f70cdfbbaea85cf5d82bfe84c83c8c00f0cc80243bee241c6a5227c3dd"
 dependencies = [
  "archmage",
 ]
