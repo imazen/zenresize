@@ -672,6 +672,214 @@ mod tests {
         }
     }
 
+    /// Compute weights using imageflow's exact normalization path:
+    /// evaluate filter in f64, store as f32, normalize by (1.0/f64_total) as f32.
+    fn imageflow_weights_for_pixel(
+        out_pixel: u32,
+        in_size: u32,
+        scale: f64,
+        downscale_factor: f64,
+        filter: &InterpolationDetails,
+    ) -> (u32, Vec<f32>) {
+        let center = (out_pixel as f64 + 0.5) / scale - 0.5;
+        let left_edge = (center - filter.window / downscale_factor - 0.0001).ceil() as i32;
+        let right_edge = (center + filter.window / downscale_factor + 0.0001).floor() as i32;
+        let left_pixel = left_edge.max(0) as u32;
+        let right_pixel = right_edge.min(in_size as i32 - 1) as u32;
+
+        let mut weights = Vec::new();
+        let mut total_weight = 0.0f64;
+
+        for ix in left_pixel..=right_pixel {
+            let mut add = filter.filter(downscale_factor * (ix as f64 - center));
+            if add.abs() <= 2e-8 {
+                add = 0.0;
+            }
+            weights.push(add as f32);
+            total_weight += add;
+        }
+
+        // imageflow normalization: single f32 factor from f64 total
+        let factor = (1.0f64 / total_weight) as f32;
+        for w in weights.iter_mut() {
+            *w *= factor;
+        }
+
+        // Trim zeros
+        while weights.last() == Some(&0.0f32) {
+            weights.pop();
+        }
+        let mut trimmed_left = left_pixel;
+        while weights.first() == Some(&0.0f32) {
+            weights.remove(0);
+            trimmed_left += 1;
+        }
+
+        (trimmed_left, weights)
+    }
+
+    /// Generate weight output in imageflow's exact format for comparison.
+    fn generate_imageflow_format() -> String {
+        let scalings: [u32; 44] = [
+            1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 17, 1, 2, 3, 2, 4, 2, 5, 2, 17, 11, 7, 7,
+            3, 8, 8, 8, 7, 8, 6, 8, 5, 8, 4, 8, 3, 8, 2, 8, 1,
+        ];
+        let filters = [
+            Filter::RobidouxFast,
+            Filter::Robidoux,
+            Filter::RobidouxSharp,
+            Filter::Ginseng,
+            Filter::GinsengSharp,
+            Filter::Lanczos,
+            Filter::LanczosSharp,
+            Filter::Lanczos2,
+            Filter::Lanczos2Sharp,
+            Filter::CubicFast,
+            Filter::Cubic,
+            Filter::CubicSharp,
+            Filter::CatmullRom,
+            Filter::Mitchell,
+            Filter::CubicBSpline,
+            Filter::Hermite,
+            Filter::Jinc,
+            Filter::RawLanczos3,
+            Filter::RawLanczos3Sharp,
+            Filter::RawLanczos2,
+            Filter::RawLanczos2Sharp,
+            Filter::Triangle,
+            Filter::Linear,
+            Filter::Box,
+            Filter::CatmullRomFast,
+            Filter::CatmullRomFastSharp,
+            Filter::Fastest,
+            Filter::MitchellFast,
+            Filter::NCubic,
+            Filter::NCubicSharp,
+        ];
+
+        let mut output = String::from("filter, from_width, to_width, weights");
+
+        for (index, &filter_enum) in filters.iter().enumerate() {
+            let details = InterpolationDetails::create(filter_enum);
+
+            for i in (0..scalings.len()).step_by(2) {
+                let from_w = scalings[i];
+                let to_w = scalings[i + 1];
+                let scale = to_w as f64 / from_w as f64;
+                let downscale_factor = scale.min(1.0);
+
+                output.push_str(&format!(
+                    "\nfilter_{:0>2} ({: >2}px to {: >2}px):",
+                    index + 1,
+                    from_w,
+                    to_w
+                ));
+
+                for o in 0..to_w {
+                    let (_left, weights) = imageflow_weights_for_pixel(
+                        o,
+                        from_w,
+                        scale,
+                        downscale_factor,
+                        &details,
+                    );
+                    output.push_str(&format!(" x={} from ", o));
+                    for (w_idx, &w) in weights.iter().enumerate() {
+                        output.push_str(if w_idx == 0 { "(" } else { " " });
+                        output.push_str(&format!("{:.6}", w));
+                    }
+                    output.push_str("),");
+                }
+            }
+        }
+
+        output
+    }
+
+    /// Verify our filter functions produce weights identical to imageflow's
+    /// reference output across all 30 filters × 22 scaling combinations.
+    #[test]
+    fn weights_match_imageflow_reference() {
+        let generated = generate_imageflow_format();
+        let reference = include_str!("../tests/weights.txt")
+            .replace("\r\n", "\n");
+        assert_eq!(
+            generated.trim(),
+            reference.trim(),
+            "Generated weights differ from imageflow reference"
+        );
+    }
+
+    /// Verify zenresize's F32WeightTable (with f32 renormalization) stays
+    /// within 1e-5 of imageflow's weights for every tap.
+    #[test]
+    fn f32_weight_table_matches_imageflow_within_tolerance() {
+        let scalings: [u32; 44] = [
+            1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 17, 1, 2, 3, 2, 4, 2, 5, 2, 17, 11, 7, 7,
+            3, 8, 8, 8, 7, 8, 6, 8, 5, 8, 4, 8, 3, 8, 2, 8, 1,
+        ];
+        let mut max_dev = 0.0f32;
+        let mut max_dev_filter = Filter::Robidoux;
+        let mut max_dev_scaling = (0u32, 0u32);
+
+        for &filter_enum in Filter::all() {
+            let details = InterpolationDetails::create(filter_enum);
+
+            for i in (0..scalings.len()).step_by(2) {
+                let from_w = scalings[i];
+                let to_w = scalings[i + 1];
+                let scale = to_w as f64 / from_w as f64;
+                let downscale_factor = scale.min(1.0);
+                let table = F32WeightTable::new(from_w, to_w, &details);
+
+                for o in 0..to_w {
+                    let (_if_left, if_weights) = imageflow_weights_for_pixel(
+                        o,
+                        from_w,
+                        scale,
+                        downscale_factor,
+                        &details,
+                    );
+                    let zen_weights = table.weights(o as usize);
+                    assert_eq!(
+                        zen_weights.len(),
+                        if_weights.len(),
+                        "Tap count mismatch for {:?} {}→{} pixel {}",
+                        filter_enum,
+                        from_w,
+                        to_w,
+                        o
+                    );
+                    for (j, (&zw, &iw)) in zen_weights.iter().zip(if_weights.iter()).enumerate() {
+                        let dev = (zw - iw).abs();
+                        if dev > max_dev {
+                            max_dev = dev;
+                            max_dev_filter = filter_enum;
+                            max_dev_scaling = (from_w, to_w);
+                        }
+                        assert!(
+                            dev < 1e-5,
+                            "Weight deviation {:.8} for {:?} {}→{} pixel {} tap {} (zen={:.8} if={:.8})",
+                            dev,
+                            filter_enum,
+                            from_w,
+                            to_w,
+                            o,
+                            j,
+                            zw,
+                            iw
+                        );
+                    }
+                }
+            }
+        }
+
+        eprintln!(
+            "Max F32WeightTable deviation from imageflow: {:.2e} ({:?} {}→{})",
+            max_dev, max_dev_filter, max_dev_scaling.0, max_dev_scaling.1
+        );
+    }
+
     #[test]
     fn test_imageflow_parity_downscale() {
         let filter = InterpolationDetails::create(Filter::Lanczos);

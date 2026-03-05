@@ -254,7 +254,7 @@ impl<B: Background> Resizer<B> {
         );
         let force_f32 = composite_f32 || cross_format || non_standard_transfer;
 
-        let filter = InterpolationDetails::create(config.filter);
+        let filter = InterpolationDetails::create(config.filter).with_blur(config.filter_blur);
         let channels = config.channels();
         let needs_premul = config.needs_premultiply();
         let linearize = config.needs_linearization();

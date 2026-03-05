@@ -68,10 +68,20 @@ pub struct ResizeConfig {
     pub sharpen: f32,
     /// Gaussian blur sigma applied after resize (0.0 = none).
     ///
-    /// The blur is applied as a post-processing step after the resize completes.
-    /// Useful for compression-optimized preprocessing (smoothing flat areas
-    /// reduces encoded file size).
+    /// Runs a separate Gaussian convolution pass — prefer [`filter_blur`](Self::filter_blur)
+    /// which modifies the resampling kernel at zero cost. Use `post_blur_sigma`
+    /// only when you need a fixed-sigma blur independent of the resize ratio.
     pub post_blur_sigma: f32,
+    /// Filter blur factor (default 1.0).
+    ///
+    /// Scales the resampling kernel's coordinate axis. Values > 1.0 widen the
+    /// kernel (blur), values < 1.0 narrow it (sharpen). This modifies the
+    /// interpolation weights themselves — no extra pass, zero runtime cost.
+    ///
+    /// Multiplied with the filter's built-in blur value. For example,
+    /// `LanczosSharp` already has blur ≈ 0.98; setting `filter_blur(1.1)`
+    /// yields an effective blur of ~1.08.
+    pub filter_blur: f64,
     /// Whether to resize in linear light (true) or sRGB gamma space (false).
     ///
     /// Linear light (default) converts sRGB u8 to linear f32 before resampling.
@@ -280,6 +290,7 @@ pub struct ResizeConfigBuilder {
     output: Option<PixelDescriptor>,
     sharpen: f32,
     post_blur_sigma: f32,
+    filter_blur: f64,
     linear: bool,
     in_stride: usize,
     out_stride: usize,
@@ -297,6 +308,7 @@ impl ResizeConfigBuilder {
             output: None,
             sharpen: 0.0,
             post_blur_sigma: 0.0,
+            filter_blur: 1.0,
             linear: true,
             in_stride: 0,
             out_stride: 0,
@@ -335,8 +347,28 @@ impl ResizeConfigBuilder {
     }
 
     /// Set post-resize Gaussian blur sigma (0.0 = none).
+    ///
+    /// **Prefer [`filter_blur`](Self::filter_blur) instead.** `filter_blur`
+    /// modifies the resampling kernel at zero cost, while `post_blur` runs a
+    /// separate Gaussian convolution pass over the output (allocates a
+    /// temporary buffer and touches every pixel twice).
+    ///
+    /// Use `post_blur` only when you need a Gaussian blur that is independent
+    /// of the resize ratio (e.g., fixed-sigma denoising).
     pub fn post_blur(mut self, sigma: f32) -> Self {
         self.post_blur_sigma = sigma;
+        self
+    }
+
+    /// Set filter blur factor (default 1.0).
+    ///
+    /// Modifies the resampling kernel at weight-computation time — zero
+    /// runtime cost (no extra pass). Values > 1.0 blur, < 1.0 sharpen.
+    ///
+    /// This multiplies the filter's built-in blur value, so it stacks with
+    /// "Sharp" filter variants.
+    pub fn filter_blur(mut self, factor: f64) -> Self {
+        self.filter_blur = factor;
         self
     }
 
@@ -377,6 +409,7 @@ impl ResizeConfigBuilder {
             output,
             sharpen: self.sharpen,
             post_blur_sigma: self.post_blur_sigma,
+            filter_blur: self.filter_blur,
             linear: self.linear,
             in_stride: self.in_stride,
             out_stride: self.out_stride,

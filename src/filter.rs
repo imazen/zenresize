@@ -357,6 +357,15 @@ impl InterpolationDetails {
         }
     }
 
+    /// Multiply the blur factor.
+    ///
+    /// Used by [`ResizeConfig::filter_blur`](crate::ResizeConfig::filter_blur)
+    /// to apply a user-specified blur multiplier on top of the filter preset.
+    pub fn with_blur(mut self, factor: f64) -> Self {
+        self.blur *= factor;
+        self
+    }
+
     /// Evaluate the filter at position x.
     #[inline]
     pub fn filter(&self, x: f64) -> f64 {

@@ -270,7 +270,7 @@ impl<B: Background> StreamingResize<B> {
             config.linear = true;
         }
 
-        let filter = InterpolationDetails::create(config.filter);
+        let filter = InterpolationDetails::create(config.filter).with_blur(config.filter_blur);
         let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
 
         let channels = config.channels();
