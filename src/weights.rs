@@ -11,7 +11,7 @@
 //! - Zero weights are trimmed from edges
 
 #[cfg(not(feature = "std"))]
-use alloc::vec::Vec;
+use alloc::{vec, vec::Vec};
 
 use crate::filter::InterpolationDetails;
 
@@ -554,6 +554,8 @@ fn f64_floor(x: f64) -> f64 {
 mod tests {
     use super::*;
     use crate::filter::{Filter, InterpolationDetails};
+    #[cfg(not(feature = "std"))]
+    use alloc::{format, string::String, vec, vec::Vec};
 
     #[test]
     fn test_f32_weight_table_basic() {
@@ -1067,6 +1069,7 @@ mod tests {
     /// Verify zenresize's F32WeightTable (with f32 renormalization) stays
     /// within 1e-5 of imageflow's weights for every tap.
     #[test]
+    #[cfg(feature = "std")]
     fn f32_weight_table_matches_imageflow_within_tolerance() {
         let scalings: [u32; 44] = [
             1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 17, 1, 2, 3, 2, 4, 2, 5, 2, 17, 11, 7, 7, 3,
@@ -1280,6 +1283,7 @@ mod tests {
     /// Verify our filter functions with blur/sharpen produce weights identical
     /// to imageflow's reference across 12 filters × 8 variations × 10 scalings.
     #[test]
+    #[cfg(feature = "std")]
     fn weights_params_match_imageflow_reference() {
         let generated = generate_param_weights();
         let reference_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1317,6 +1321,7 @@ mod tests {
     /// Verify F32WeightTable's sharpen produces the same weights as
     /// imageflow's populate_weights (with sharpen) across all param variations.
     #[test]
+    #[cfg(feature = "std")]
     fn f32_weight_table_sharpen_matches_imageflow() {
         let filters = [
             Filter::Robidoux,
@@ -1424,13 +1429,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn update_params_reference_is_false() {
-        assert!(
-            !UPDATE_PARAMS_REFERENCE,
-            "UPDATE_PARAMS_REFERENCE must be false in committed code"
-        );
-    }
+    const _: () = assert!(
+        !UPDATE_PARAMS_REFERENCE,
+        "UPDATE_PARAMS_REFERENCE must be false in committed code"
+    );
 
     #[test]
     fn test_imageflow_parity_downscale() {

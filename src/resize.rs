@@ -1407,9 +1407,10 @@ impl<B: Background> Resizer<B> {
 // the pipeline is channel-order-agnostic. The `rgb` crate's ComponentSlice trait
 // gives us zero-copy &[u8] access to any pixel type.
 
+#[allow(deprecated)] // rgb::ComponentSlice deprecated but still needed for public API compat
 mod imgref_impl {
     #[cfg(not(feature = "std"))]
-    use alloc::vec::Vec;
+    use alloc::{vec, vec::Vec};
 
     use crate::pixel::ResizeConfig;
     use crate::streaming::StreamingResize;

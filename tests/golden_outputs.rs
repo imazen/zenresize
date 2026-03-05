@@ -382,7 +382,7 @@ fn golden_path3_f32_native_upscale() {
 
 fn streaming_resize_u8(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
     let in_w = config.in_width as usize;
-    let channels = config.input.channels() as usize;
+    let channels = config.input.channels();
     let row_len = in_w * channels;
     let in_h = config.in_height as usize;
 
@@ -538,7 +538,7 @@ fn golden_print_checksums() {
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "raw"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "raw"))
         .collect();
     entries.sort_by_key(|e| e.file_name());
 

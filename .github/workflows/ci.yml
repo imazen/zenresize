@@ -43,7 +43,7 @@ jobs:
         shell: bash
         run: |
           sed \
-            -e 's|path = "\.\./zenlayout"|git = "https://github.com/imazen/zenlayout"|g' \
+            -e 's|path = "\.\./linear-srgb"|git = "https://github.com/imazen/linear-srgb"|g' \
             -e 's|path = "\.\./zenpixels/zenpixels"|git = "https://github.com/imazen/zenpixels"|g' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
       - uses: Swatinem/rust-cache@v2
@@ -68,7 +68,7 @@ jobs:
         shell: bash
         run: |
           sed \
-            -e 's|path = "\.\./zenlayout"|git = "https://github.com/imazen/zenlayout"|g' \
+            -e 's|path = "\.\./linear-srgb"|git = "https://github.com/imazen/linear-srgb"|g' \
             -e 's|path = "\.\./zenpixels/zenpixels"|git = "https://github.com/imazen/zenpixels"|g' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
       - uses: taiki-e/install-action@cross
@@ -92,7 +92,7 @@ jobs:
         shell: bash
         run: |
           sed \
-            -e 's|path = "\.\./zenlayout"|git = "https://github.com/imazen/zenlayout"|g' \
+            -e 's|path = "\.\./linear-srgb"|git = "https://github.com/imazen/linear-srgb"|g' \
             -e 's|path = "\.\./zenpixels/zenpixels"|git = "https://github.com/imazen/zenpixels"|g' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
       - name: Install wasmtime
@@ -118,7 +118,7 @@ jobs:
         shell: bash
         run: |
           sed \
-            -e 's|path = "\.\./zenlayout"|git = "https://github.com/imazen/zenlayout"|g' \
+            -e 's|path = "\.\./linear-srgb"|git = "https://github.com/imazen/linear-srgb"|g' \
             -e 's|path = "\.\./zenpixels/zenpixels"|git = "https://github.com/imazen/zenpixels"|g' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
       - uses: Swatinem/rust-cache@v2
@@ -148,7 +148,7 @@ jobs:
         shell: bash
         run: |
           sed \
-            -e 's|path = "\.\./zenlayout"|git = "https://github.com/imazen/zenlayout"|g' \
+            -e 's|path = "\.\./linear-srgb"|git = "https://github.com/imazen/linear-srgb"|g' \
             -e 's|path = "\.\./zenpixels/zenpixels"|git = "https://github.com/imazen/zenpixels"|g' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
       - uses: taiki-e/install-action@cargo-hack
@@ -168,7 +168,7 @@ jobs:
         shell: bash
         run: |
           sed \
-            -e 's|path = "\.\./zenlayout"|git = "https://github.com/imazen/zenlayout"|g' \
+            -e 's|path = "\.\./linear-srgb"|git = "https://github.com/imazen/linear-srgb"|g' \
             -e 's|path = "\.\./zenpixels/zenpixels"|git = "https://github.com/imazen/zenpixels"|g' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
       - uses: taiki-e/install-action@cargo-llvm-cov

@@ -9,7 +9,7 @@
 use core::arch::x86_64::*;
 
 #[cfg(not(feature = "std"))]
-use alloc::vec::Vec;
+use alloc::{vec, vec::Vec};
 
 use crate::fastmath;
 use crate::proven::{idx, idx_mut, sub};
@@ -1916,7 +1916,6 @@ pub(crate) fn filter_v_all_f16_v3(
 
 /// Thin x8 wrappers: convert __m256 ↔ [f32; 8] and call linear-srgb rites.
 /// The array conversions are optimized away since the rites are #[inline(always)].
-
 macro_rules! tf_x8_wrapper {
     ($name:ident, $rite:path) => {
         #[archmage::rite]
@@ -1946,14 +1945,8 @@ tf_x8_wrapper!(
     linear_srgb::tokens::x8::linear_to_bt709_v3
 );
 tf_x8_wrapper!(pq_to_linear_x8, linear_srgb::tokens::x8::pq_to_linear_v3);
-tf_x8_wrapper!(
-    pq_from_linear_x8,
-    linear_srgb::tokens::x8::linear_to_pq_v3
-);
-tf_x8_wrapper!(
-    hlg_to_linear_x8,
-    linear_srgb::tokens::x8::hlg_to_linear_v3
-);
+tf_x8_wrapper!(pq_from_linear_x8, linear_srgb::tokens::x8::linear_to_pq_v3);
+tf_x8_wrapper!(hlg_to_linear_x8, linear_srgb::tokens::x8::hlg_to_linear_v3);
 tf_x8_wrapper!(
     hlg_from_linear_x8,
     linear_srgb::tokens::x8::linear_to_hlg_v3

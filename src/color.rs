@@ -294,6 +294,8 @@ pub(crate) fn linear_i12_to_srgb_u8_row(input: &[i16], output: &mut [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(feature = "std"))]
+    use alloc::{vec, vec::Vec};
 
     #[test]
     fn test_i12_lut_roundtrip() {

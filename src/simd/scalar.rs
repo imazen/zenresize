@@ -620,6 +620,8 @@ pub(crate) fn hlg_from_linear_row_scalar(
 mod tests {
     use super::*;
     use crate::filter::{Filter, InterpolationDetails};
+    #[cfg(not(feature = "std"))]
+    use alloc::{vec, vec::Vec};
 
     #[test]
     fn test_horizontal_convolution_identity() {

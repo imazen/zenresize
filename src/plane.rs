@@ -27,7 +27,7 @@
 //! ```
 
 #[cfg(not(feature = "std"))]
-use alloc::vec;
+use alloc::{vec, vec::Vec};
 
 use crate::filter::InterpolationDetails;
 use crate::simd;
@@ -182,6 +182,8 @@ use crate::filter::Filter;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(feature = "std"))]
+    use alloc::vec;
 
     #[test]
     fn constant_plane_preserves_value() {

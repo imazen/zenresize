@@ -266,16 +266,6 @@ checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
 [[package]]
 name = "colorutils-rs"
 version = "0.7.6"
-dependencies = [
- "erydanos",
- "half",
- "num-traits",
- "rayon",
-]
-
-[[package]]
-name = "colorutils-rs"
-version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e2fc25857fa523662de5cae84225b0e7bfb24a2a3f9ed8802fecf03df7252b1"
 dependencies = [
@@ -850,7 +840,7 @@ version = "0.6.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff95ed1aee2a9952d6e292e3408024d212c4a2443174413f60480f2991a99727"
 dependencies = [
- "colorutils-rs 0.7.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "colorutils-rs",
  "novtb",
  "num-traits",
  "pxfm",
@@ -1603,11 +1593,12 @@ name = "zenresize"
 version = "0.1.0"
 dependencies = [
  "archmage",
- "colorutils-rs 0.7.6",
+ "colorutils-rs",
  "criterion",
  "fast_image_resize",
  "image",
  "imgref",
+ "libm",
  "linear-srgb",
  "magetypes",
  "palette",

@@ -5,6 +5,7 @@
 //!
 //! All batch benchmarks process 1000 RGBA pixels (4000 f32 values).
 
+#![allow(clippy::excessive_precision)]
 use criterion::{Criterion, criterion_group, criterion_main};
 use linear_srgb::default as lsrgb;
 use zenresize::{Bt709, Hlg, Pq, Srgb, TransferCurve};
@@ -180,7 +181,7 @@ fn bench_batch_to_linear(c: &mut Criterion) {
             row.copy_from_slice(&encoded_row);
             for pixel in row.chunks_exact_mut(4) {
                 for v in &mut pixel[..3] {
-                    *v = lsrgb::srgb_to_linear_fast(*v);
+                    *v = lsrgb::srgb_to_linear(*v);
                 }
             }
             std::hint::black_box(&row);
@@ -361,7 +362,7 @@ fn bench_batch_from_linear(c: &mut Criterion) {
             row.copy_from_slice(&linear_data);
             for pixel in row.chunks_exact_mut(4) {
                 for v in &mut pixel[..3] {
-                    *v = lsrgb::linear_to_srgb_fast(*v);
+                    *v = lsrgb::linear_to_srgb(*v);
                 }
             }
             std::hint::black_box(&row);
@@ -492,10 +493,10 @@ fn bench_u8_to_linear(c: &mut Criterion) {
 
     group.bench_function("srgb/zenresize", |b| {
         let srgb = Srgb;
-        let luts = srgb.build_luts();
+        srgb.build_luts();
         let mut dst = vec![0.0f32; ROW_LEN];
         b.iter(|| {
-            srgb.u8_to_linear_f32(&input, &mut dst, &luts, 4, true, false);
+            srgb.u8_to_linear_f32(&input, &mut dst, &(), 4, true, false);
             std::hint::black_box(&dst);
         });
     });

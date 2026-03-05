@@ -19,7 +19,7 @@
 //! For `Srgb`, the u8↔i12 tables are compile-time constants — no runtime allocation.
 
 #[cfg(not(feature = "std"))]
-use alloc::vec::Vec;
+use alloc::{vec, vec::Vec};
 
 use crate::color;
 use crate::fastmath;
@@ -56,6 +56,7 @@ pub trait TransferCurve: Send + Sync + 'static {
     fn to_linear(&self, encoded: f32) -> f32;
 
     /// Decode a value from this TF's encoded space to linear light.
+    #[allow(clippy::wrong_self_convention)]
     fn from_linear(&self, linear: f32) -> f32;
 
     /// Whether this TF is the identity (no conversion needed).
@@ -1103,17 +1104,19 @@ impl TransferCurve for Hlg {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(feature = "std"))]
+    use alloc::{vec, vec::Vec};
 
     #[test]
     fn no_transfer_roundtrip_u8() {
         let tf = NoTransfer;
-        let luts = tf.build_luts();
+        tf.build_luts();
         let src: Vec<u8> = (0..=255).collect();
         let mut f32_buf = vec![0.0f32; 256];
         let mut out = vec![0u8; 256];
 
-        tf.u8_to_linear_f32(&src, &mut f32_buf, &luts, 1, false, false);
-        tf.linear_f32_to_u8(&f32_buf, &mut out, &luts, 1, false, false);
+        tf.u8_to_linear_f32(&src, &mut f32_buf, &(), 1, false, false);
+        tf.linear_f32_to_u8(&f32_buf, &mut out, &(), 1, false, false);
 
         for i in 0..256 {
             assert_eq!(src[i], out[i], "NoTransfer roundtrip mismatch at {}", i);
@@ -1123,13 +1126,13 @@ mod tests {
     #[test]
     fn srgb_roundtrip_u8() {
         let tf = Srgb;
-        let luts = tf.build_luts();
+        tf.build_luts();
         let src: Vec<u8> = (0..=255).collect();
         let mut f32_buf = vec![0.0f32; 256];
         let mut out = vec![0u8; 256];
 
-        tf.u8_to_linear_f32(&src, &mut f32_buf, &luts, 1, false, false);
-        tf.linear_f32_to_u8(&f32_buf, &mut out, &luts, 1, false, false);
+        tf.u8_to_linear_f32(&src, &mut f32_buf, &(), 1, false, false);
+        tf.linear_f32_to_u8(&f32_buf, &mut out, &(), 1, false, false);
 
         for i in 0..256 {
             let diff = (src[i] as i16 - out[i] as i16).unsigned_abs();
@@ -1140,15 +1143,15 @@ mod tests {
     #[test]
     fn srgb_roundtrip_u16() {
         let tf = Srgb;
-        let luts = tf.build_luts();
+        tf.build_luts();
 
         // Test a spread of u16 values
         let values: Vec<u16> = (0..=65535).step_by(257).collect(); // 256 values
         let mut f32_buf = vec![0.0f32; values.len()];
         let mut out = vec![0u16; values.len()];
 
-        tf.u16_to_linear_f32(&values, &mut f32_buf, &luts, 1, false, false);
-        tf.linear_f32_to_u16(&f32_buf, &mut out, &luts, 1, false, false);
+        tf.u16_to_linear_f32(&values, &mut f32_buf, &(), 1, false, false);
+        tf.linear_f32_to_u16(&f32_buf, &mut out, &(), 1, false, false);
 
         for i in 0..values.len() {
             let diff = (values[i] as i32 - out[i] as i32).unsigned_abs();
@@ -1168,13 +1171,13 @@ mod tests {
     #[test]
     fn srgb_i12_matches_existing() {
         let tf = Srgb;
-        let luts = tf.build_luts();
+        tf.build_luts();
 
         let src: Vec<u8> = (0..=255).collect();
         let mut via_tf = vec![0i16; 256];
         let mut via_direct = vec![0i16; 256];
 
-        tf.u8_to_linear_i12(&src, &mut via_tf, &luts);
+        tf.u8_to_linear_i12(&src, &mut via_tf, &());
         crate::color::srgb_u8_to_linear_i12_row(&src, &mut via_direct);
 
         assert_eq!(via_tf, via_direct, "TF i12 path should match direct LUT");
@@ -1225,13 +1228,13 @@ mod tests {
     #[test]
     fn srgb_u8_to_f32_with_alpha() {
         let tf = Srgb;
-        let luts = tf.build_luts();
+        tf.build_luts();
 
         // RGBA pixel: [128, 64, 32, 200]
         let src = [128u8, 64, 32, 200];
         let mut dst = [0.0f32; 4];
 
-        tf.u8_to_linear_f32(&src, &mut dst, &luts, 4, true, false);
+        tf.u8_to_linear_f32(&src, &mut dst, &(), 4, true, false);
 
         // RGB should be linearized, alpha should be v/255
         assert!(dst[0] > 0.2 && dst[0] < 0.3, "R linear: {}", dst[0]);
@@ -1241,16 +1244,16 @@ mod tests {
     #[test]
     fn srgb_u8_premul_unpremul_roundtrip() {
         let tf = Srgb;
-        let luts = tf.build_luts();
+        tf.build_luts();
 
         let src = [128u8, 64, 32, 200];
         let mut f32_buf = [0.0f32; 4];
         let mut out = [0u8; 4];
 
         // Encode → premul linear
-        tf.u8_to_linear_f32(&src, &mut f32_buf, &luts, 4, true, true);
+        tf.u8_to_linear_f32(&src, &mut f32_buf, &(), 4, true, true);
         // Premul linear → decode (with unpremul)
-        tf.linear_f32_to_u8(&f32_buf, &mut out, &luts, 4, true, true);
+        tf.linear_f32_to_u8(&f32_buf, &mut out, &(), 4, true, true);
 
         for i in 0..4 {
             let diff = (src[i] as i16 - out[i] as i16).unsigned_abs();
@@ -1268,14 +1271,14 @@ mod tests {
     #[test]
     fn no_alpha_3ch_roundtrip() {
         let tf = Srgb;
-        let luts = tf.build_luts();
+        tf.build_luts();
 
         let src = [128u8, 64, 32, 200, 100, 50]; // 2 RGB pixels
         let mut f32_buf = [0.0f32; 6];
         let mut out = [0u8; 6];
 
-        tf.u8_to_linear_f32(&src, &mut f32_buf, &luts, 3, false, false);
-        tf.linear_f32_to_u8(&f32_buf, &mut out, &luts, 3, false, false);
+        tf.u8_to_linear_f32(&src, &mut f32_buf, &(), 3, false, false);
+        tf.linear_f32_to_u8(&f32_buf, &mut out, &(), 3, false, false);
 
         for i in 0..6 {
             let diff = (src[i] as i16 - out[i] as i16).unsigned_abs();
@@ -1295,13 +1298,13 @@ mod tests {
     #[test]
     fn bt709_roundtrip_u8() {
         let tf = Bt709;
-        let luts = tf.build_luts();
+        tf.build_luts();
         let src: Vec<u8> = (0..=255).collect();
         let mut f32_buf = vec![0.0f32; 256];
         let mut out = vec![0u8; 256];
 
-        tf.u8_to_linear_f32(&src, &mut f32_buf, &luts, 1, false, false);
-        tf.linear_f32_to_u8(&f32_buf, &mut out, &luts, 1, false, false);
+        tf.u8_to_linear_f32(&src, &mut f32_buf, &(), 1, false, false);
+        tf.linear_f32_to_u8(&f32_buf, &mut out, &(), 1, false, false);
 
         for i in 0..256 {
             let diff = (src[i] as i16 - out[i] as i16).unsigned_abs();
@@ -1340,13 +1343,13 @@ mod tests {
     #[test]
     fn pq_roundtrip_u8() {
         let tf = Pq;
-        let luts = tf.build_luts();
+        tf.build_luts();
         let src: Vec<u8> = (0..=255).collect();
         let mut f32_buf = vec![0.0f32; 256];
         let mut out = vec![0u8; 256];
 
-        tf.u8_to_linear_f32(&src, &mut f32_buf, &luts, 1, false, false);
-        tf.linear_f32_to_u8(&f32_buf, &mut out, &luts, 1, false, false);
+        tf.u8_to_linear_f32(&src, &mut f32_buf, &(), 1, false, false);
+        tf.linear_f32_to_u8(&f32_buf, &mut out, &(), 1, false, false);
 
         for i in 0..256 {
             let diff = (src[i] as i16 - out[i] as i16).unsigned_abs();
@@ -1385,13 +1388,13 @@ mod tests {
     #[test]
     fn hlg_roundtrip_u8() {
         let tf = Hlg;
-        let luts = tf.build_luts();
+        tf.build_luts();
         let src: Vec<u8> = (0..=255).collect();
         let mut f32_buf = vec![0.0f32; 256];
         let mut out = vec![0u8; 256];
 
-        tf.u8_to_linear_f32(&src, &mut f32_buf, &luts, 1, false, false);
-        tf.linear_f32_to_u8(&f32_buf, &mut out, &luts, 1, false, false);
+        tf.u8_to_linear_f32(&src, &mut f32_buf, &(), 1, false, false);
+        tf.linear_f32_to_u8(&f32_buf, &mut out, &(), 1, false, false);
 
         for i in 0..256 {
             let diff = (src[i] as i16 - out[i] as i16).unsigned_abs();

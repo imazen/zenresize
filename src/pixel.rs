@@ -1,7 +1,7 @@
 //! Pixel format descriptors, element types, and color space configuration.
 
 #[cfg(not(feature = "std"))]
-use alloc::vec::Vec;
+use alloc::{vec, vec::Vec};
 
 use zenpixels::{AlphaMode, ChannelType, PixelDescriptor, TransferFunction};
 

@@ -2,7 +2,7 @@
 //! Usage: cargo build --release --bench profile_srgb
 //!        valgrind --tool=callgrind target/release/deps/profile_srgb-*
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 fn codec_corpus_dir() -> PathBuf {
     let dir = PathBuf::from(

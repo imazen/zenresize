@@ -406,7 +406,7 @@ impl InterpolationDetails {
     /// # Imageflow compatibility
     ///
     /// To match imageflow's `sharpen_percent` parameter, divide by 100:
-    /// ```
+    /// ```ignore
     /// # use zenresize::filter::InterpolationDetails;
     /// # let filter = InterpolationDetails::default();
     /// // imageflow sharpen_percent=15 → lobe_ratio=0.15

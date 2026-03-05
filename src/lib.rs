@@ -46,6 +46,7 @@ pub(crate) mod resize;
 pub(crate) mod streaming;
 pub(crate) mod transfer;
 pub(crate) mod weights;
+#[allow(dead_code)] // WIP: generic resize pipeline types
 pub(crate) mod working;
 
 #[doc(hidden)]

@@ -75,7 +75,7 @@ fn bench_picscale_srgb(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     let store = ImageStore::<u8, 4>::from_slice(&img.rgba, img.width as usize, img.height as usize)
         .unwrap();
     let mut dst = ImageStoreMut::<u8, 4>::alloc(out_w as usize, out_h as usize);
-    scaler.resize_rgba(&store, &mut dst, true);
+    scaler.resize_rgba(&store, &mut dst, true).unwrap();
     dst.as_bytes().to_vec()
 }
 
@@ -86,7 +86,7 @@ fn bench_picscale_linear(img: &TestImage, out_w: u32, out_h: u32) -> Vec<u8> {
     let store = ImageStore::<u8, 4>::from_slice(&img.rgba, img.width as usize, img.height as usize)
         .unwrap();
     let mut dst = ImageStoreMut::<u8, 4>::alloc(out_w as usize, out_h as usize);
-    scaler.resize_rgba(&store, &mut dst, true);
+    scaler.resize_rgba(&store, &mut dst, true).unwrap();
     dst.as_bytes().to_vec()
 }
 

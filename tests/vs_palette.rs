@@ -164,7 +164,7 @@ fn srgb_u8_to_linear_vs_palette_lut() {
     use palette::encoding::{IntoLinear, Srgb as PaletteSrgb};
 
     let tf = Srgb;
-    let luts = tf.build_luts();
+    tf.build_luts();
 
     // Our u8→f32 LUT (linear-srgb crate) vs palette's (fast_srgb8 crate).
     // Both are precomputed tables with different generation methods; diffs up to
@@ -173,7 +173,7 @@ fn srgb_u8_to_linear_vs_palette_lut() {
     for i in 0..=255u8 {
         let src = [i];
         let mut dst = [0.0f32];
-        tf.u8_to_linear_f32(&src, &mut dst, &luts, 1, false, false);
+        tf.u8_to_linear_f32(&src, &mut dst, &(), 1, false, false);
         let palette_val: f32 = <PaletteSrgb as IntoLinear<f32, u8>>::into_linear(i);
 
         let diff = (dst[0] - palette_val).abs();
@@ -194,14 +194,14 @@ fn srgb_linear_to_u8_vs_palette_lut() {
     use palette::encoding::{FromLinear, Srgb as PaletteSrgb};
 
     let tf = Srgb;
-    let luts = tf.build_luts();
+    tf.build_luts();
 
     // Test the LUT-based batch path against palette
     for i in 0..=10000 {
         let linear = i as f32 / 10000.0;
         let src = [linear];
         let mut dst = [0u8];
-        tf.linear_f32_to_u8(&src, &mut dst, &luts, 1, false, false);
+        tf.linear_f32_to_u8(&src, &mut dst, &(), 1, false, false);
         let palette_val: u8 = <PaletteSrgb as FromLinear<f32, u8>>::from_linear(linear);
 
         let diff = (dst[0] as i16 - palette_val as i16).unsigned_abs();
@@ -449,14 +449,13 @@ where
     let mut batch_u8 = vec![0u8; 1001];
     tf.linear_f32_to_u8(&linear_inputs, &mut batch_u8, &luts, 1, false, false);
 
-    for i in 0..=1000 {
+    for (i, &batch_val) in batch_u8.iter().enumerate() {
         let v = i as f32 / 1000.0;
         let scalar = (tf.from_linear(v) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-        let diff = (batch_u8[i] as i16 - scalar as i16).unsigned_abs();
+        let diff = (batch_val as i16 - scalar as i16).unsigned_abs();
         assert!(
             diff <= 1,
-            "{name} linear_to_u8 batch vs scalar at {v}: batch={}, scalar={scalar}",
-            batch_u8[i]
+            "{name} linear_to_u8 batch vs scalar at {v}: batch={batch_val}, scalar={scalar}"
         );
     }
 }

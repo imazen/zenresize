@@ -37,7 +37,7 @@ fn gradient_image(w: u32, h: u32) -> Vec<u8> {
 fn streaming_collect(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
     let in_w = config.in_width as usize;
     let in_h = config.in_height as usize;
-    let channels = config.input.channels() as usize;
+    let channels = config.input.channels();
     let row_len = in_w * channels;
 
     let mut resizer = StreamingResize::new(config);
@@ -219,17 +219,17 @@ fn resize_1x1_to_1x1() {
 #[test]
 fn resize_1xn() {
     let config = config_srgb(1, 10, 1, 5);
-    let input = vec![128u8; 1 * 10 * 4];
+    let input = vec![128u8; 10 * 4];
     let output = Resizer::new(&config).resize(&input);
-    assert_eq!(output.len(), 1 * 5 * 4);
+    assert_eq!(output.len(), 5 * 4);
 }
 
 #[test]
 fn resize_nx1() {
     let config = config_srgb(10, 1, 5, 1);
-    let input = vec![128u8; 10 * 1 * 4];
+    let input = vec![128u8; 10 * 4];
     let output = Resizer::new(&config).resize(&input);
-    assert_eq!(output.len(), 5 * 1 * 4);
+    assert_eq!(output.len(), 5 * 4);
 }
 
 #[test]
@@ -400,7 +400,7 @@ fn resize_f32_gradient() {
 
     // All values should be in [0, 1] range (approximately)
     for &v in &output {
-        assert!(v >= -0.1 && v <= 1.1, "f32 output out of range: {}", v);
+        assert!((-0.1..=1.1).contains(&v), "f32 output out of range: {}", v);
     }
 }
 
