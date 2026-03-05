@@ -53,6 +53,7 @@ jobs:
           awk '
             /^\[dev-dependencies\]/ { skip=1; next }
             /^\[\[bench\]\]/ { skip=1; next }
+            /bench-simd-competitors/ { next }
             skip && /^\[/ { skip=0 }
             skip == 0 { print }
           ' Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
