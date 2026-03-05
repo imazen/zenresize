@@ -578,13 +578,19 @@ pub(super) fn filter_v_all_i16_i16(
                 let zero = i32x4::splat(0);
                 let max_val = i32x4::splat(4095);
 
-                let ca = ((acc_a + half) >> I16_PRECISION).max(zero).min(max_val).to_array();
+                let ca = ((acc_a + half) >> I16_PRECISION)
+                    .max(zero)
+                    .min(max_val)
+                    .to_array();
                 output[out_start_a + x] = ca[0] as i16;
                 output[out_start_a + x + 1] = ca[1] as i16;
                 output[out_start_a + x + 2] = ca[2] as i16;
                 output[out_start_a + x + 3] = ca[3] as i16;
 
-                let cb = ((acc_b + half) >> I16_PRECISION).max(zero).min(max_val).to_array();
+                let cb = ((acc_b + half) >> I16_PRECISION)
+                    .max(zero)
+                    .min(max_val)
+                    .to_array();
                 output[out_start_b + x] = cb[0] as i16;
                 output[out_start_b + x + 1] = cb[1] as i16;
                 output[out_start_b + x + 2] = cb[2] as i16;

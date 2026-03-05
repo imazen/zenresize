@@ -20,13 +20,13 @@ use archmage::X64V4Token;
 
 // Safe unaligned SIMD load/store — takes references instead of raw pointers.
 // Explicit imports because names overlap with core::arch intrinsics.
+#[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+use safe_unaligned_simd::x86_64::_mm256_storeu_si256;
 #[cfg(target_arch = "x86_64")]
 use safe_unaligned_simd::x86_64::{
     _mm_loadu_ps, _mm_loadu_si32, _mm_loadu_si64, _mm_loadu_si128, _mm_storeu_ps, _mm_storeu_si64,
     _mm_storeu_si128, _mm256_loadu_ps, _mm256_loadu_si256, _mm256_storeu_ps,
 };
-#[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-use safe_unaligned_simd::x86_64::_mm256_storeu_si256;
 
 // =============================================================================
 // Color conversion kernels
@@ -1008,8 +1008,10 @@ pub(crate) fn filter_v_all_u8_i16_v3(
                 }
 
                 // Pack and store row A.
-                let ra_lo = _mm256_srai_epi32::<{ I16_PRECISION }>(_mm256_add_epi32(acc_a_lo, half));
-                let ra_hi = _mm256_srai_epi32::<{ I16_PRECISION }>(_mm256_add_epi32(acc_a_hi, half));
+                let ra_lo =
+                    _mm256_srai_epi32::<{ I16_PRECISION }>(_mm256_add_epi32(acc_a_lo, half));
+                let ra_hi =
+                    _mm256_srai_epi32::<{ I16_PRECISION }>(_mm256_add_epi32(acc_a_hi, half));
                 let a_ll = _mm256_castsi256_si128(ra_lo);
                 let a_lh = _mm256_extracti128_si256::<1>(ra_lo);
                 let a_hl = _mm256_castsi256_si128(ra_hi);
@@ -1020,8 +1022,10 @@ pub(crate) fn filter_v_all_u8_i16_v3(
                 );
 
                 // Pack and store row B.
-                let rb_lo = _mm256_srai_epi32::<{ I16_PRECISION }>(_mm256_add_epi32(acc_b_lo, half));
-                let rb_hi = _mm256_srai_epi32::<{ I16_PRECISION }>(_mm256_add_epi32(acc_b_hi, half));
+                let rb_lo =
+                    _mm256_srai_epi32::<{ I16_PRECISION }>(_mm256_add_epi32(acc_b_lo, half));
+                let rb_hi =
+                    _mm256_srai_epi32::<{ I16_PRECISION }>(_mm256_add_epi32(acc_b_hi, half));
                 let b_ll = _mm256_castsi256_si128(rb_lo);
                 let b_lh = _mm256_extracti128_si256::<1>(rb_lo);
                 let b_hl = _mm256_castsi256_si128(rb_hi);
@@ -1040,7 +1044,8 @@ pub(crate) fn filter_v_all_u8_i16_v3(
                     acc += intermediate[row_indices[t] * h_row_len + tail_start + x] as i32
                         * w_a[t] as i32;
                 }
-                *out_byte = ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 255) as u8;
+                *out_byte =
+                    ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 255) as u8;
             }
             for (x, out_byte) in tail_b.iter_mut().enumerate() {
                 let mut acc: i32 = 0;
@@ -1048,13 +1053,15 @@ pub(crate) fn filter_v_all_u8_i16_v3(
                     acc += intermediate[row_indices[t] * h_row_len + tail_start + x] as i32
                         * w_b[t] as i32;
                 }
-                *out_byte = ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 255) as u8;
+                *out_byte =
+                    ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 255) as u8;
             }
             out_y += 2;
         } else {
             // === Single output row ===
             let out_base = out_y * h_row_len;
-            let (out_chunks, out_tail) = output[out_base..out_base + h_row_len].as_chunks_mut::<16>();
+            let (out_chunks, out_tail) =
+                output[out_base..out_base + h_row_len].as_chunks_mut::<16>();
 
             for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
                 let mut acc_lo = _mm256_setzero_si256();
@@ -1457,21 +1464,29 @@ pub(crate) fn filter_v_all_i16_i16_v3(
                 }
 
                 // Pack and store row A.
-                let shifted_a = _mm256_srai_epi32::<{ I16_PRECISION }>(_mm256_add_epi32(acc_a, half));
+                let shifted_a =
+                    _mm256_srai_epi32::<{ I16_PRECISION }>(_mm256_add_epi32(acc_a, half));
                 let a_lo = _mm256_castsi256_si128(shifted_a);
                 let a_hi = _mm256_extracti128_si256::<1>(shifted_a);
                 _mm_storeu_si128(
                     idx_mut(chunks_a, ci),
-                    _mm_min_epi16(_mm_max_epi16(_mm_packs_epi32(a_lo, a_hi), zero_xmm), max_val),
+                    _mm_min_epi16(
+                        _mm_max_epi16(_mm_packs_epi32(a_lo, a_hi), zero_xmm),
+                        max_val,
+                    ),
                 );
 
                 // Pack and store row B.
-                let shifted_b = _mm256_srai_epi32::<{ I16_PRECISION }>(_mm256_add_epi32(acc_b, half));
+                let shifted_b =
+                    _mm256_srai_epi32::<{ I16_PRECISION }>(_mm256_add_epi32(acc_b, half));
                 let b_lo = _mm256_castsi256_si128(shifted_b);
                 let b_hi = _mm256_extracti128_si256::<1>(shifted_b);
                 _mm_storeu_si128(
                     idx_mut(chunks_b, ci),
-                    _mm_min_epi16(_mm_max_epi16(_mm_packs_epi32(b_lo, b_hi), zero_xmm), max_val),
+                    _mm_min_epi16(
+                        _mm_max_epi16(_mm_packs_epi32(b_lo, b_hi), zero_xmm),
+                        max_val,
+                    ),
                 );
             }
 
@@ -1483,7 +1498,8 @@ pub(crate) fn filter_v_all_i16_i16_v3(
                     acc += intermediate[row_indices[t] * h_row_len + tail_start + x] as i32
                         * w_a[t] as i32;
                 }
-                *out_val = ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095) as i16;
+                *out_val =
+                    ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095) as i16;
             }
             for (x, out_val) in tail_b.iter_mut().enumerate() {
                 let mut acc: i32 = 0;
@@ -1491,12 +1507,14 @@ pub(crate) fn filter_v_all_i16_i16_v3(
                     acc += intermediate[row_indices[t] * h_row_len + tail_start + x] as i32
                         * w_b[t] as i32;
                 }
-                *out_val = ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095) as i16;
+                *out_val =
+                    ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095) as i16;
             }
             out_y += 2;
         } else {
             let out_base = out_y * h_row_len;
-            let (out_chunks, out_tail) = output[out_base..out_base + h_row_len].as_chunks_mut::<8>();
+            let (out_chunks, out_tail) =
+                output[out_base..out_base + h_row_len].as_chunks_mut::<8>();
 
             for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
                 let mut acc_lo = _mm256_setzero_si256();
@@ -1524,7 +1542,10 @@ pub(crate) fn filter_v_all_i16_i16_v3(
                 let lo_128 = _mm256_castsi256_si128(shifted);
                 let hi_128 = _mm256_extracti128_si256::<1>(shifted);
                 let packed = _mm_packs_epi32(lo_128, hi_128);
-                _mm_storeu_si128(out_chunk, _mm_min_epi16(_mm_max_epi16(packed, zero_xmm), max_val));
+                _mm_storeu_si128(
+                    out_chunk,
+                    _mm_min_epi16(_mm_max_epi16(packed, zero_xmm), max_val),
+                );
             }
 
             let tail_start = chunks8 * 8;
@@ -1534,7 +1555,8 @@ pub(crate) fn filter_v_all_i16_i16_v3(
                     acc += intermediate[row_indices[t] * h_row_len + tail_start + x] as i32
                         * w_a[t] as i32;
                 }
-                *out_val = ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095) as i16;
+                *out_val =
+                    ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095) as i16;
             }
             out_y += 1;
         }
@@ -2285,35 +2307,93 @@ macro_rules! v4_delegate_v3 {
 // macro that takes the original _v4 name and generates the _v3 call.
 #[cfg(feature = "avx512")]
 macro_rules! paste_v3 {
-    (u8_to_f32_row_v4) => { u8_to_f32_row_v3 };
-    (f32_to_u8_row_v4) => { f32_to_u8_row_v3 };
-    (premultiply_alpha_row_v4) => { premultiply_alpha_row_v3 };
-    (unpremultiply_alpha_row_v4) => { unpremultiply_alpha_row_v3 };
-    (filter_h_row_f32_v4) => { filter_h_row_f32_v3 };
-    (filter_v_row_f32_v4) => { filter_v_row_f32_v3 };
-    (filter_h_u8_i16_v4) => { filter_h_u8_i16_v3 };
-    (filter_h_u8_i16_4rows_v4) => { filter_h_u8_i16_4rows_v3 };
-    (premultiply_u8_row_v4) => { premultiply_u8_row_v3 };
-    (unpremultiply_u8_row_v4) => { unpremultiply_u8_row_v3 };
-    (srgb_u8_to_linear_f32_v4) => { srgb_u8_to_linear_f32_v3 };
-    (linear_f32_to_srgb_u8_v4) => { linear_f32_to_srgb_u8_v3 };
-    (filter_h_i16_i16_v4) => { filter_h_i16_i16_v3 };
-    (filter_v_all_i16_i16_v4) => { filter_v_all_i16_i16_v3 };
-    (filter_v_row_u8_i16_v4) => { filter_v_row_u8_i16_v3 };
-    (filter_v_row_i16_v4) => { filter_v_row_i16_v3 };
-    (f32_to_f16_row_v4) => { f32_to_f16_row_v3 };
-    (f16_to_f32_row_v4) => { f16_to_f32_row_v3 };
-    (filter_h_row_f32_to_f16_v4) => { filter_h_row_f32_to_f16_v3 };
-    (filter_v_row_f16_v4) => { filter_v_row_f16_v3 };
-    (filter_v_all_f16_v4) => { filter_v_all_f16_v3 };
-    (srgb_to_linear_row_v4) => { srgb_to_linear_row_v3 };
-    (srgb_from_linear_row_v4) => { srgb_from_linear_row_v3 };
-    (bt709_to_linear_row_v4) => { bt709_to_linear_row_v3 };
-    (bt709_from_linear_row_v4) => { bt709_from_linear_row_v3 };
-    (pq_to_linear_row_v4) => { pq_to_linear_row_v3 };
-    (pq_from_linear_row_v4) => { pq_from_linear_row_v3 };
-    (hlg_to_linear_row_v4) => { hlg_to_linear_row_v3 };
-    (hlg_from_linear_row_v4) => { hlg_from_linear_row_v3 };
+    (u8_to_f32_row_v4) => {
+        u8_to_f32_row_v3
+    };
+    (f32_to_u8_row_v4) => {
+        f32_to_u8_row_v3
+    };
+    (premultiply_alpha_row_v4) => {
+        premultiply_alpha_row_v3
+    };
+    (unpremultiply_alpha_row_v4) => {
+        unpremultiply_alpha_row_v3
+    };
+    (filter_h_row_f32_v4) => {
+        filter_h_row_f32_v3
+    };
+    (filter_v_row_f32_v4) => {
+        filter_v_row_f32_v3
+    };
+    (filter_h_u8_i16_v4) => {
+        filter_h_u8_i16_v3
+    };
+    (filter_h_u8_i16_4rows_v4) => {
+        filter_h_u8_i16_4rows_v3
+    };
+    (premultiply_u8_row_v4) => {
+        premultiply_u8_row_v3
+    };
+    (unpremultiply_u8_row_v4) => {
+        unpremultiply_u8_row_v3
+    };
+    (srgb_u8_to_linear_f32_v4) => {
+        srgb_u8_to_linear_f32_v3
+    };
+    (linear_f32_to_srgb_u8_v4) => {
+        linear_f32_to_srgb_u8_v3
+    };
+    (filter_h_i16_i16_v4) => {
+        filter_h_i16_i16_v3
+    };
+    (filter_v_all_i16_i16_v4) => {
+        filter_v_all_i16_i16_v3
+    };
+    (filter_v_row_u8_i16_v4) => {
+        filter_v_row_u8_i16_v3
+    };
+    (filter_v_row_i16_v4) => {
+        filter_v_row_i16_v3
+    };
+    (f32_to_f16_row_v4) => {
+        f32_to_f16_row_v3
+    };
+    (f16_to_f32_row_v4) => {
+        f16_to_f32_row_v3
+    };
+    (filter_h_row_f32_to_f16_v4) => {
+        filter_h_row_f32_to_f16_v3
+    };
+    (filter_v_row_f16_v4) => {
+        filter_v_row_f16_v3
+    };
+    (filter_v_all_f16_v4) => {
+        filter_v_all_f16_v3
+    };
+    (srgb_to_linear_row_v4) => {
+        srgb_to_linear_row_v3
+    };
+    (srgb_from_linear_row_v4) => {
+        srgb_from_linear_row_v3
+    };
+    (bt709_to_linear_row_v4) => {
+        bt709_to_linear_row_v3
+    };
+    (bt709_from_linear_row_v4) => {
+        bt709_from_linear_row_v3
+    };
+    (pq_to_linear_row_v4) => {
+        pq_to_linear_row_v3
+    };
+    (pq_from_linear_row_v4) => {
+        pq_from_linear_row_v3
+    };
+    (hlg_to_linear_row_v4) => {
+        hlg_to_linear_row_v3
+    };
+    (hlg_from_linear_row_v4) => {
+        hlg_from_linear_row_v3
+    };
 }
 
 #[cfg(feature = "avx512")]
@@ -2455,10 +2535,14 @@ pub(crate) fn filter_v_all_u8_i16_v4(
                     let ext_lo = _mm512_cvtepu8_epi16(il_lo);
                     let ext_hi = _mm512_cvtepu8_epi16(il_hi);
 
-                    acc_a_lo = _mm512_add_epi32(acc_a_lo, _mm512_madd_epi16(ext_lo, paired_wts_a[p]));
-                    acc_a_hi = _mm512_add_epi32(acc_a_hi, _mm512_madd_epi16(ext_hi, paired_wts_a[p]));
-                    acc_b_lo = _mm512_add_epi32(acc_b_lo, _mm512_madd_epi16(ext_lo, paired_wts_b[p]));
-                    acc_b_hi = _mm512_add_epi32(acc_b_hi, _mm512_madd_epi16(ext_hi, paired_wts_b[p]));
+                    acc_a_lo =
+                        _mm512_add_epi32(acc_a_lo, _mm512_madd_epi16(ext_lo, paired_wts_a[p]));
+                    acc_a_hi =
+                        _mm512_add_epi32(acc_a_hi, _mm512_madd_epi16(ext_hi, paired_wts_a[p]));
+                    acc_b_lo =
+                        _mm512_add_epi32(acc_b_lo, _mm512_madd_epi16(ext_lo, paired_wts_b[p]));
+                    acc_b_hi =
+                        _mm512_add_epi32(acc_b_hi, _mm512_madd_epi16(ext_hi, paired_wts_b[p]));
                 }
 
                 if odd {
