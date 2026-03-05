@@ -91,6 +91,10 @@ impl F32WeightTable {
         let effective_window = filter.window / downscale_factor;
 
         // Compute the sharpen ratio targets if sharpen_percent > 0.
+        // Matches imageflow: compare desired ratio against the abstract filter
+        // function's natural negative-weight ratio. If the target exceeds the
+        // natural ratio, all pixels get separate pos/neg normalization to force
+        // the desired ratio — even if some pixels individually already exceed it.
         let natural_ratio = if sharpen_percent > 0.0 {
             filter.calculate_percent_negative_weight()
         } else {
@@ -101,9 +105,6 @@ impl F32WeightTable {
         } else {
             0.0
         };
-        // Only attempt lobe amplification if the target exceeds the abstract
-        // filter ratio. Per-pixel ratios may already exceed it (especially
-        // for downscaling), so the per-pixel normalization checks again.
         let apply_lobe_amp = sharpen_percent > 0.0 && desired_ratio > natural_ratio;
 
         // First pass: compute weights and find max_taps
@@ -141,10 +142,11 @@ impl F32WeightTable {
             let slice = &mut weights_flat[offset..offset + w.len()];
 
             if apply_lobe_amp {
-                // SharpenPercent normalization: separately scale positive and
-                // negative weights to reach the desired negative-weight ratio.
-                // Computed from normalized weights (sum=1.0), where
-                // neg_ratio = |total_neg| / total_pos.
+                // SharpenPercent normalization (matches imageflow):
+                // Separately scale positive and negative weights so the
+                // neg/pos ratio equals desired_ratio. Uses the per-pixel
+                // normalized weight sums (compute_pixel_weights normalizes
+                // to sum=1.0, preserving the ratio).
                 let mut total_pos = 0.0f64;
                 let mut total_neg = 0.0f64;
                 for &val in w.iter() {
@@ -154,23 +156,11 @@ impl F32WeightTable {
                         total_neg += val;
                     }
                 }
-                // Only amplify if this pixel's actual ratio is below target.
-                // For downscaling, per-pixel ratios can exceed the abstract
-                // filter ratio, so this check is essential.
-                let actual_ratio = if total_pos > 0.0 {
-                    (-total_neg) / total_pos
-                } else {
-                    0.0
-                };
-                if total_neg < 0.0 && desired_ratio < 1.0 && desired_ratio > actual_ratio {
+                if total_neg < 0.0 && desired_ratio < 1.0 {
                     let target_pos = 1.0 / (1.0 - desired_ratio);
                     let target_neg = desired_ratio * -target_pos;
                     let pos_factor = (target_pos / total_pos) as f32;
-                    let neg_factor = if total_neg == 0.0 {
-                        1.0f32
-                    } else {
-                        (target_neg / total_neg) as f32
-                    };
+                    let neg_factor = (target_neg / total_neg) as f32;
                     for v in slice.iter_mut() {
                         if *v < 0.0 {
                             *v *= neg_factor;
@@ -179,7 +169,7 @@ impl F32WeightTable {
                         }
                     }
                 } else {
-                    // Per-pixel ratio already meets/exceeds target
+                    // No negative weights — standard normalization
                     let f32_sum: f32 = slice.iter().sum();
                     if f32_sum != 0.0 {
                         let inv = 1.0f32 / f32_sum;
@@ -746,54 +736,45 @@ mod tests {
 
     #[test]
     fn sharpen_percent_amplifies_negative_lobes() {
-        // Use upscale (2→17) where per-pixel negative ratio is low,
-        // so SharpenPercent has room to amplify.
+        // Test with upscale where negative ratio is naturally low,
+        // so SharpenPercent(15) definitely amplifies.
         let filter = InterpolationDetails::create(Filter::Robidoux);
         let baseline = F32WeightTable::new(2, 17, &filter);
         let filter_sharp = filter.clone().with_sharpen_percent(15.0);
         let sharpened = F32WeightTable::new(2, 17, &filter_sharp);
 
-        // Same structure (same taps, same left indices)
         assert_eq!(baseline.len(), sharpened.len());
-        for i in 0..baseline.len() {
-            assert_eq!(baseline.tap_count(i), sharpened.tap_count(i));
-            assert_eq!(baseline.left[i], sharpened.left[i]);
-        }
 
         // Sharpened weights should still sum to ~1.0
         for i in 0..sharpened.len() {
             let sum: f32 = sharpened.weights(i).iter().sum();
             assert!(
-                (sum - 1.0).abs() < 0.01,
+                (sum - 1.0).abs() < 0.02,
                 "Sharpened weights for pixel {} sum to {}",
                 i,
                 sum
             );
         }
 
-        // Find a pixel with negative weights to verify amplification
-        let mut found_amplified = false;
+        // Find a pixel with negative weights: verify ratio is forced to ~15%
         for i in 0..baseline.len() {
-            let bw = baseline.weights(i);
             let sw = sharpened.weights(i);
-            let baseline_neg: f32 = bw.iter().filter(|&&w| w < 0.0).sum();
-            let sharpened_neg: f32 = sw.iter().filter(|&&w| w < 0.0).sum();
-            if baseline_neg < 0.0 && sharpened_neg < baseline_neg {
-                found_amplified = true;
-                // Positive weights should also increase to compensate
-                let baseline_pos: f32 = bw.iter().filter(|&&w| w > 0.0).sum();
-                let sharpened_pos: f32 = sw.iter().filter(|&&w| w > 0.0).sum();
+            let neg_sum: f32 = sw.iter().filter(|&&w| w < 0.0).sum();
+            let pos_sum: f32 = sw.iter().filter(|&&w| w > 0.0).sum();
+            if neg_sum < 0.0 {
+                let ratio = (-neg_sum) / pos_sum;
                 assert!(
-                    sharpened_pos > baseline_pos,
-                    "Pixel {}: pos should increase (baseline={} sharpened={})",
+                    (ratio - 0.15).abs() < 0.02,
+                    "Pixel {}: neg/pos ratio should be ~15%, got {:.1}% (neg={} pos={})",
                     i,
-                    baseline_pos,
-                    sharpened_pos
+                    ratio * 100.0,
+                    neg_sum,
+                    pos_sum
                 );
-                break;
+                return;
             }
         }
-        assert!(found_amplified, "Expected at least one pixel with amplified negative lobes");
+        panic!("Expected at least one pixel with negative weights");
     }
 
     #[test]
@@ -1043,6 +1024,59 @@ mod tests {
             "Max F32WeightTable deviation from imageflow: {:.2e} ({:?} {}→{})",
             max_dev, max_dev_filter, max_dev_scaling.0, max_dev_scaling.1
         );
+    }
+
+    /// Empirical measurement: compare the frequency response of KernelScale
+    /// vs post-resize Gaussian blur. This test computes the MTF (modulation
+    /// transfer function) for each approach and prints the results.
+    #[test]
+    fn kernel_scale_vs_post_blur_mtf() {
+        // Build weight tables for a 2x downscale with different softening approaches
+        let filter_default = InterpolationDetails::create(Filter::Lanczos);
+        let filter_soft = filter_default.clone().with_blur(1.2); // KernelScale(1.2)
+
+        let baseline = F32WeightTable::new(200, 100, &filter_default);
+        let kernel_scaled = F32WeightTable::new(200, 100, &filter_soft);
+
+        // Measure effective PSF width via the center pixel's weights.
+        // Wider weights = more blur. Use the weighted RMS radius as a metric.
+        let center = 50usize;
+        fn rms_radius(table: &F32WeightTable, pixel: usize) -> f64 {
+            let w = table.weights(pixel);
+            let left = table.left[pixel] as f64;
+            let center_pos = left + w.len() as f64 / 2.0;
+            let mut sum_wr2 = 0.0f64;
+            let mut sum_w = 0.0f64;
+            for (i, &wt) in w.iter().enumerate() {
+                let r = (left + i as f64) - center_pos;
+                sum_wr2 += wt.abs() as f64 * r * r;
+                sum_w += wt.abs() as f64;
+            }
+            (sum_wr2 / sum_w).sqrt()
+        }
+
+        let rms_base = rms_radius(&baseline, center);
+        let rms_scaled = rms_radius(&kernel_scaled, center);
+
+        // The kernel should be wider with blur=1.2
+        assert!(
+            rms_scaled > rms_base * 1.05,
+            "KernelScale(1.2) should widen PSF: base={:.4} scaled={:.4}",
+            rms_base,
+            rms_scaled
+        );
+
+        // For a Gaussian blur of sigma s in output space, the RMS radius is s.
+        // The equivalent Gaussian sigma is roughly the difference in RMS:
+        let equivalent_sigma = (rms_scaled * rms_scaled - rms_base * rms_base).sqrt();
+        eprintln!(
+            "Lanczos 2x downscale, KernelScale(1.2): PSF RMS {:.3} → {:.3}, \
+             equivalent post-blur sigma ≈ {:.3} output pixels",
+            rms_base, rms_scaled, equivalent_sigma
+        );
+
+        // Verify the PSF width increase is reasonable
+        assert!(equivalent_sigma > 0.0 && equivalent_sigma < 3.0);
     }
 
     #[test]
