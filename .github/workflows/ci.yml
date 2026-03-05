@@ -61,6 +61,7 @@ jobs:
       - name: Run tests (default features)
         run: cargo test ${{ matrix.strip-colorutils && '--lib' || '' }}
       - name: Run tests (no_std)
+        if: ${{ !matrix.strip-colorutils }}
         run: cargo test --no-default-features --lib
       - name: Run tests (pretty-safe)
         run: cargo test --features pretty-safe ${{ matrix.strip-colorutils && '--lib' || '' }}
