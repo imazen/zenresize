@@ -154,20 +154,50 @@ pub(crate) fn filter_v_all_u8_i16_scalar(
     out_h: usize,
     weights: &crate::weights::I16WeightTable,
 ) {
-    for out_y in 0..out_h {
+    let in_h_i32 = in_h as i32 - 1;
+
+    let mut out_y = 0;
+    while out_y < out_h {
         let left = weights.left[out_y];
         let tap_count = weights.tap_count(out_y);
-        let w = weights.weights(out_y);
-        let out_start = out_y * h_row_len;
+        let w_a = weights.weights(out_y);
 
-        for x in 0..h_row_len {
-            let mut acc: i32 = 0;
-            for (t, &weight) in w[..tap_count].iter().enumerate() {
-                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                acc += intermediate[in_y * h_row_len + x] as i32 * weight as i32;
+        let batch2 = out_y + 1 < out_h
+            && weights.left[out_y + 1] == left
+            && weights.tap_count(out_y + 1) == tap_count;
+
+        if batch2 {
+            let w_b = weights.weights(out_y + 1);
+            let out_start_a = out_y * h_row_len;
+            let out_start_b = (out_y + 1) * h_row_len;
+
+            for x in 0..h_row_len {
+                let mut acc_a: i32 = 0;
+                let mut acc_b: i32 = 0;
+                for t in 0..tap_count {
+                    let in_y = (left + t as i32).clamp(0, in_h_i32) as usize;
+                    let v = intermediate[in_y * h_row_len + x] as i32;
+                    acc_a += v * w_a[t] as i32;
+                    acc_b += v * w_b[t] as i32;
+                }
+                output[out_start_a + x] =
+                    ((acc_a + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 255) as u8;
+                output[out_start_b + x] =
+                    ((acc_b + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 255) as u8;
             }
-            let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
-            output[out_start + x] = rounded.clamp(0, 255) as u8;
+            out_y += 2;
+        } else {
+            let out_start = out_y * h_row_len;
+            for x in 0..h_row_len {
+                let mut acc: i32 = 0;
+                for (t, &weight) in w_a[..tap_count].iter().enumerate() {
+                    let in_y = (left + t as i32).clamp(0, in_h_i32) as usize;
+                    acc += intermediate[in_y * h_row_len + x] as i32 * weight as i32;
+                }
+                output[out_start + x] =
+                    ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 255) as u8;
+            }
+            out_y += 1;
         }
     }
 }
@@ -214,20 +244,50 @@ pub(crate) fn filter_v_all_i16_i16_scalar(
     out_h: usize,
     weights: &crate::weights::I16WeightTable,
 ) {
-    for out_y in 0..out_h {
+    let in_h_i32 = in_h as i32 - 1;
+
+    let mut out_y = 0;
+    while out_y < out_h {
         let left = weights.left[out_y];
         let tap_count = weights.tap_count(out_y);
-        let w = weights.weights(out_y);
-        let out_start = out_y * h_row_len;
+        let w_a = weights.weights(out_y);
 
-        for x in 0..h_row_len {
-            let mut acc: i32 = 0;
-            for (t, &weight) in w.iter().enumerate().take(tap_count) {
-                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                acc += intermediate[in_y * h_row_len + x] as i32 * weight as i32;
+        let batch2 = out_y + 1 < out_h
+            && weights.left[out_y + 1] == left
+            && weights.tap_count(out_y + 1) == tap_count;
+
+        if batch2 {
+            let w_b = weights.weights(out_y + 1);
+            let out_start_a = out_y * h_row_len;
+            let out_start_b = (out_y + 1) * h_row_len;
+
+            for x in 0..h_row_len {
+                let mut acc_a: i32 = 0;
+                let mut acc_b: i32 = 0;
+                for t in 0..tap_count {
+                    let in_y = (left + t as i32).clamp(0, in_h_i32) as usize;
+                    let v = intermediate[in_y * h_row_len + x] as i32;
+                    acc_a += v * w_a[t] as i32;
+                    acc_b += v * w_b[t] as i32;
+                }
+                output[out_start_a + x] =
+                    ((acc_a + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095) as i16;
+                output[out_start_b + x] =
+                    ((acc_b + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095) as i16;
             }
-            let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
-            output[out_start + x] = rounded.clamp(0, 4095) as i16;
+            out_y += 2;
+        } else {
+            let out_start = out_y * h_row_len;
+            for x in 0..h_row_len {
+                let mut acc: i32 = 0;
+                for (t, &weight) in w_a[..tap_count].iter().enumerate() {
+                    let in_y = (left + t as i32).clamp(0, in_h_i32) as usize;
+                    acc += intermediate[in_y * h_row_len + x] as i32 * weight as i32;
+                }
+                output[out_start + x] =
+                    ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095) as i16;
+            }
+            out_y += 1;
         }
     }
 }

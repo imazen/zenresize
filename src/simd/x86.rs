@@ -867,6 +867,11 @@ fn filter_h_u8_generic(
 /// Uses 2D guards on the contiguous intermediate buffer to eliminate unsafe.
 /// Pre-computed row offsets with monotonic-in-tap ordering enable O(1) guard
 /// construction per output row.
+///
+/// When consecutive output rows share the same `left` (common for upscale),
+/// processes them in pairs: loads each input chunk once, accumulates into two
+/// output rows with different weights. This halves memory traffic for the
+/// shared taps.
 #[archmage::arcane]
 pub(crate) fn filter_v_all_u8_i16_v3(
     _token: X64V3Token,
@@ -892,35 +897,43 @@ pub(crate) fn filter_v_all_u8_i16_v3(
     // Allocate working buffers once, sized for max tap count.
     let max_taps = weights.max_taps;
     let mut row_indices = vec![0usize; max_taps];
-    let mut paired_wts = vec![_mm256_setzero_si256(); max_taps.div_ceil(2)];
+    let mut paired_wts_a = vec![_mm256_setzero_si256(); max_taps.div_ceil(2)];
+    let mut paired_wts_b = vec![_mm256_setzero_si256(); max_taps.div_ceil(2)];
     // Pre-allocated buffer for per-output-row tap chunk slices (avoids per-row Vec alloc).
     let empty_chunks: &[[u8; 16]] = &[];
     let mut tap_rows = vec![empty_chunks; max_taps];
 
-    for out_y in 0..out_h {
+    let mut out_y = 0;
+    while out_y < out_h {
         let left = weights.left[out_y];
         let tap_count = weights.tap_count(out_y);
-        let w = weights.weights(out_y);
-        let out_base = out_y * h_row_len;
+        let w_a = weights.weights(out_y);
 
-        // Pre-compute paired weights and clamped row indices for this output row.
+        // Check if next output row shares the same input rows (same left + tap_count).
+        // Common for upscale where multiple output rows map to the same input window.
+        let batch2 = out_y + 1 < out_h
+            && weights.left[out_y + 1] == left
+            && weights.tap_count(out_y + 1) == tap_count;
+
+        // Pre-compute shared clamped row indices.
         let pairs = tap_count / 2;
         let odd = !tap_count.is_multiple_of(2);
 
         for t in 0..tap_count {
             row_indices[t] = (left + t as i32).clamp(0, in_h_i32 - 1) as usize;
         }
+
+        // Weights for row A (always needed).
         for p in 0..pairs {
-            let w0 = w[p * 2] as i32;
-            let w1 = w[p * 2 + 1] as i32;
-            paired_wts[p] = _mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
+            let w0 = w_a[p * 2] as i32;
+            let w1 = w_a[p * 2 + 1] as i32;
+            paired_wts_a[p] = _mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
         }
-        let odd_weight = if odd {
-            _mm256_set1_epi32(w[tap_count - 1] as i32 & 0xFFFF)
+        let odd_wt_a = if odd {
+            _mm256_set1_epi32(w_a[tap_count - 1] as i32 & 0xFFFF)
         } else {
             _mm256_setzero_si256()
         };
-        let (out_chunks, out_tail) = output[out_base..out_base + h_row_len].as_chunks_mut::<16>();
 
         // Pre-fetch row chunk slices for this output row's taps.
         // Slicing to [..chunks16] proves inner-loop [ci] accesses are in bounds.
@@ -928,63 +941,172 @@ pub(crate) fn filter_v_all_u8_i16_v3(
             tap_rows[t] = &int_row_chunks[ri][..chunks16];
         }
 
-        for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
-            let mut acc_lo = _mm256_setzero_si256();
-            let mut acc_hi = _mm256_setzero_si256();
+        if batch2 {
+            // === Paired output rows: shared input loads, dual accumulation ===
+            let w_b = weights.weights(out_y + 1);
 
-            for (pw, ri_pair) in paired_wts[..pairs].iter().zip(tap_rows.chunks_exact(2)) {
-                // ri_pair[0]/[1] guaranteed by chunks_exact(2); idx eliminates [ci] check.
-                let src0 = _mm_loadu_si128(idx(ri_pair[0], ci));
-                let src1 = _mm_loadu_si128(idx(ri_pair[1], ci));
+            // Weights for row B.
+            for p in 0..pairs {
+                let w0 = w_b[p * 2] as i32;
+                let w1 = w_b[p * 2 + 1] as i32;
+                paired_wts_b[p] = _mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
+            }
+            let odd_wt_b = if odd {
+                _mm256_set1_epi32(w_b[tap_count - 1] as i32 & 0xFFFF)
+            } else {
+                _mm256_setzero_si256()
+            };
 
-                let il_lo = _mm_unpacklo_epi8(src0, src1);
-                let il_hi = _mm_unpackhi_epi8(src0, src1);
+            let out_base_a = out_y * h_row_len;
+            // Split output into two non-overlapping mutable row slices.
+            let (row_a, rest) = output[out_base_a..].split_at_mut(h_row_len);
+            let row_b = &mut rest[..h_row_len];
+            let (chunks_a, tail_a) = row_a.as_chunks_mut::<16>();
+            let (chunks_b, tail_b) = row_b.as_chunks_mut::<16>();
 
-                let ext_lo = _mm256_cvtepu8_epi16(il_lo);
-                let ext_hi = _mm256_cvtepu8_epi16(il_hi);
+            for ci in 0..chunks16 {
+                let mut acc_a_lo = _mm256_setzero_si256();
+                let mut acc_a_hi = _mm256_setzero_si256();
+                let mut acc_b_lo = _mm256_setzero_si256();
+                let mut acc_b_hi = _mm256_setzero_si256();
 
-                acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, *pw));
-                acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, *pw));
+                for p in 0..pairs {
+                    let src0 = _mm_loadu_si128(idx(tap_rows[p * 2], ci));
+                    let src1 = _mm_loadu_si128(idx(tap_rows[p * 2 + 1], ci));
+
+                    let il_lo = _mm_unpacklo_epi8(src0, src1);
+                    let il_hi = _mm_unpackhi_epi8(src0, src1);
+                    let ext_lo = _mm256_cvtepu8_epi16(il_lo);
+                    let ext_hi = _mm256_cvtepu8_epi16(il_hi);
+
+                    acc_a_lo =
+                        _mm256_add_epi32(acc_a_lo, _mm256_madd_epi16(ext_lo, paired_wts_a[p]));
+                    acc_a_hi =
+                        _mm256_add_epi32(acc_a_hi, _mm256_madd_epi16(ext_hi, paired_wts_a[p]));
+                    acc_b_lo =
+                        _mm256_add_epi32(acc_b_lo, _mm256_madd_epi16(ext_lo, paired_wts_b[p]));
+                    acc_b_hi =
+                        _mm256_add_epi32(acc_b_hi, _mm256_madd_epi16(ext_hi, paired_wts_b[p]));
+                }
+
+                if odd {
+                    let src = _mm_loadu_si128(idx(tap_rows[tap_count - 1], ci));
+                    let zero_src = _mm_setzero_si128();
+                    let il_lo = _mm_unpacklo_epi8(src, zero_src);
+                    let il_hi = _mm_unpackhi_epi8(src, zero_src);
+                    let ext_lo = _mm256_cvtepu8_epi16(il_lo);
+                    let ext_hi = _mm256_cvtepu8_epi16(il_hi);
+
+                    acc_a_lo = _mm256_add_epi32(acc_a_lo, _mm256_madd_epi16(ext_lo, odd_wt_a));
+                    acc_a_hi = _mm256_add_epi32(acc_a_hi, _mm256_madd_epi16(ext_hi, odd_wt_a));
+                    acc_b_lo = _mm256_add_epi32(acc_b_lo, _mm256_madd_epi16(ext_lo, odd_wt_b));
+                    acc_b_hi = _mm256_add_epi32(acc_b_hi, _mm256_madd_epi16(ext_hi, odd_wt_b));
+                }
+
+                // Pack and store row A.
+                let ra_lo = _mm256_srai_epi32::<{ I16_PRECISION }>(_mm256_add_epi32(acc_a_lo, half));
+                let ra_hi = _mm256_srai_epi32::<{ I16_PRECISION }>(_mm256_add_epi32(acc_a_hi, half));
+                let a_ll = _mm256_castsi256_si128(ra_lo);
+                let a_lh = _mm256_extracti128_si256::<1>(ra_lo);
+                let a_hl = _mm256_castsi256_si128(ra_hi);
+                let a_hh = _mm256_extracti128_si256::<1>(ra_hi);
+                _mm_storeu_si128(
+                    idx_mut(chunks_a, ci),
+                    _mm_packus_epi16(_mm_packs_epi32(a_ll, a_lh), _mm_packs_epi32(a_hl, a_hh)),
+                );
+
+                // Pack and store row B.
+                let rb_lo = _mm256_srai_epi32::<{ I16_PRECISION }>(_mm256_add_epi32(acc_b_lo, half));
+                let rb_hi = _mm256_srai_epi32::<{ I16_PRECISION }>(_mm256_add_epi32(acc_b_hi, half));
+                let b_ll = _mm256_castsi256_si128(rb_lo);
+                let b_lh = _mm256_extracti128_si256::<1>(rb_lo);
+                let b_hl = _mm256_castsi256_si128(rb_hi);
+                let b_hh = _mm256_extracti128_si256::<1>(rb_hi);
+                _mm_storeu_si128(
+                    idx_mut(chunks_b, ci),
+                    _mm_packus_epi16(_mm_packs_epi32(b_ll, b_lh), _mm_packs_epi32(b_hl, b_hh)),
+                );
             }
 
-            if odd {
-                let src = _mm_loadu_si128(idx(tap_rows[tap_count - 1], ci));
-                let zero_src = _mm_setzero_si128();
-                let il_lo = _mm_unpacklo_epi8(src, zero_src);
-                let il_hi = _mm_unpackhi_epi8(src, zero_src);
-                let ext_lo = _mm256_cvtepu8_epi16(il_lo);
-                let ext_hi = _mm256_cvtepu8_epi16(il_hi);
-                acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, odd_weight));
-                acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, odd_weight));
+            // Scalar tails.
+            let tail_start = chunks16 * 16;
+            for (x, out_byte) in tail_a.iter_mut().enumerate() {
+                let mut acc: i32 = 0;
+                for t in 0..tap_count {
+                    acc += intermediate[row_indices[t] * h_row_len + tail_start + x] as i32
+                        * w_a[t] as i32;
+                }
+                *out_byte = ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 255) as u8;
+            }
+            for (x, out_byte) in tail_b.iter_mut().enumerate() {
+                let mut acc: i32 = 0;
+                for t in 0..tap_count {
+                    acc += intermediate[row_indices[t] * h_row_len + tail_start + x] as i32
+                        * w_b[t] as i32;
+                }
+                *out_byte = ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 255) as u8;
+            }
+            out_y += 2;
+        } else {
+            // === Single output row ===
+            let out_base = out_y * h_row_len;
+            let (out_chunks, out_tail) = output[out_base..out_base + h_row_len].as_chunks_mut::<16>();
+
+            for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
+                let mut acc_lo = _mm256_setzero_si256();
+                let mut acc_hi = _mm256_setzero_si256();
+
+                for (pw, ri_pair) in paired_wts_a[..pairs].iter().zip(tap_rows.chunks_exact(2)) {
+                    let src0 = _mm_loadu_si128(idx(ri_pair[0], ci));
+                    let src1 = _mm_loadu_si128(idx(ri_pair[1], ci));
+
+                    let il_lo = _mm_unpacklo_epi8(src0, src1);
+                    let il_hi = _mm_unpackhi_epi8(src0, src1);
+                    let ext_lo = _mm256_cvtepu8_epi16(il_lo);
+                    let ext_hi = _mm256_cvtepu8_epi16(il_hi);
+
+                    acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, *pw));
+                    acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, *pw));
+                }
+
+                if odd {
+                    let src = _mm_loadu_si128(idx(tap_rows[tap_count - 1], ci));
+                    let zero_src = _mm_setzero_si128();
+                    let il_lo = _mm_unpacklo_epi8(src, zero_src);
+                    let il_hi = _mm_unpackhi_epi8(src, zero_src);
+                    let ext_lo = _mm256_cvtepu8_epi16(il_lo);
+                    let ext_hi = _mm256_cvtepu8_epi16(il_hi);
+                    acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, odd_wt_a));
+                    acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, odd_wt_a));
+                }
+
+                let rounded_lo = _mm256_add_epi32(acc_lo, half);
+                let rounded_hi = _mm256_add_epi32(acc_hi, half);
+                let shifted_lo = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded_lo);
+                let shifted_hi = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded_hi);
+
+                let lo_lo = _mm256_castsi256_si128(shifted_lo);
+                let lo_hi = _mm256_extracti128_si256::<1>(shifted_lo);
+                let hi_lo = _mm256_castsi256_si128(shifted_hi);
+                let hi_hi = _mm256_extracti128_si256::<1>(shifted_hi);
+
+                let pack01 = _mm_packs_epi32(lo_lo, lo_hi);
+                let pack23 = _mm_packs_epi32(hi_lo, hi_hi);
+                _mm_storeu_si128(out_chunk, _mm_packus_epi16(pack01, pack23));
             }
 
-            let rounded_lo = _mm256_add_epi32(acc_lo, half);
-            let rounded_hi = _mm256_add_epi32(acc_hi, half);
-            let shifted_lo = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded_lo);
-            let shifted_hi = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded_hi);
-
-            let lo_lo = _mm256_castsi256_si128(shifted_lo);
-            let lo_hi = _mm256_extracti128_si256::<1>(shifted_lo);
-            let hi_lo = _mm256_castsi256_si128(shifted_hi);
-            let hi_hi = _mm256_extracti128_si256::<1>(shifted_hi);
-
-            let pack01 = _mm_packs_epi32(lo_lo, lo_hi);
-            let pack23 = _mm_packs_epi32(hi_lo, hi_hi);
-            let result = _mm_packus_epi16(pack01, pack23);
-
-            _mm_storeu_si128(out_chunk, result);
-        }
-
-        // Scalar tail
-        let tail_start = chunks16 * 16;
-        for (x, out_byte) in out_tail.iter_mut().enumerate() {
-            let mut acc: i32 = 0;
-            for t in 0..tap_count {
-                let in_y = row_indices[t];
-                acc += intermediate[in_y * h_row_len + tail_start + x] as i32 * w[t] as i32;
+            // Scalar tail
+            let tail_start = chunks16 * 16;
+            for (x, out_byte) in out_tail.iter_mut().enumerate() {
+                let mut acc: i32 = 0;
+                for t in 0..tap_count {
+                    let in_y = row_indices[t];
+                    acc += intermediate[in_y * h_row_len + tail_start + x] as i32 * w_a[t] as i32;
+                }
+                let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+                *out_byte = rounded.clamp(0, 255) as u8;
             }
-            let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
-            *out_byte = rounded.clamp(0, 255) as u8;
+            out_y += 1;
         }
     }
 }
@@ -1214,14 +1336,14 @@ fn filter_h_i16_4ch(
     }
 }
 
-/// Batch vertical filter: i16 intermediate → i16 output via i32 accumulator.
+/// Batch vertical filter for all output rows (i16→i16), with paired output row batching.
 ///
-/// Adapted from `filter_v_all_u8_i16_v3` — instead of loading u8 and extending
-/// to i16, we load i16 directly. Paired row interleaving uses `unpacklo_epi16`
-/// instead of `unpacklo_epi8` + `cvtepu8_epi16`.
+/// Same dual-accumulation strategy as `filter_v_all_u8_i16_v3`: consecutive output
+/// rows sharing the same `left` are processed together, halving input loads.
 ///
+/// Adapted from `filter_v_all_u8_i16_v3` — loads i16 directly instead of u8.
+/// Paired row interleaving uses `unpacklo_epi16` instead of `unpacklo_epi8` + `cvtepu8_epi16`.
 /// Processes 8 i16 values (16 bytes) per chunk.
-/// Uses `as_chunks` for safe bounds-hoisted access.
 #[archmage::arcane]
 pub(crate) fn filter_v_all_i16_i16_v3(
     _token: X64V3Token,
@@ -1247,15 +1369,20 @@ pub(crate) fn filter_v_all_i16_i16_v3(
 
     let max_taps = weights.max_taps;
     let mut row_indices = vec![0usize; max_taps];
-    let mut paired_wts = vec![_mm256_setzero_si256(); max_taps.div_ceil(2)];
+    let mut paired_wts_a = vec![_mm256_setzero_si256(); max_taps.div_ceil(2)];
+    let mut paired_wts_b = vec![_mm256_setzero_si256(); max_taps.div_ceil(2)];
     let empty_chunks: &[[i16; 8]] = &[];
     let mut tap_rows = vec![empty_chunks; max_taps];
 
-    for out_y in 0..out_h {
+    let mut out_y = 0;
+    while out_y < out_h {
         let left = weights.left[out_y];
         let tap_count = weights.tap_count(out_y);
-        let w = weights.weights(out_y);
-        let out_base = out_y * h_row_len;
+        let w_a = weights.weights(out_y);
+
+        let batch2 = out_y + 1 < out_h
+            && weights.left[out_y + 1] == left
+            && weights.tap_count(out_y + 1) == tap_count;
 
         let pairs = tap_count / 2;
         let odd = !tap_count.is_multiple_of(2);
@@ -1263,74 +1390,149 @@ pub(crate) fn filter_v_all_i16_i16_v3(
         for t in 0..tap_count {
             row_indices[t] = (left + t as i32).clamp(0, in_h_i32 - 1) as usize;
         }
+
         for p in 0..pairs {
-            let w0 = w[p * 2] as i32;
-            let w1 = w[p * 2 + 1] as i32;
-            paired_wts[p] = _mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
+            let w0 = w_a[p * 2] as i32;
+            let w1 = w_a[p * 2 + 1] as i32;
+            paired_wts_a[p] = _mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
         }
-        let odd_weight = if odd {
-            _mm256_set1_epi32(w[tap_count - 1] as i32 & 0xFFFF)
+        let odd_wt_a = if odd {
+            _mm256_set1_epi32(w_a[tap_count - 1] as i32 & 0xFFFF)
         } else {
             _mm256_setzero_si256()
         };
 
-        let (out_chunks, out_tail) = output[out_base..out_base + h_row_len].as_chunks_mut::<8>();
-
-        // Pre-fetch row chunk slices for this output row's taps.
         for (t, &ri) in row_indices[..tap_count].iter().enumerate() {
             tap_rows[t] = &int_row_chunks[ri][..chunks8];
         }
 
-        for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
-            let mut acc_lo = _mm256_setzero_si256();
+        if batch2 {
+            let w_b = weights.weights(out_y + 1);
 
-            for (pw, ri_pair) in paired_wts[..pairs].iter().zip(tap_rows.chunks_exact(2)) {
-                // Load 8 i16 from each of two rows (16 bytes each).
-                // ri_pair[0]/[1] guaranteed by chunks_exact(2); idx eliminates [ci] check.
-                let src0 = _mm_loadu_si128(idx(ri_pair[0], ci));
-                let src1 = _mm_loadu_si128(idx(ri_pair[1], ci));
+            for p in 0..pairs {
+                let w0 = w_b[p * 2] as i32;
+                let w1 = w_b[p * 2 + 1] as i32;
+                paired_wts_b[p] = _mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
+            }
+            let odd_wt_b = if odd {
+                _mm256_set1_epi32(w_b[tap_count - 1] as i32 & 0xFFFF)
+            } else {
+                _mm256_setzero_si256()
+            };
 
-                // Interleave i16 pairs: [a0,b0, a1,b1, a2,b2, a3,b3]
-                let il_lo = _mm_unpacklo_epi16(src0, src1);
-                let il_hi = _mm_unpackhi_epi16(src0, src1);
+            let out_base_a = out_y * h_row_len;
+            let (row_a, rest) = output[out_base_a..].split_at_mut(h_row_len);
+            let row_b = &mut rest[..h_row_len];
+            let (chunks_a, tail_a) = row_a.as_chunks_mut::<8>();
+            let (chunks_b, tail_b) = row_b.as_chunks_mut::<8>();
 
-                // Combine into ymm for madd_epi16
-                let combined = _mm256_set_m128i(il_hi, il_lo);
-                acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(combined, *pw));
+            for ci in 0..chunks8 {
+                let mut acc_a = _mm256_setzero_si256();
+                let mut acc_b = _mm256_setzero_si256();
+
+                for p in 0..pairs {
+                    let src0 = _mm_loadu_si128(idx(tap_rows[p * 2], ci));
+                    let src1 = _mm_loadu_si128(idx(tap_rows[p * 2 + 1], ci));
+
+                    let il_lo = _mm_unpacklo_epi16(src0, src1);
+                    let il_hi = _mm_unpackhi_epi16(src0, src1);
+                    let combined = _mm256_set_m128i(il_hi, il_lo);
+
+                    acc_a = _mm256_add_epi32(acc_a, _mm256_madd_epi16(combined, paired_wts_a[p]));
+                    acc_b = _mm256_add_epi32(acc_b, _mm256_madd_epi16(combined, paired_wts_b[p]));
+                }
+
+                if odd {
+                    let src = _mm_loadu_si128(idx(tap_rows[tap_count - 1], ci));
+                    let zero_src = _mm_setzero_si128();
+                    let il_lo = _mm_unpacklo_epi16(src, zero_src);
+                    let il_hi = _mm_unpackhi_epi16(src, zero_src);
+                    let combined = _mm256_set_m128i(il_hi, il_lo);
+                    acc_a = _mm256_add_epi32(acc_a, _mm256_madd_epi16(combined, odd_wt_a));
+                    acc_b = _mm256_add_epi32(acc_b, _mm256_madd_epi16(combined, odd_wt_b));
+                }
+
+                // Pack and store row A.
+                let shifted_a = _mm256_srai_epi32::<{ I16_PRECISION }>(_mm256_add_epi32(acc_a, half));
+                let a_lo = _mm256_castsi256_si128(shifted_a);
+                let a_hi = _mm256_extracti128_si256::<1>(shifted_a);
+                _mm_storeu_si128(
+                    idx_mut(chunks_a, ci),
+                    _mm_min_epi16(_mm_max_epi16(_mm_packs_epi32(a_lo, a_hi), zero_xmm), max_val),
+                );
+
+                // Pack and store row B.
+                let shifted_b = _mm256_srai_epi32::<{ I16_PRECISION }>(_mm256_add_epi32(acc_b, half));
+                let b_lo = _mm256_castsi256_si128(shifted_b);
+                let b_hi = _mm256_extracti128_si256::<1>(shifted_b);
+                _mm_storeu_si128(
+                    idx_mut(chunks_b, ci),
+                    _mm_min_epi16(_mm_max_epi16(_mm_packs_epi32(b_lo, b_hi), zero_xmm), max_val),
+                );
             }
 
-            if odd {
-                let src = _mm_loadu_si128(idx(tap_rows[tap_count - 1], ci));
-                let zero_src = _mm_setzero_si128();
-                let il_lo = _mm_unpacklo_epi16(src, zero_src);
-                let il_hi = _mm_unpackhi_epi16(src, zero_src);
-                let combined = _mm256_set_m128i(il_hi, il_lo);
-                acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(combined, odd_weight));
+            // Scalar tails.
+            let tail_start = chunks8 * 8;
+            for (x, out_val) in tail_a.iter_mut().enumerate() {
+                let mut acc: i32 = 0;
+                for t in 0..tap_count {
+                    acc += intermediate[row_indices[t] * h_row_len + tail_start + x] as i32
+                        * w_a[t] as i32;
+                }
+                *out_val = ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095) as i16;
+            }
+            for (x, out_val) in tail_b.iter_mut().enumerate() {
+                let mut acc: i32 = 0;
+                for t in 0..tap_count {
+                    acc += intermediate[row_indices[t] * h_row_len + tail_start + x] as i32
+                        * w_b[t] as i32;
+                }
+                *out_val = ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095) as i16;
+            }
+            out_y += 2;
+        } else {
+            let out_base = out_y * h_row_len;
+            let (out_chunks, out_tail) = output[out_base..out_base + h_row_len].as_chunks_mut::<8>();
+
+            for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
+                let mut acc_lo = _mm256_setzero_si256();
+
+                for (pw, ri_pair) in paired_wts_a[..pairs].iter().zip(tap_rows.chunks_exact(2)) {
+                    let src0 = _mm_loadu_si128(idx(ri_pair[0], ci));
+                    let src1 = _mm_loadu_si128(idx(ri_pair[1], ci));
+                    let il_lo = _mm_unpacklo_epi16(src0, src1);
+                    let il_hi = _mm_unpackhi_epi16(src0, src1);
+                    let combined = _mm256_set_m128i(il_hi, il_lo);
+                    acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(combined, *pw));
+                }
+
+                if odd {
+                    let src = _mm_loadu_si128(idx(tap_rows[tap_count - 1], ci));
+                    let zero_src = _mm_setzero_si128();
+                    let il_lo = _mm_unpacklo_epi16(src, zero_src);
+                    let il_hi = _mm_unpackhi_epi16(src, zero_src);
+                    let combined = _mm256_set_m128i(il_hi, il_lo);
+                    acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(combined, odd_wt_a));
+                }
+
+                let rounded = _mm256_add_epi32(acc_lo, half);
+                let shifted = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded);
+                let lo_128 = _mm256_castsi256_si128(shifted);
+                let hi_128 = _mm256_extracti128_si256::<1>(shifted);
+                let packed = _mm_packs_epi32(lo_128, hi_128);
+                _mm_storeu_si128(out_chunk, _mm_min_epi16(_mm_max_epi16(packed, zero_xmm), max_val));
             }
 
-            // Round and shift
-            let rounded = _mm256_add_epi32(acc_lo, half);
-            let shifted = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded);
-
-            // Pack i32 → i16 using 128-bit extraction, clamp to 0-4095
-            let lo_128 = _mm256_castsi256_si128(shifted);
-            let hi_128 = _mm256_extracti128_si256::<1>(shifted);
-            let packed = _mm_packs_epi32(lo_128, hi_128);
-            let clamped = _mm_min_epi16(_mm_max_epi16(packed, zero_xmm), max_val);
-
-            _mm_storeu_si128(out_chunk, clamped);
-        }
-
-        // Scalar tail
-        let tail_start = chunks8 * 8;
-        for (x, out_val) in out_tail.iter_mut().enumerate() {
-            let mut acc: i32 = 0;
-            for t in 0..tap_count {
-                let in_y = row_indices[t];
-                acc += intermediate[in_y * h_row_len + tail_start + x] as i32 * w[t] as i32;
+            let tail_start = chunks8 * 8;
+            for (x, out_val) in out_tail.iter_mut().enumerate() {
+                let mut acc: i32 = 0;
+                for t in 0..tap_count {
+                    acc += intermediate[row_indices[t] * h_row_len + tail_start + x] as i32
+                        * w_a[t] as i32;
+                }
+                *out_val = ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095) as i16;
             }
-            let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
-            *out_val = rounded.clamp(0, 4095) as i16;
+            out_y += 1;
         }
     }
 }

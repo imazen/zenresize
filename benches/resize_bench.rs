@@ -37,6 +37,7 @@ fn make_gradient(w: u32, h: u32, name: &'static str) -> TestImage {
 
 fn test_images() -> Vec<TestImage> {
     vec![
+        make_gradient(3840, 2160, "4k"),
         make_gradient(1024, 1024, "1024sq"),
         make_gradient(576, 576, "576sq"),
     ]
