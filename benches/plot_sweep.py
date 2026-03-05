@@ -29,8 +29,8 @@ def main():
     safe_data = load_csv('/tmp/sweep_safe.csv')
     unsafe_data = load_csv('/tmp/sweep_unsafe.csv')
 
-    outdir = '/mnt/v/output/zenresize/sweep'
     import os
+    outdir = os.environ.get('SWEEP_OUTPUT_DIR', '/mnt/v/output/zenresize/sweep')
     os.makedirs(outdir, exist_ok=True)
 
     # --- Chart 1: Throughput (input MP/s) vs input size, one line per ratio ---
