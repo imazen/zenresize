@@ -187,10 +187,12 @@ pub(crate) fn filter_v_all_f16_neon(
     super::wide_kernels::filter_v_all_f16(intermediate, output, h_row_len, in_h, out_h, weights)
 }
 
-// Transfer function batch processors — SIMD via magetypes f32x4 (NEON).
+// Transfer function batch processors — wrap linear-srgb rites via closures.
+
+use magetypes::simd::generic::f32x4;
 
 macro_rules! tf_neon {
-    ($name_neon:ident, $name_portable:ident) => {
+    ($name_neon:ident, $rite_fn:path, $scalar_fn:path) => {
         #[archmage::arcane]
         pub(crate) fn $name_neon(
             _token: NeonToken,
@@ -198,19 +200,58 @@ macro_rules! tf_neon {
             channels: usize,
             has_alpha: bool,
         ) {
-            super::tf_portable::$name_portable(_token, row, channels, has_alpha);
+            super::tf_portable::tf_row_inplace(
+                _token,
+                row,
+                channels,
+                has_alpha,
+                |t, v: f32x4<NeonToken>| f32x4::from_array(t, $rite_fn(t, v.to_array())),
+                $scalar_fn,
+            );
         }
     };
 }
 
-tf_neon!(srgb_to_linear_row_neon, srgb_to_linear_row);
-tf_neon!(srgb_from_linear_row_neon, srgb_from_linear_row);
-tf_neon!(bt709_to_linear_row_neon, bt709_to_linear_row);
-tf_neon!(bt709_from_linear_row_neon, bt709_from_linear_row);
-tf_neon!(pq_to_linear_row_neon, pq_to_linear_row);
-tf_neon!(pq_from_linear_row_neon, pq_from_linear_row);
-tf_neon!(hlg_to_linear_row_neon, hlg_to_linear_row);
-tf_neon!(hlg_from_linear_row_neon, hlg_from_linear_row);
+tf_neon!(
+    srgb_to_linear_row_neon,
+    linear_srgb::tf::rites_x4::srgb_to_linear_neon,
+    linear_srgb::tf::srgb_to_linear
+);
+tf_neon!(
+    srgb_from_linear_row_neon,
+    linear_srgb::tf::rites_x4::linear_to_srgb_neon,
+    linear_srgb::tf::linear_to_srgb
+);
+tf_neon!(
+    bt709_to_linear_row_neon,
+    linear_srgb::tf::rites_x4::bt709_to_linear_neon,
+    linear_srgb::tf::bt709_to_linear
+);
+tf_neon!(
+    bt709_from_linear_row_neon,
+    linear_srgb::tf::rites_x4::linear_to_bt709_neon,
+    linear_srgb::tf::linear_to_bt709
+);
+tf_neon!(
+    pq_to_linear_row_neon,
+    linear_srgb::tf::rites_x4::pq_to_linear_neon,
+    linear_srgb::tf::pq_to_linear
+);
+tf_neon!(
+    pq_from_linear_row_neon,
+    linear_srgb::tf::rites_x4::linear_to_pq_neon,
+    linear_srgb::tf::linear_to_pq
+);
+tf_neon!(
+    hlg_to_linear_row_neon,
+    linear_srgb::tf::rites_x4::hlg_to_linear_neon,
+    linear_srgb::tf::hlg_to_linear
+);
+tf_neon!(
+    hlg_from_linear_row_neon,
+    linear_srgb::tf::rites_x4::linear_to_hlg_neon,
+    linear_srgb::tf::linear_to_hlg
+);
 
 #[archmage::arcane]
 pub(crate) fn srgb_u8_to_linear_f32_neon(

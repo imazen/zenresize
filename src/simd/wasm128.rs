@@ -188,10 +188,12 @@ pub(crate) fn filter_v_all_f16_wasm128(
     super::wide_kernels::filter_v_all_f16(intermediate, output, h_row_len, in_h, out_h, weights)
 }
 
-// Transfer function batch processors — SIMD via magetypes f32x4 (WASM128).
+// Transfer function batch processors — wrap linear-srgb rites via closures.
+
+use magetypes::simd::generic::f32x4;
 
 macro_rules! tf_wasm {
-    ($name_wasm:ident, $name_portable:ident) => {
+    ($name_wasm:ident, $rite_fn:path, $scalar_fn:path) => {
         #[archmage::arcane]
         pub(crate) fn $name_wasm(
             _token: Wasm128Token,
@@ -199,19 +201,58 @@ macro_rules! tf_wasm {
             channels: usize,
             has_alpha: bool,
         ) {
-            super::tf_portable::$name_portable(_token, row, channels, has_alpha);
+            super::tf_portable::tf_row_inplace(
+                _token,
+                row,
+                channels,
+                has_alpha,
+                |t, v: f32x4<Wasm128Token>| f32x4::from_array(t, $rite_fn(t, v.to_array())),
+                $scalar_fn,
+            );
         }
     };
 }
 
-tf_wasm!(srgb_to_linear_row_wasm128, srgb_to_linear_row);
-tf_wasm!(srgb_from_linear_row_wasm128, srgb_from_linear_row);
-tf_wasm!(bt709_to_linear_row_wasm128, bt709_to_linear_row);
-tf_wasm!(bt709_from_linear_row_wasm128, bt709_from_linear_row);
-tf_wasm!(pq_to_linear_row_wasm128, pq_to_linear_row);
-tf_wasm!(pq_from_linear_row_wasm128, pq_from_linear_row);
-tf_wasm!(hlg_to_linear_row_wasm128, hlg_to_linear_row);
-tf_wasm!(hlg_from_linear_row_wasm128, hlg_from_linear_row);
+tf_wasm!(
+    srgb_to_linear_row_wasm128,
+    linear_srgb::tf::rites_x4::srgb_to_linear_wasm128,
+    linear_srgb::tf::srgb_to_linear
+);
+tf_wasm!(
+    srgb_from_linear_row_wasm128,
+    linear_srgb::tf::rites_x4::linear_to_srgb_wasm128,
+    linear_srgb::tf::linear_to_srgb
+);
+tf_wasm!(
+    bt709_to_linear_row_wasm128,
+    linear_srgb::tf::rites_x4::bt709_to_linear_wasm128,
+    linear_srgb::tf::bt709_to_linear
+);
+tf_wasm!(
+    bt709_from_linear_row_wasm128,
+    linear_srgb::tf::rites_x4::linear_to_bt709_wasm128,
+    linear_srgb::tf::linear_to_bt709
+);
+tf_wasm!(
+    pq_to_linear_row_wasm128,
+    linear_srgb::tf::rites_x4::pq_to_linear_wasm128,
+    linear_srgb::tf::pq_to_linear
+);
+tf_wasm!(
+    pq_from_linear_row_wasm128,
+    linear_srgb::tf::rites_x4::linear_to_pq_wasm128,
+    linear_srgb::tf::linear_to_pq
+);
+tf_wasm!(
+    hlg_to_linear_row_wasm128,
+    linear_srgb::tf::rites_x4::hlg_to_linear_wasm128,
+    linear_srgb::tf::hlg_to_linear
+);
+tf_wasm!(
+    hlg_from_linear_row_wasm128,
+    linear_srgb::tf::rites_x4::linear_to_hlg_wasm128,
+    linear_srgb::tf::linear_to_hlg
+);
 
 #[archmage::arcane]
 pub(crate) fn srgb_u8_to_linear_f32_wasm128(

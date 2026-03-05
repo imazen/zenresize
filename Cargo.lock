@@ -660,8 +660,6 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 [[package]]
 name = "linear-srgb"
 version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7687eee4c424bdb5f360d5d975a52baa0f56c1ce15e3c5cbef4af7d39e148092"
 dependencies = [
  "archmage",
  "bytemuck",
