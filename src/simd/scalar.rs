@@ -530,12 +530,7 @@ pub(crate) fn linear_f32_to_srgb_u8_scalar(
 // Transfer function batch processors (scalar fallback)
 // ============================================================================
 
-fn tf_row_inplace_scalar(
-    row: &mut [f32],
-    channels: usize,
-    has_alpha: bool,
-    tf: fn(f32) -> f32,
-) {
+fn tf_row_inplace_scalar(row: &mut [f32], channels: usize, has_alpha: bool, tf: fn(f32) -> f32) {
     if has_alpha && channels >= 2 {
         for pixel in row.chunks_exact_mut(channels) {
             for v in &mut pixel[..channels - 1] {

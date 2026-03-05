@@ -22,11 +22,7 @@
 ///
 /// Coefficients are stored lowest-degree-first: `p[0] + p[1]*x + p[2]*x^2 + ...`
 #[inline(always)]
-pub fn eval_rational_poly<const P: usize, const Q: usize>(
-    x: f32,
-    p: [f32; P],
-    q: [f32; Q],
-) -> f32 {
+pub fn eval_rational_poly<const P: usize, const Q: usize>(x: f32, p: [f32; P], q: [f32; Q]) -> f32 {
     // Horner's from highest to lowest degree
     let mut yp = p[P - 1];
     for i in (0..P - 1).rev() {
@@ -49,8 +45,16 @@ pub fn eval_rational_poly<const P: usize, const Q: usize>(
 /// Coefficients from libjxl (via jxl crate).
 #[inline(always)]
 pub fn fast_log2f(x: f32) -> f32 {
-    const LOG2_P: [f32; 3] = [-1.8503833400518310e-6, 1.4287160470083755, 7.4245873327820566e-1];
-    const LOG2_Q: [f32; 3] = [9.9032814277590719e-1, 1.0096718572241148, 1.7409343003366853e-1];
+    const LOG2_P: [f32; 3] = [
+        -1.8503833400518310e-6,
+        1.4287160470083755,
+        7.4245873327820566e-1,
+    ];
+    const LOG2_Q: [f32; 3] = [
+        9.9032814277590719e-1,
+        1.0096718572241148,
+        1.7409343003366853e-1,
+    ];
 
     let x_bits = x.to_bits() as i32;
     // Subtract magic constant to extract approximate exponent
@@ -202,7 +206,13 @@ pub fn pq_to_linear(v: f32) -> f32 {
         2.6455317,
         5.500349e-1,
     ];
-    const Q: [f32; 5] = [4.213501e2, -4.2873682e2, 1.7436467e2, -3.3907887e1, 2.6771877];
+    const Q: [f32; 5] = [
+        4.213501e2,
+        -4.2873682e2,
+        1.7436467e2,
+        -3.3907887e1,
+        2.6771877,
+    ];
 
     if v <= 0.0 {
         return 0.0;
@@ -253,13 +263,7 @@ pub fn pq_from_linear(v: f32) -> f32 {
         6.889862e4,
         -2.864824e5,
     ];
-    const Q_SMALL: [f32; 5] = [
-        3.371868e1,
-        1.477719e3,
-        1.608477e4,
-        -4.389884e4,
-        -2.072546e5,
-    ];
+    const Q_SMALL: [f32; 5] = [3.371868e1, 1.477719e3, 1.608477e4, -4.389884e4, -2.072546e5];
 
     if v <= 0.0 {
         return 0.0;
@@ -468,7 +472,10 @@ mod tests {
     fn srgb_to_linear_accuracy() {
         let (err, worst) = max_abs_error(srgb_to_linear, srgb_to_linear_f64, 0.0..=1.0, 100_000);
         eprintln!("sRGB to_linear max error: {err:.2e} at {worst}");
-        assert!(err < 5e-6, "sRGB to_linear error {err:.2e} too high at {worst}");
+        assert!(
+            err < 5e-6,
+            "sRGB to_linear error {err:.2e} too high at {worst}"
+        );
     }
 
     #[test]
@@ -476,21 +483,30 @@ mod tests {
         let (err, worst) =
             max_abs_error(srgb_from_linear, srgb_from_linear_f64, 0.0..=1.0, 100_000);
         eprintln!("sRGB from_linear max error: {err:.2e} at {worst}");
-        assert!(err < 5e-6, "sRGB from_linear error {err:.2e} too high at {worst}");
+        assert!(
+            err < 5e-6,
+            "sRGB from_linear error {err:.2e} too high at {worst}"
+        );
     }
 
     #[test]
     fn pq_to_linear_accuracy() {
         let (err, worst) = max_abs_error(pq_to_linear, pq_to_linear_f64, 0.0..=1.0, 100_000);
         eprintln!("PQ to_linear max error: {err:.2e} at {worst}");
-        assert!(err < 5e-5, "PQ to_linear error {err:.2e} too high at {worst}");
+        assert!(
+            err < 5e-5,
+            "PQ to_linear error {err:.2e} too high at {worst}"
+        );
     }
 
     #[test]
     fn pq_from_linear_accuracy() {
         let (err, worst) = max_abs_error(pq_from_linear, pq_from_linear_f64, 0.0..=1.0, 100_000);
         eprintln!("PQ from_linear max error: {err:.2e} at {worst}");
-        assert!(err < 5e-5, "PQ from_linear error {err:.2e} too high at {worst}");
+        assert!(
+            err < 5e-5,
+            "PQ from_linear error {err:.2e} too high at {worst}"
+        );
     }
 
     #[test]
@@ -518,7 +534,10 @@ mod tests {
     fn hlg_to_linear_accuracy() {
         let (err, worst) = max_abs_error(hlg_to_linear, hlg_to_linear_f64, 0.0..=1.0, 100_000);
         eprintln!("HLG to_linear max error: {err:.2e} at {worst}");
-        assert!(err < 5e-4, "HLG to_linear error {err:.2e} too high at {worst}");
+        assert!(
+            err < 5e-4,
+            "HLG to_linear error {err:.2e} too high at {worst}"
+        );
     }
 
     #[test]

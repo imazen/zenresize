@@ -1919,12 +1919,7 @@ pub(crate) fn filter_v_all_f16_v3(
 /// Horner's method: P(x) = p[4]*x^4 + p[3]*x^3 + ... + p[0]
 ///                        = ((((p[4]*x + p[3])*x + p[2])*x + p[1])*x + p[0]
 #[archmage::rite]
-fn eval_rational_poly_x8(
-    _token: X64V3Token,
-    x: __m256,
-    p: [f32; 5],
-    q: [f32; 5],
-) -> __m256 {
+fn eval_rational_poly_x8(_token: X64V3Token, x: __m256, p: [f32; 5], q: [f32; 5]) -> __m256 {
     let mut yp = _mm256_set1_ps(p[4]);
     yp = _mm256_fmadd_ps(yp, x, _mm256_set1_ps(p[3]));
     yp = _mm256_fmadd_ps(yp, x, _mm256_set1_ps(p[2]));
@@ -1943,8 +1938,16 @@ fn eval_rational_poly_x8(
 /// fast_log2f on 8 f32 values using AVX2 integer arithmetic.
 #[archmage::rite]
 fn fast_log2f_x8(_token: X64V3Token, x: __m256) -> __m256 {
-    const LOG2_P: [f32; 3] = [-1.8503833400518310e-6, 1.4287160470083755, 7.4245873327820566e-1];
-    const LOG2_Q: [f32; 3] = [9.9032814277590719e-1, 1.0096718572241148, 1.7409343003366853e-1];
+    const LOG2_P: [f32; 3] = [
+        -1.8503833400518310e-6,
+        1.4287160470083755,
+        7.4245873327820566e-1,
+    ];
+    const LOG2_Q: [f32; 3] = [
+        9.9032814277590719e-1,
+        1.0096718572241148,
+        1.7409343003366853e-1,
+    ];
 
     let x_bits = _mm256_castps_si256(x);
     let magic = _mm256_set1_epi32(0x3f2aaaab_u32 as i32);
@@ -2013,16 +2016,32 @@ fn fast_powf_x8(_token: X64V3Token, base: __m256, exponent: f32) -> __m256 {
 // --- sRGB SIMD kernels ---
 
 const SRGB_TO_LINEAR_P: [f32; 5] = [
-    2.200248328e-4, 1.043637593e-2, 1.624820318e-1, 7.961564959e-1, 8.210152774e-1,
+    2.200248328e-4,
+    1.043637593e-2,
+    1.624820318e-1,
+    7.961564959e-1,
+    8.210152774e-1,
 ];
 const SRGB_TO_LINEAR_Q: [f32; 5] = [
-    2.631846970e-1, 1.076976492, 4.987528350e-1, -5.512498495e-2, 6.521209011e-3,
+    2.631846970e-1,
+    1.076976492,
+    4.987528350e-1,
+    -5.512498495e-2,
+    6.521209011e-3,
 ];
 const SRGB_FROM_LINEAR_P: [f32; 5] = [
-    -5.135152395e-4, 5.287254571e-3, 3.903842876e-1, 1.474205315, 7.352629620e-1,
+    -5.135152395e-4,
+    5.287254571e-3,
+    3.903842876e-1,
+    1.474205315,
+    7.352629620e-1,
 ];
 const SRGB_FROM_LINEAR_Q: [f32; 5] = [
-    1.004519624e-2, 3.036675394e-1, 1.340816930, 9.258482155e-1, 2.424867759e-2,
+    1.004519624e-2,
+    3.036675394e-1,
+    1.340816930,
+    9.258482155e-1,
+    2.424867759e-2,
 ];
 
 /// Apply sRGB EOTF (encoded→linear) to 8 f32 values.
@@ -2056,14 +2075,30 @@ fn srgb_from_linear_x8(_token: X64V3Token, v: __m256) -> __m256 {
 // --- PQ SIMD kernels ---
 
 const PQ_EOTF_P: [f32; 5] = [
-    2.6297566e-4, -6.235531e-3, 7.386023e-1, 2.6455317, 5.500349e-1,
+    2.6297566e-4,
+    -6.235531e-3,
+    7.386023e-1,
+    2.6455317,
+    5.500349e-1,
 ];
-const PQ_EOTF_Q: [f32; 5] = [4.213501e2, -4.2873682e2, 1.7436467e2, -3.3907887e1, 2.6771877];
+const PQ_EOTF_Q: [f32; 5] = [
+    4.213501e2,
+    -4.2873682e2,
+    1.7436467e2,
+    -3.3907887e1,
+    2.6771877,
+];
 
 const PQ_INV_P_LARGE: [f32; 5] = [1.351392e-2, -1.095778, 5.522776e1, 1.492516e2, 4.838434e1];
 const PQ_INV_Q_LARGE: [f32; 5] = [1.012416, 2.016708e1, 9.26371e1, 1.120607e2, 2.590418e1];
 
-const PQ_INV_P_SMALL: [f32; 5] = [9.863406e-6, 3.881234e-1, 1.352821e2, 6.889862e4, -2.864824e5];
+const PQ_INV_P_SMALL: [f32; 5] = [
+    9.863406e-6,
+    3.881234e-1,
+    1.352821e2,
+    6.889862e4,
+    -2.864824e5,
+];
 const PQ_INV_Q_SMALL: [f32; 5] = [3.371868e1, 1.477719e3, 1.608477e4, -4.389884e4, -2.072546e5];
 
 /// PQ EOTF (signal→linear) on 8 f32 values. Zero powf calls.
@@ -2220,7 +2255,14 @@ pub(crate) fn srgb_to_linear_row_v3(
     channels: usize,
     has_alpha: bool,
 ) {
-    tf_row_inplace(_token, row, channels, has_alpha, srgb_to_linear_x8, fastmath::srgb_to_linear);
+    tf_row_inplace(
+        _token,
+        row,
+        channels,
+        has_alpha,
+        srgb_to_linear_x8,
+        fastmath::srgb_to_linear,
+    );
 }
 
 #[archmage::arcane]
@@ -2230,7 +2272,14 @@ pub(crate) fn srgb_from_linear_row_v3(
     channels: usize,
     has_alpha: bool,
 ) {
-    tf_row_inplace(_token, row, channels, has_alpha, srgb_from_linear_x8, fastmath::srgb_from_linear);
+    tf_row_inplace(
+        _token,
+        row,
+        channels,
+        has_alpha,
+        srgb_from_linear_x8,
+        fastmath::srgb_from_linear,
+    );
 }
 
 #[archmage::arcane]
@@ -2240,7 +2289,14 @@ pub(crate) fn bt709_to_linear_row_v3(
     channels: usize,
     has_alpha: bool,
 ) {
-    tf_row_inplace(_token, row, channels, has_alpha, bt709_to_linear_x8, fastmath::bt709_to_linear);
+    tf_row_inplace(
+        _token,
+        row,
+        channels,
+        has_alpha,
+        bt709_to_linear_x8,
+        fastmath::bt709_to_linear,
+    );
 }
 
 #[archmage::arcane]
@@ -2250,7 +2306,14 @@ pub(crate) fn bt709_from_linear_row_v3(
     channels: usize,
     has_alpha: bool,
 ) {
-    tf_row_inplace(_token, row, channels, has_alpha, bt709_from_linear_x8, fastmath::bt709_from_linear);
+    tf_row_inplace(
+        _token,
+        row,
+        channels,
+        has_alpha,
+        bt709_from_linear_x8,
+        fastmath::bt709_from_linear,
+    );
 }
 
 #[archmage::arcane]
@@ -2260,7 +2323,14 @@ pub(crate) fn pq_to_linear_row_v3(
     channels: usize,
     has_alpha: bool,
 ) {
-    tf_row_inplace(_token, row, channels, has_alpha, pq_to_linear_x8, fastmath::pq_to_linear);
+    tf_row_inplace(
+        _token,
+        row,
+        channels,
+        has_alpha,
+        pq_to_linear_x8,
+        fastmath::pq_to_linear,
+    );
 }
 
 #[archmage::arcane]
@@ -2270,7 +2340,14 @@ pub(crate) fn pq_from_linear_row_v3(
     channels: usize,
     has_alpha: bool,
 ) {
-    tf_row_inplace(_token, row, channels, has_alpha, pq_from_linear_x8, fastmath::pq_from_linear);
+    tf_row_inplace(
+        _token,
+        row,
+        channels,
+        has_alpha,
+        pq_from_linear_x8,
+        fastmath::pq_from_linear,
+    );
 }
 
 #[archmage::arcane]
@@ -2280,7 +2357,14 @@ pub(crate) fn hlg_to_linear_row_v3(
     channels: usize,
     has_alpha: bool,
 ) {
-    tf_row_inplace(_token, row, channels, has_alpha, hlg_to_linear_x8, fastmath::hlg_to_linear);
+    tf_row_inplace(
+        _token,
+        row,
+        channels,
+        has_alpha,
+        hlg_to_linear_x8,
+        fastmath::hlg_to_linear,
+    );
 }
 
 #[archmage::arcane]
@@ -2290,7 +2374,14 @@ pub(crate) fn hlg_from_linear_row_v3(
     channels: usize,
     has_alpha: bool,
 ) {
-    tf_row_inplace(_token, row, channels, has_alpha, hlg_from_linear_x8, fastmath::hlg_from_linear);
+    tf_row_inplace(
+        _token,
+        row,
+        channels,
+        has_alpha,
+        hlg_from_linear_x8,
+        fastmath::hlg_from_linear,
+    );
 }
 
 /// Common implementation for applying a SIMD transfer function to a row.

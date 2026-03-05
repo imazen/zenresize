@@ -16,12 +16,7 @@ use magetypes::simd::generic::{f32x4, i32x4};
 
 /// Evaluate degree-4 rational polynomial P(x)/Q(x) on 4 f32 values via FMA.
 #[inline(always)]
-fn eval_rational_poly_x4<T: F32x4Convert>(
-    t: T,
-    x: f32x4<T>,
-    p: [f32; 5],
-    q: [f32; 5],
-) -> f32x4<T> {
+fn eval_rational_poly_x4<T: F32x4Convert>(t: T, x: f32x4<T>, p: [f32; 5], q: [f32; 5]) -> f32x4<T> {
     let mut yp = f32x4::splat(t, p[4]);
     yp = yp.mul_add(x, f32x4::splat(t, p[3]));
     yp = yp.mul_add(x, f32x4::splat(t, p[2]));
@@ -40,8 +35,16 @@ fn eval_rational_poly_x4<T: F32x4Convert>(
 /// fast_log2f on 4 f32 values — bit manipulation + rational polynomial.
 #[inline(always)]
 fn fast_log2f_x4<T: F32x4Convert>(t: T, x: f32x4<T>) -> f32x4<T> {
-    const LOG2_P: [f32; 3] = [-1.8503833400518310e-6, 1.4287160470083755, 7.4245873327820566e-1];
-    const LOG2_Q: [f32; 3] = [9.9032814277590719e-1, 1.0096718572241148, 1.7409343003366853e-1];
+    const LOG2_P: [f32; 3] = [
+        -1.8503833400518310e-6,
+        1.4287160470083755,
+        7.4245873327820566e-1,
+    ];
+    const LOG2_Q: [f32; 3] = [
+        9.9032814277590719e-1,
+        1.0096718572241148,
+        1.7409343003366853e-1,
+    ];
 
     let x_bits = x.bitcast_to_i32();
     let magic = i32x4::splat(t, 0x3f2aaaab_u32 as i32);
@@ -112,16 +115,32 @@ fn fast_powf_x4<T: F32x4Convert>(t: T, base: f32x4<T>, exponent: f32) -> f32x4<T
 // =============================================================================
 
 const SRGB_TO_LINEAR_P: [f32; 5] = [
-    2.200248328e-4, 1.043637593e-2, 1.624820318e-1, 7.961564959e-1, 8.210152774e-1,
+    2.200248328e-4,
+    1.043637593e-2,
+    1.624820318e-1,
+    7.961564959e-1,
+    8.210152774e-1,
 ];
 const SRGB_TO_LINEAR_Q: [f32; 5] = [
-    2.631846970e-1, 1.076976492, 4.987528350e-1, -5.512498495e-2, 6.521209011e-3,
+    2.631846970e-1,
+    1.076976492,
+    4.987528350e-1,
+    -5.512498495e-2,
+    6.521209011e-3,
 ];
 const SRGB_FROM_LINEAR_P: [f32; 5] = [
-    -5.135152395e-4, 5.287254571e-3, 3.903842876e-1, 1.474205315, 7.352629620e-1,
+    -5.135152395e-4,
+    5.287254571e-3,
+    3.903842876e-1,
+    1.474205315,
+    7.352629620e-1,
 ];
 const SRGB_FROM_LINEAR_Q: [f32; 5] = [
-    1.004519624e-2, 3.036675394e-1, 1.340816930, 9.258482155e-1, 2.424867759e-2,
+    1.004519624e-2,
+    3.036675394e-1,
+    1.340816930,
+    9.258482155e-1,
+    2.424867759e-2,
 ];
 
 #[inline(always)]
@@ -155,14 +174,30 @@ fn srgb_from_linear_x4<T: F32x4Convert>(t: T, v: f32x4<T>) -> f32x4<T> {
 // =============================================================================
 
 const PQ_EOTF_P: [f32; 5] = [
-    2.6297566e-4, -6.235531e-3, 7.386023e-1, 2.6455317, 5.500349e-1,
+    2.6297566e-4,
+    -6.235531e-3,
+    7.386023e-1,
+    2.6455317,
+    5.500349e-1,
 ];
-const PQ_EOTF_Q: [f32; 5] = [4.213501e2, -4.2873682e2, 1.7436467e2, -3.3907887e1, 2.6771877];
+const PQ_EOTF_Q: [f32; 5] = [
+    4.213501e2,
+    -4.2873682e2,
+    1.7436467e2,
+    -3.3907887e1,
+    2.6771877,
+];
 
 const PQ_INV_P_LARGE: [f32; 5] = [1.351392e-2, -1.095778, 5.522776e1, 1.492516e2, 4.838434e1];
 const PQ_INV_Q_LARGE: [f32; 5] = [1.012416, 2.016708e1, 9.26371e1, 1.120607e2, 2.590418e1];
 
-const PQ_INV_P_SMALL: [f32; 5] = [9.863406e-6, 3.881234e-1, 1.352821e2, 6.889862e4, -2.864824e5];
+const PQ_INV_P_SMALL: [f32; 5] = [
+    9.863406e-6,
+    3.881234e-1,
+    1.352821e2,
+    6.889862e4,
+    -2.864824e5,
+];
 const PQ_INV_Q_SMALL: [f32; 5] = [3.371868e1, 1.477719e3, 1.608477e4, -4.389884e4, -2.072546e5];
 
 #[inline(always)]
@@ -355,56 +390,136 @@ pub(super) fn tf_row_inplace<T: F32x4Convert>(
 
 #[inline(always)]
 pub(super) fn srgb_to_linear_row<T: F32x4Convert>(
-    t: T, row: &mut [f32], channels: usize, has_alpha: bool,
+    t: T,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
 ) {
-    tf_row_inplace(t, row, channels, has_alpha, srgb_to_linear_x4, fastmath::srgb_to_linear);
+    tf_row_inplace(
+        t,
+        row,
+        channels,
+        has_alpha,
+        srgb_to_linear_x4,
+        fastmath::srgb_to_linear,
+    );
 }
 
 #[inline(always)]
 pub(super) fn srgb_from_linear_row<T: F32x4Convert>(
-    t: T, row: &mut [f32], channels: usize, has_alpha: bool,
+    t: T,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
 ) {
-    tf_row_inplace(t, row, channels, has_alpha, srgb_from_linear_x4, fastmath::srgb_from_linear);
+    tf_row_inplace(
+        t,
+        row,
+        channels,
+        has_alpha,
+        srgb_from_linear_x4,
+        fastmath::srgb_from_linear,
+    );
 }
 
 #[inline(always)]
 pub(super) fn bt709_to_linear_row<T: F32x4Convert>(
-    t: T, row: &mut [f32], channels: usize, has_alpha: bool,
+    t: T,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
 ) {
-    tf_row_inplace(t, row, channels, has_alpha, bt709_to_linear_x4, fastmath::bt709_to_linear);
+    tf_row_inplace(
+        t,
+        row,
+        channels,
+        has_alpha,
+        bt709_to_linear_x4,
+        fastmath::bt709_to_linear,
+    );
 }
 
 #[inline(always)]
 pub(super) fn bt709_from_linear_row<T: F32x4Convert>(
-    t: T, row: &mut [f32], channels: usize, has_alpha: bool,
+    t: T,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
 ) {
-    tf_row_inplace(t, row, channels, has_alpha, bt709_from_linear_x4, fastmath::bt709_from_linear);
+    tf_row_inplace(
+        t,
+        row,
+        channels,
+        has_alpha,
+        bt709_from_linear_x4,
+        fastmath::bt709_from_linear,
+    );
 }
 
 #[inline(always)]
 pub(super) fn pq_to_linear_row<T: F32x4Convert>(
-    t: T, row: &mut [f32], channels: usize, has_alpha: bool,
+    t: T,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
 ) {
-    tf_row_inplace(t, row, channels, has_alpha, pq_to_linear_x4, fastmath::pq_to_linear);
+    tf_row_inplace(
+        t,
+        row,
+        channels,
+        has_alpha,
+        pq_to_linear_x4,
+        fastmath::pq_to_linear,
+    );
 }
 
 #[inline(always)]
 pub(super) fn pq_from_linear_row<T: F32x4Convert>(
-    t: T, row: &mut [f32], channels: usize, has_alpha: bool,
+    t: T,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
 ) {
-    tf_row_inplace(t, row, channels, has_alpha, pq_from_linear_x4, fastmath::pq_from_linear);
+    tf_row_inplace(
+        t,
+        row,
+        channels,
+        has_alpha,
+        pq_from_linear_x4,
+        fastmath::pq_from_linear,
+    );
 }
 
 #[inline(always)]
 pub(super) fn hlg_to_linear_row<T: F32x4Convert>(
-    t: T, row: &mut [f32], channels: usize, has_alpha: bool,
+    t: T,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
 ) {
-    tf_row_inplace(t, row, channels, has_alpha, hlg_to_linear_x4, fastmath::hlg_to_linear);
+    tf_row_inplace(
+        t,
+        row,
+        channels,
+        has_alpha,
+        hlg_to_linear_x4,
+        fastmath::hlg_to_linear,
+    );
 }
 
 #[inline(always)]
 pub(super) fn hlg_from_linear_row<T: F32x4Convert>(
-    t: T, row: &mut [f32], channels: usize, has_alpha: bool,
+    t: T,
+    row: &mut [f32],
+    channels: usize,
+    has_alpha: bool,
 ) {
-    tf_row_inplace(t, row, channels, has_alpha, hlg_from_linear_x4, fastmath::hlg_from_linear);
+    tf_row_inplace(
+        t,
+        row,
+        channels,
+        has_alpha,
+        hlg_from_linear_x4,
+        fastmath::hlg_from_linear,
+    );
 }
