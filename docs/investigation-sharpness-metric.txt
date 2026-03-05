@@ -1,0 +1,20 @@
+52136acdc82417d467f79658c04344021fe1bf7a
+2026-02-22 11:49:19 -0700
+
+investigate: sharpness metric for resize filter calibration
+
+Add examples/sharpness_metric.rs — analytical and empirical tool for
+measuring filter frequency response (MTF) across scale ratios and blur
+factors.
+
+Key findings:
+- Filter MTF relative to output Nyquist is scale-independent for downscaling
+- Same blur factor produces same frequency response at 1/2x through 1/16x
+- No per-scale calibration needed for sharpen parameter
+- Useful metrics: MTF50 (freq where MTF=0.5), MTF@0.40 (near-Nyquist)
+- Sharp variants use blur 0.95-0.98 (2-5% reduction)
+- Proposed mapping: blur = base_blur * 0.98^sharpen
+
+Temporarily makes filter/weights modules pub for the example to access
+weight tables directly. Production implementation would use pub re-exports.
+
