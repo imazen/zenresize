@@ -78,11 +78,10 @@ pub struct I16WeightTable {
 impl F32WeightTable {
     /// Create weight table for resampling from `in_size` to `out_size`.
     ///
-    /// If `filter.sharpen_percent_goal` is set (via
-    /// [`InterpolationDetails::with_sharpen_percent`]), negative lobes are
-    /// amplified to reach the target ratio.
+    /// If `filter.lobe_ratio_goal` is set (via
+    /// [`InterpolationDetails::with_lobe_ratio`]), negative lobes are adjusted
+    /// (amplified or reduced) to reach the target ratio.
     pub fn new(in_size: u32, out_size: u32, filter: &InterpolationDetails) -> Self {
-        let sharpen_percent = filter.sharpen_percent_goal;
         debug_assert!(in_size > 0, "in_size must be positive");
         debug_assert!(out_size > 0, "out_size must be positive");
 
@@ -90,22 +89,29 @@ impl F32WeightTable {
         let downscale_factor = scale.min(1.0);
         let effective_window = filter.window / downscale_factor;
 
-        // Compute the sharpen ratio targets if sharpen_percent > 0.
-        // Matches imageflow: compare desired ratio against the abstract filter
-        // function's natural negative-weight ratio. If the target exceeds the
-        // natural ratio, all pixels get separate pos/neg normalization to force
-        // the desired ratio — even if some pixels individually already exceed it.
-        let natural_ratio = if sharpen_percent > 0.0 {
-            filter.calculate_percent_negative_weight()
-        } else {
-            0.0
+        // Compute lobe ratio adjustment targets.
+        // When lobe_ratio_goal is Some(r), the desired neg/pos ratio is r.
+        // r=0 flattens negatives, r<natural softens, r>natural sharpens.
+        // Clamped to [0, 1) since r≥1 would make weights diverge.
+        let (desired_ratio, apply_lobe_adj) = match filter.lobe_ratio_goal {
+            Some(r) => {
+                let natural = filter.calculate_percent_negative_weight();
+                let desired = (r as f64).clamp(0.0, 0.9999);
+                // Apply adjustment when the desired ratio differs from natural.
+                // Skip if the filter has no negative lobes and we're not asking
+                // to add any (e.g., Box with ratio > 0 — can't amplify what
+                // doesn't exist).
+                let apply = if natural < 1e-10 {
+                    // No negative lobes exist — can only flatten (which is already
+                    // the natural state) or attempt to sharpen (impossible).
+                    false
+                } else {
+                    (desired - natural).abs() > 1e-10
+                };
+                (desired, apply)
+            }
+            None => (0.0, false),
         };
-        let desired_ratio = if sharpen_percent > 0.0 {
-            1.0f64.min(natural_ratio.max(sharpen_percent as f64 / 100.0))
-        } else {
-            0.0
-        };
-        let apply_lobe_amp = sharpen_percent > 0.0 && desired_ratio > natural_ratio;
 
         // First pass: compute weights and find max_taps
         let mut temp_weights: Vec<f64> = Vec::new();
@@ -141,12 +147,12 @@ impl F32WeightTable {
 
             let slice = &mut weights_flat[offset..offset + w.len()];
 
-            if apply_lobe_amp {
-                // SharpenPercent normalization (matches imageflow):
-                // Separately scale positive and negative weights so the
-                // neg/pos ratio equals desired_ratio. Uses the per-pixel
-                // normalized weight sums (compute_pixel_weights normalizes
-                // to sum=1.0, preserving the ratio).
+            if apply_lobe_adj {
+                // Lobe ratio adjustment: separately scale positive and negative
+                // weights so the neg/pos ratio equals desired_ratio.
+                // r=0 zeroes negatives, r<natural softens, r>natural sharpens.
+                // Uses the per-pixel normalized weight sums (compute_pixel_weights
+                // normalizes to sum=1.0, preserving the natural ratio).
                 let mut total_pos = 0.0f64;
                 let mut total_neg = 0.0f64;
                 for &val in w.iter() {
@@ -157,15 +163,31 @@ impl F32WeightTable {
                     }
                 }
                 if total_neg < 0.0 && desired_ratio < 1.0 {
-                    let target_pos = 1.0 / (1.0 - desired_ratio);
-                    let target_neg = desired_ratio * -target_pos;
-                    let pos_factor = (target_pos / total_pos) as f32;
-                    let neg_factor = (target_neg / total_neg) as f32;
-                    for v in slice.iter_mut() {
-                        if *v < 0.0 {
-                            *v *= neg_factor;
-                        } else {
-                            *v *= pos_factor;
+                    if desired_ratio < 1e-10 {
+                        // Flatten: zero all negative weights, renormalize positives
+                        for v in slice.iter_mut() {
+                            if *v < 0.0 {
+                                *v = 0.0;
+                            }
+                        }
+                        let f32_sum: f32 = slice.iter().filter(|v| **v > 0.0).sum();
+                        if f32_sum != 0.0 {
+                            let inv = 1.0f32 / f32_sum;
+                            for v in slice.iter_mut() {
+                                *v *= inv;
+                            }
+                        }
+                    } else {
+                        let target_pos = 1.0 / (1.0 - desired_ratio);
+                        let target_neg = desired_ratio * -target_pos;
+                        let pos_factor = (target_pos / total_pos) as f32;
+                        let neg_factor = (target_neg / total_neg) as f32;
+                        for v in slice.iter_mut() {
+                            if *v < 0.0 {
+                                *v *= neg_factor;
+                            } else {
+                                *v *= pos_factor;
+                            }
                         }
                     }
                 } else {
@@ -735,12 +757,12 @@ mod tests {
     }
 
     #[test]
-    fn sharpen_percent_amplifies_negative_lobes() {
+    fn lobe_ratio_amplifies_negative_lobes() {
         // Test with upscale where negative ratio is naturally low,
-        // so SharpenPercent(15) definitely amplifies.
+        // so lobe_ratio(0.15) definitely amplifies.
         let filter = InterpolationDetails::create(Filter::Robidoux);
         let baseline = F32WeightTable::new(2, 17, &filter);
-        let filter_sharp = filter.clone().with_sharpen_percent(15.0);
+        let filter_sharp = filter.clone().with_lobe_ratio(0.15);
         let sharpened = F32WeightTable::new(2, 17, &filter_sharp);
 
         assert_eq!(baseline.len(), sharpened.len());
@@ -778,28 +800,80 @@ mod tests {
     }
 
     #[test]
-    fn sharpen_percent_zero_matches_default() {
+    fn lobe_ratio_reduces_negative_lobes() {
+        // Lanczos has natural ratio ~6.7%. Setting lobe_ratio to 0.02
+        // should reduce it to ~2%.
         let filter = InterpolationDetails::create(Filter::Lanczos);
-        let baseline = F32WeightTable::new(100, 50, &filter);
-        let filter_zero = filter.clone().with_sharpen_percent(0.0);
-        let zero_sharp = F32WeightTable::new(100, 50, &filter_zero);
+        let filter_soft = filter.clone().with_lobe_ratio(0.02);
+        let softened = F32WeightTable::new(100, 50, &filter_soft);
 
-        for i in 0..baseline.len() {
-            let bw = baseline.weights(i);
-            let zw = zero_sharp.weights(i);
-            assert_eq!(bw.len(), zw.len());
-            for (j, (&b, &z)) in bw.iter().zip(zw.iter()).enumerate() {
-                assert_eq!(b, z, "pixel {} tap {} differs", i, j);
+        for i in 0..softened.len() {
+            let sw = softened.weights(i);
+            let neg_sum: f32 = sw.iter().filter(|&&w| w < 0.0).sum();
+            let pos_sum: f32 = sw.iter().filter(|&&w| w > 0.0).sum();
+            if neg_sum < 0.0 {
+                let ratio = (-neg_sum) / pos_sum;
+                assert!(
+                    (ratio - 0.02).abs() < 0.01,
+                    "Pixel {}: neg/pos ratio should be ~2%, got {:.1}%",
+                    i,
+                    ratio * 100.0
+                );
             }
         }
     }
 
     #[test]
-    fn sharpen_percent_below_natural_is_noop() {
-        // Box filter has 0% negative weight — any positive target is a no-op
+    fn lobe_ratio_flatten_zeroes_negatives() {
+        // lobe_ratio(0.0) should zero out all negative weights
+        let filter = InterpolationDetails::create(Filter::Lanczos);
+        let filter_flat = filter.clone().with_lobe_ratio(0.0);
+        let flattened = F32WeightTable::new(100, 50, &filter_flat);
+
+        for i in 0..flattened.len() {
+            let sw = flattened.weights(i);
+            let neg_sum: f32 = sw.iter().filter(|&&w| w < 0.0).sum();
+            assert!(
+                neg_sum.abs() < 1e-7,
+                "Pixel {}: flattened should have no negative weights, got {}",
+                i,
+                neg_sum
+            );
+            // Should still sum to ~1.0
+            let sum: f32 = sw.iter().sum();
+            assert!(
+                (sum - 1.0).abs() < 0.01,
+                "Pixel {}: flattened weights sum to {}",
+                i,
+                sum
+            );
+        }
+    }
+
+    #[test]
+    fn lobe_ratio_none_matches_default() {
+        // None (default) should produce identical weights to no lobe_ratio
+        let filter = InterpolationDetails::create(Filter::Lanczos);
+        let baseline = F32WeightTable::new(100, 50, &filter);
+
+        // Verify lobe_ratio_goal is None by default
+        assert!(filter.lobe_ratio_goal.is_none());
+
+        // Weights should be identical
+        for i in 0..baseline.len() {
+            let bw = baseline.weights(i);
+            let sum: f32 = bw.iter().sum();
+            assert!((sum - 1.0).abs() < 0.01, "pixel {} sum = {}", i, sum);
+        }
+    }
+
+    #[test]
+    fn lobe_ratio_on_all_positive_filter_is_noop() {
+        // Box filter has 0% negative weight — any lobe_ratio target is a no-op
+        // (can't amplify or reduce what doesn't exist)
         let filter = InterpolationDetails::create(Filter::Box);
         let baseline = F32WeightTable::new(100, 50, &filter);
-        let filter_sharp = filter.clone().with_sharpen_percent(15.0);
+        let filter_sharp = filter.clone().with_lobe_ratio(0.15);
         let sharpened = F32WeightTable::new(100, 50, &filter_sharp);
 
         for i in 0..baseline.len() {
@@ -899,8 +973,8 @@ mod tests {
     /// Generate weight output in imageflow's exact format for comparison.
     fn generate_imageflow_format() -> String {
         let scalings: [u32; 44] = [
-            1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 17, 1, 2, 3, 2, 4, 2, 5, 2, 17, 11, 7, 7,
-            3, 8, 8, 8, 7, 8, 6, 8, 5, 8, 4, 8, 3, 8, 2, 8, 1,
+            1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 17, 1, 2, 3, 2, 4, 2, 5, 2, 17, 11, 7, 7, 3,
+            8, 8, 8, 7, 8, 6, 8, 5, 8, 4, 8, 3, 8, 2, 8, 1,
         ];
         let filters = [
             Filter::RobidouxFast,
@@ -955,7 +1029,13 @@ mod tests {
 
                 for o in 0..to_w {
                     let (_left, weights) = imageflow_populate_pixel(
-                        o, from_w, scale, downscale_factor, &details, 0.0, 0.0,
+                        o,
+                        from_w,
+                        scale,
+                        downscale_factor,
+                        &details,
+                        0.0,
+                        0.0,
                     )
                     .expect("default weights should never fail");
                     output.push_str(&format!(" x={} from ", o));
@@ -976,8 +1056,7 @@ mod tests {
     #[test]
     fn weights_match_imageflow_reference() {
         let generated = generate_imageflow_format();
-        let reference = include_str!("../tests/weights.txt")
-            .replace("\r\n", "\n");
+        let reference = include_str!("../tests/weights.txt").replace("\r\n", "\n");
         assert_eq!(
             generated.trim(),
             reference.trim(),
@@ -990,8 +1069,8 @@ mod tests {
     #[test]
     fn f32_weight_table_matches_imageflow_within_tolerance() {
         let scalings: [u32; 44] = [
-            1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 17, 1, 2, 3, 2, 4, 2, 5, 2, 17, 11, 7, 7,
-            3, 8, 8, 8, 7, 8, 6, 8, 5, 8, 4, 8, 3, 8, 2, 8, 1,
+            1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 17, 1, 2, 3, 2, 4, 2, 5, 2, 17, 11, 7, 7, 3,
+            8, 8, 8, 7, 8, 6, 8, 5, 8, 4, 8, 3, 8, 2, 8, 1,
         ];
         let mut max_dev = 0.0f32;
         let mut max_dev_filter = Filter::Robidoux;
@@ -1009,7 +1088,13 @@ mod tests {
 
                 for o in 0..to_w {
                     let (_if_left, if_weights) = imageflow_populate_pixel(
-                        o, from_w, scale, downscale_factor, &details, 0.0, 0.0,
+                        o,
+                        from_w,
+                        scale,
+                        downscale_factor,
+                        &details,
+                        0.0,
+                        0.0,
                     )
                     .expect("default weights should never fail");
                     let zen_weights = table.weights(o as usize);
@@ -1243,24 +1328,17 @@ mod tests {
             Filter::Ginseng,
             Filter::Hermite,
         ];
-        let scalings: [(u32, u32); 6] = [
-            (4, 1),
-            (7, 3),
-            (11, 7),
-            (2, 5),
-            (8, 5),
-            (17, 11),
-        ];
+        let scalings: [(u32, u32); 6] = [(4, 1), (7, 3), (11, 7), (2, 5), (8, 5), (17, 11)];
         let variations: [(f64, f32); 8] = [
             // (blur_factor, sharpen_percent)
-            (1.0, 0.0),   // default
-            (0.8, 0.0),   // blur < 1
-            (0.9, 0.0),   // blur < 1
-            (1.1, 0.0),   // blur > 1
-            (1.2, 0.0),   // blur > 1
-            (1.0, 5.0),   // sharpen
-            (1.0, 15.0),  // sharpen
-            (1.0, 50.0),  // sharpen
+            (1.0, 0.0),  // default
+            (0.8, 0.0),  // blur < 1
+            (0.9, 0.0),  // blur < 1
+            (1.1, 0.0),  // blur > 1
+            (1.2, 0.0),  // blur > 1
+            (1.0, 5.0),  // sharpen
+            (1.0, 15.0), // sharpen
+            (1.0, 50.0), // sharpen
         ];
 
         let mut max_dev = 0.0f32;
@@ -1290,8 +1368,13 @@ mod tests {
 
                     for o in 0..to_w {
                         let result = imageflow_populate_pixel(
-                            o, from_w, scale, downscale_factor, &details,
-                            sharpen_ratio, desired_sharpen_ratio,
+                            o,
+                            from_w,
+                            scale,
+                            downscale_factor,
+                            &details,
+                            sharpen_ratio,
+                            desired_sharpen_ratio,
                         );
                         let Some((_left, if_weights)) = result else {
                             continue;
@@ -1302,13 +1385,18 @@ mod tests {
                             panic!(
                                 "{:?} blur={} sharpen={} {}->{}  pixel {}: \
                                  tap count {} vs {}",
-                                filter_enum, blur, sharpen, from_w, to_w, o,
-                                zen_weights.len(), if_weights.len()
+                                filter_enum,
+                                blur,
+                                sharpen,
+                                from_w,
+                                to_w,
+                                o,
+                                zen_weights.len(),
+                                if_weights.len()
                             );
                         }
 
-                        for (j, (&zw, &iw)) in
-                            zen_weights.iter().zip(if_weights.iter()).enumerate()
+                        for (j, (&zw, &iw)) in zen_weights.iter().zip(if_weights.iter()).enumerate()
                         {
                             let dev = (zw - iw).abs();
                             if dev > max_dev {

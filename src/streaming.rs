@@ -274,8 +274,10 @@ impl<B: Background> StreamingResize<B> {
         if let Some(scale) = config.kernel_width_scale {
             filter = filter.with_blur(scale);
         }
-        if let Some(pct) = config.filter_sharpen_percent {
-            filter = filter.with_sharpen_percent(pct);
+        match &config.lobe_ratio {
+            crate::pixel::LobeRatio::Natural => {}
+            crate::pixel::LobeRatio::Exact(r) => filter = filter.with_lobe_ratio(*r),
+            crate::pixel::LobeRatio::SharpenPercent(p) => filter = filter.with_sharpen_percent(*p),
         }
         let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
 

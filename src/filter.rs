@@ -14,7 +14,6 @@
 
 use core::f64::consts::PI;
 
-
 /// Named interpolation filter presets.
 ///
 /// These match imageflow's filter names exactly for compatibility.
@@ -188,12 +187,37 @@ pub struct InterpolationDetails {
     pub q4: f64,
     /// The filter function to use
     filter_fn: FilterFn,
-    /// Sharpening goal (0.0 = none, positive = sharpen).
+    /// Desired negative-lobe ratio (`None` = use filter's natural ratio).
     ///
-    /// Set via [`with_sharpen_percent`](Self::with_sharpen_percent).
+    /// Controls the balance between positive and negative weights:
+    /// - `None` — no adjustment, use the filter's natural negative-lobe ratio
+    /// - `Some(0.0)` — flatten: zero out all negative lobes (maximum smoothness)
+    /// - `Some(r)` where `r < natural` — reduce negative lobes (softer than default)
+    /// - `Some(r)` where `r == natural` — no-op (same as `None`)
+    /// - `Some(r)` where `r > natural` — amplify negative lobes (sharper)
+    ///
+    /// The ratio `r` is `|negative_sum| / positive_sum` after normalization.
+    /// Range: `0.0` to `< 1.0`. Typical values: `0.0`–`0.5`.
+    ///
+    /// Natural ratios for common filters (downscale):
+    ///
+    /// | Filter         | Natural ratio |
+    /// |----------------|---------------|
+    /// | Box            |  0.000        |
+    /// | Triangle       |  0.000        |
+    /// | Hermite        |  0.000        |
+    /// | CubicBSpline   |  0.000        |
+    /// | Mitchell       |  0.013        |
+    /// | Robidoux       |  0.009        |
+    /// | CatmullRom     |  0.065        |
+    /// | Lanczos        |  0.067        |
+    /// | Lanczos2       |  0.043        |
+    /// | RobidouxSharp  |  0.033        |
+    ///
+    /// Set via [`with_lobe_ratio`](Self::with_lobe_ratio).
     /// Read by [`F32WeightTable::new`](crate::weights::F32WeightTable::new)
-    /// to amplify negative lobes during weight computation.
-    pub sharpen_percent_goal: f32,
+    /// to adjust negative lobes during weight computation.
+    pub lobe_ratio_goal: Option<f32>,
 }
 
 /// Filter function type.
@@ -212,7 +236,7 @@ impl Default for InterpolationDetails {
             q3: 1.0,
             q4: 1.0,
             filter_fn: filter_box,
-            sharpen_percent_goal: 0.0,
+            lobe_ratio_goal: None,
         }
     }
 }
@@ -357,7 +381,7 @@ impl InterpolationDetails {
             q2: -8.0 * c - bx2,
             q3: b + 5.0 * c,
             q4: (-1.0 / 6.0) * b - c,
-            sharpen_percent_goal: 0.0,
+            lobe_ratio_goal: None,
         }
     }
 
@@ -367,13 +391,53 @@ impl InterpolationDetails {
         self
     }
 
-    /// Set the sharpen-percent goal.
+    /// Set the target negative-lobe ratio.
     ///
-    /// Amplifies negative lobes during weight computation to reach the
-    /// target negative-weight ratio. Range: 0–100. Only increases sharpness
-    /// beyond the filter's natural ratio. Matches imageflow's `f.sharpen`.
+    /// Adjusts the balance between positive and negative weights to reach
+    /// the target ratio `r = |negative_sum| / positive_sum`.
+    ///
+    /// - `0.0` — flatten all negative lobes (maximum smoothness)
+    /// - Below natural — reduce negative lobes (softer)
+    /// - Above natural — amplify negative lobes (sharper, more ringing)
+    ///
+    /// Typical range: `0.0` to `0.5`. The filter's natural ratio depends on
+    /// its shape — see [`lobe_ratio_goal`](Self::lobe_ratio_goal) for a table.
+    ///
+    /// # Imageflow compatibility
+    ///
+    /// To match imageflow's `sharpen_percent` parameter, divide by 100:
+    /// ```
+    /// # use zenresize::filter::InterpolationDetails;
+    /// # let filter = InterpolationDetails::default();
+    /// // imageflow sharpen_percent=15 → lobe_ratio=0.15
+    /// let filter = filter.with_lobe_ratio(0.15);
+    /// ```
+    /// Note: imageflow only amplifies (increases ratio beyond natural).
+    /// `with_lobe_ratio` also supports reduction and flattening.
+    pub fn with_lobe_ratio(mut self, ratio: f32) -> Self {
+        self.lobe_ratio_goal = Some(ratio);
+        self
+    }
+
+    /// Set the sharpen-percent goal (imageflow compatibility).
+    ///
+    /// Sets an absolute target ratio of `goal / 100`, clamped to at least
+    /// the filter's natural ratio. Can only amplify, never reduce.
+    ///
+    /// Matches `imageflow_core/src/graphics/weights.rs:648-650`:
+    /// `desired = min(1.0, max(natural_ratio, goal / 100))`
+    /// Applied only when `desired > natural_ratio`.
+    ///
+    /// Use [`with_lobe_ratio`](Self::with_lobe_ratio) for bidirectional control.
     pub fn with_sharpen_percent(mut self, goal: f32) -> Self {
-        self.sharpen_percent_goal = goal;
+        let natural = self.calculate_percent_negative_weight() as f32;
+        let desired = (goal / 100.0).max(natural);
+        // If desired == natural (within tolerance), this is a no-op
+        if (desired - natural).abs() < 1e-7 {
+            // Don't set lobe_ratio_goal — let weights use natural ratio
+            return self;
+        }
+        self.lobe_ratio_goal = Some(desired);
         self
     }
 
@@ -392,8 +456,8 @@ impl InterpolationDetails {
 
     /// Calculate the ratio of negative weight area to positive weight area.
     ///
-    /// Used by `filter_sharpen_percent` to determine how much
-    /// additional negative-lobe amplification is needed.
+    /// Used by `lobe_ratio` adjustment to determine how much
+    /// the negative lobes need to be scaled.
     pub fn calculate_percent_negative_weight(&self) -> f64 {
         let samples = 50i32;
         let step = self.window / samples as f64;

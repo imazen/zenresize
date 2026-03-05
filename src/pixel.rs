@@ -41,6 +41,78 @@ impl Element for f32 {
 }
 
 // =============================================================================
+// LobeRatio
+// =============================================================================
+
+/// Negative-lobe ratio control for resampling weights.
+///
+/// Controls the balance between positive and negative resampling weights.
+/// The ratio `r = |negative_sum| / positive_sum` determines overshoot
+/// and ringing behavior. Higher ratios produce sharper edges but more
+/// ringing artifacts; lower ratios produce smoother output.
+///
+/// # Weight profiles at different ratios (Lanczos, natural ≈ 0.067)
+///
+/// ```text
+///    ratio=0.0 (flatten)     ratio=0.067 (natural)    ratio=0.15 (sharpen)
+///
+///  1.0 |    ****              1.0 |    ***              1.2 |    **
+///      |   *    *                 |   *   *                 |   *  *
+///  0.5 |  *      *            0.5 |  *     *            0.6 |  *    *
+///      | *        *               | *       *               | *      *
+///  0.0 +*----------*--        0.0 +*----*----*--         0.0 +*--*----*--*
+///      |                          |     *    *               |    *    *
+///      |                     -0.1 |                    -0.2  |    *    *
+/// ```
+///
+/// # Natural ratios for common filters
+///
+/// | Filter       | Natural |   | Filter       | Natural |
+/// |--------------|---------|---|--------------|---------|
+/// | Box          |  0.000  |   | Mitchell     |  0.013  |
+/// | Triangle     |  0.000  |   | CatmullRom   |  0.065  |
+/// | Hermite      |  0.000  |   | Lanczos      |  0.067  |
+/// | CubicBSpline |  0.000  |   | Lanczos2     |  0.043  |
+/// | Robidoux     |  0.009  |   | RobidouxSharp|  0.033  |
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum LobeRatio {
+    /// Use the filter's natural negative-lobe ratio (default).
+    #[default]
+    Natural,
+
+    /// Set the exact target ratio (bidirectional).
+    ///
+    /// - `0.0` — flatten: zero all negative lobes (maximum smoothness)
+    /// - Below natural — reduce negative lobes (softer)
+    /// - Above natural — amplify negative lobes (sharper, more ringing)
+    ///
+    /// Range: `0.0` to `< 1.0`. Typical values: `0.0`–`0.5`.
+    Exact(f32),
+
+    /// Imageflow-compatible sharpening (amplify only, percentage 0–100).
+    ///
+    /// Sets an absolute target ratio of `pct / 100`. If the filter's
+    /// natural ratio already meets or exceeds this target, it's a no-op.
+    /// Can only amplify negative lobes, never reduce them.
+    ///
+    /// Matches imageflow's `f.sharpen` / `sharpen_percent_goal` exactly
+    /// (see `imageflow_core/src/graphics/weights.rs:648-650`):
+    /// ```text
+    /// desired = min(1.0, max(natural_ratio, goal / 100))
+    /// // applied only when desired > natural_ratio
+    /// ```
+    ///
+    /// Examples with Lanczos (natural ≈ 6.7%):
+    /// - `SharpenPercent(5.0)` — no-op (5% < 6.7% natural)
+    /// - `SharpenPercent(15.0)` — amplifies to 15%
+    /// - `SharpenPercent(50.0)` — amplifies to 50% (aggressive)
+    ///
+    /// Use [`Exact`](Self::Exact) for bidirectional control (can also
+    /// reduce or flatten).
+    SharpenPercent(f32),
+}
+
+// =============================================================================
 // ResizeConfig
 // =============================================================================
 
@@ -82,13 +154,10 @@ pub struct ResizeConfig {
     /// kernel (softer), `< 1.0` narrows it (sharper, more aliasing risk).
     /// Zero cost — applied during weight computation.
     pub kernel_width_scale: Option<f64>,
-    /// Negative-lobe amplification target, as a percentage (`None` = none).
+    /// Negative-lobe ratio control. See [`LobeRatio`] for details.
     ///
-    /// Separately scales positive and negative weights so the negative-weight
-    /// ratio reaches this target. Range: `0.0` to ~`50.0`. Only increases
-    /// sharpness beyond what the filter naturally provides. Matches
-    /// imageflow's `f.sharpen`. Zero cost — applied during weight computation.
-    pub filter_sharpen_percent: Option<f32>,
+    /// Zero cost — applied during weight computation.
+    pub lobe_ratio: LobeRatio,
     /// Whether to resize in linear light (true) or sRGB gamma space (false).
     ///
     /// Linear light (default) converts sRGB u8 to linear f32 before resampling.
@@ -298,7 +367,7 @@ pub struct ResizeConfigBuilder {
     sharpen: f32,
     post_blur_sigma: f32,
     kernel_width_scale: Option<f64>,
-    filter_sharpen_percent: Option<f32>,
+    lobe_ratio: LobeRatio,
     linear: bool,
     in_stride: usize,
     out_stride: usize,
@@ -317,7 +386,7 @@ impl ResizeConfigBuilder {
             sharpen: 0.0,
             post_blur_sigma: 0.0,
             kernel_width_scale: None,
-            filter_sharpen_percent: None,
+            lobe_ratio: LobeRatio::Natural,
             linear: true,
             in_stride: 0,
             out_stride: 0,
@@ -369,20 +438,29 @@ impl ResizeConfigBuilder {
     ///
     /// `> 1.0`: wider kernel, softer output. `< 1.0`: narrower, sharper.
     /// Multiplied with the filter preset's built-in blur value.
-    /// Can be combined with [`sharpen_percent`](Self::sharpen_percent).
+    /// Can be combined with [`lobe_ratio`](Self::lobe_ratio).
     pub fn kernel_width_scale(mut self, factor: f64) -> Self {
         self.kernel_width_scale = Some(factor);
         self
     }
 
-    /// Set negative-lobe amplification target (zero cost, default 0.0).
+    /// Set negative-lobe ratio control (zero cost).
     ///
-    /// Range: `0.0` (none) to ~`50.0` (aggressive). Matches imageflow's
-    /// `f.sharpen` parameter. Only increases sharpness beyond what the
-    /// filter naturally provides.
+    /// See [`LobeRatio`] for variants and documentation.
     /// Can be combined with [`kernel_width_scale`](Self::kernel_width_scale).
+    pub fn lobe_ratio(mut self, ratio: LobeRatio) -> Self {
+        self.lobe_ratio = ratio;
+        self
+    }
+
+    /// Set negative-lobe amplification as a percentage (imageflow compat).
+    ///
+    /// Shorthand for `.lobe_ratio(LobeRatio::SharpenPercent(pct))`.
+    /// Sets an absolute target of `pct / 100`. Only amplifies — values
+    /// below `natural_ratio × 100` are no-ops.
+    /// See [`LobeRatio::SharpenPercent`] for details.
     pub fn sharpen_percent(mut self, pct: f32) -> Self {
-        self.filter_sharpen_percent = Some(pct);
+        self.lobe_ratio = LobeRatio::SharpenPercent(pct);
         self
     }
 
@@ -424,7 +502,7 @@ impl ResizeConfigBuilder {
             sharpen: self.sharpen,
             post_blur_sigma: self.post_blur_sigma,
             kernel_width_scale: self.kernel_width_scale,
-            filter_sharpen_percent: self.filter_sharpen_percent,
+            lobe_ratio: self.lobe_ratio,
             linear: self.linear,
             in_stride: self.in_stride,
             out_stride: self.out_stride,
