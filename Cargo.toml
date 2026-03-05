@@ -24,8 +24,8 @@ unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512",
 [dependencies]
 archmage = { version = "0.9", default-features = false, features = ["macros"] }
 magetypes = { version = "0.9", default-features = false }
-zenlayout = { version = "0.1", path = "../zenlayout", default-features = false, optional = true }
-linear-srgb = { version = "0.5.5", path = "../linear-srgb", default-features = false, features = ["transfer"] }
+zenlayout = { version = "0.2", default-features = false, optional = true }
+linear-srgb = { version = "0.6", path = "../linear-srgb", default-features = false, features = ["transfer"] }
 safe_unaligned_simd = "0.2.5"
 wide = { version = "1.1", default-features = false }
 zenpixels = { version = "0.1", path = "../zenpixels/zenpixels", default-features = false }
@@ -36,7 +36,7 @@ rgb = { version = "0.8", default-features = false }
 criterion = { version = "0.8", features = ["html_reports"] }
 tango-bench = "0.6"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-linear-srgb = { version = "0.5.5", path = "../linear-srgb" }
+linear-srgb = { version = "0.6", path = "../linear-srgb" }
 colorutils-rs = { path = "../colorutils-rs" }
 
 # Competitors (pic-scale: SIMD controlled by bench-simd-competitors feature)
