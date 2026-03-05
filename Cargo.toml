@@ -22,8 +22,8 @@ pretty-safe = []
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512", "bench-simd-competitors", "pretty-safe"))'] }
 
 [dependencies]
-archmage = { version = "0.8.4", default-features = false, features = ["macros"] }
-magetypes = { version = "0.8", default-features = false }
+archmage = { version = "0.9", default-features = false, features = ["macros"] }
+magetypes = { version = "0.9", default-features = false }
 zenlayout = { version = "0.1", path = "../zenlayout", default-features = false, optional = true }
 linear-srgb = { version = "0.5.5", path = "../linear-srgb", default-features = false, features = ["transfer"] }
 safe_unaligned_simd = "0.2.5"
