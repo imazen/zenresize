@@ -45,7 +45,12 @@ jobs:
           sed \
             -e 's|path = "\.\./linear-srgb"|git = "https://github.com/imazen/linear-srgb"|g' \
             -e 's|path = "\.\./zenpixels/zenpixels"|git = "https://github.com/imazen/zenpixels"|g' \
-            ${{ matrix.strip-colorutils && '-e "/colorutils-rs/d" -e "/\\[\\[bench\\]\\]/{N;/transfer_bench/{N;d;}}"' || '' }} \
+            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
+      - name: Strip colorutils-rs (erydanos LLVM crash on aarch64-windows)
+        if: matrix.strip-colorutils
+        shell: bash
+        run: |
+          sed -e '/colorutils-rs/d' -e '/\[\[bench\]\]/{N;/transfer_bench/{N;d;}}' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
       - uses: Swatinem/rust-cache@v2
       - name: Run tests (default features)
