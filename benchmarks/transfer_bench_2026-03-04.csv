@@ -1,0 +1,13 @@
+# Transfer function benchmark: 1000 RGBA pixels (4000 f32), AVX2+FMA
+# Commit: 9e88db7 (feat: replace scalar TF fallback with magetypes SIMD on NEON/WASM128)
+# CPU: WSL2 on Windows (exact model unknown)
+# Command: cargo bench --bench transfer_bench
+direction,tf,powf_us,zenresize_us,colorutils_us,zen_vs_powf,zen_vs_colorutils
+to_linear,srgb,15.8,0.88,16.4,18x,19x
+to_linear,bt709,14.1,3.18,15.2,4.4x,4.8x
+to_linear,pq,40.3,0.93,47.9,43x,52x
+to_linear,hlg,6.1,1.60,24.4,3.8x,15x
+from_linear,srgb,12.5,1.19,14.9,10x,12x
+from_linear,bt709,12.1,2.71,13.4,4.5x,5.0x
+from_linear,pq,40.7,2.69,46.6,15x,17x
+from_linear,hlg,7.5,1.71,24.0,4.4x,14x

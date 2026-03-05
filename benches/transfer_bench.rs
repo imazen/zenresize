@@ -1,16 +1,16 @@
 //! Benchmark comparing transfer function approaches:
-//! - Baseline: libm powf() (current code)
-//! - Fast: rational polynomial / fast_powf (fastmath.rs)
-//! - colorutils-rs style: erydanos pow_fast (via generic pow_fast scalar)
+//! - powf baseline: libm powf() scalar loops (auto-vectorized by LLVM)
+//! - zenresize: rational polynomial / fast_powf via AVX2 SIMD batch
+//! - colorutils-rs: erydanos-based pow_fast (for sRGB/BT.709/PQ/HLG)
 //!
-//! Tests both scalar loops and batch (row-at-a-time) throughput.
+//! All batch benchmarks process 1000 RGBA pixels (4000 f32 values).
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use zenresize::{Bt709, Hlg, Pq, Srgb, TransferCurve};
 
 const ROW_LEN: usize = 4000; // 1000 RGBA pixels
 
-/// Generate test data: f32 values in [0, 1]
+/// Generate test data: f32 values in [0, 1] (encoded/signal space)
 fn test_row() -> Vec<f32> {
     (0..ROW_LEN)
         .map(|i| i as f32 / ROW_LEN as f32)
@@ -24,8 +24,15 @@ fn linear_row() -> Vec<f32> {
         .collect()
 }
 
+/// Generate test data: u8 RGBA image (1000 pixels)
+fn test_u8_rgba() -> Vec<u8> {
+    (0..ROW_LEN)
+        .map(|i| (i % 256) as u8)
+        .collect()
+}
+
 // ============================================================================
-// Scalar powf baseline — simulates the CURRENT code path
+// Scalar powf baseline — simulates the old code path
 // ============================================================================
 
 fn srgb_to_linear_powf(v: f32) -> f32 {
@@ -103,60 +110,26 @@ fn hlg_from_linear_powf(v: f32) -> f32 {
 }
 
 // ============================================================================
-// Benchmark functions
+// Batch f32→f32 to_linear: powf vs zenresize SIMD vs colorutils-rs scalar
 // ============================================================================
 
-fn bench_scalar_loop(
-    c: &mut Criterion,
-    name: &str,
-    powf_fn: fn(f32) -> f32,
-    fast_fn: fn(f32) -> f32,
-    data: &[f32],
-) {
-    let mut group = c.benchmark_group(name);
-
-    group.bench_function("powf", |b| {
-        b.iter(|| {
-            let mut sum = 0.0f32;
-            for &v in data {
-                sum += std::hint::black_box(powf_fn(v));
-            }
-            std::hint::black_box(sum)
-        });
-    });
-
-    group.bench_function("fastmath", |b| {
-        b.iter(|| {
-            let mut sum = 0.0f32;
-            for &v in data {
-                sum += std::hint::black_box(fast_fn(v));
-            }
-            std::hint::black_box(sum)
-        });
-    });
-
-    group.finish();
-}
-
-fn bench_batch_inplace(c: &mut Criterion) {
-    let mut group = c.benchmark_group("batch_f32_to_linear_inplace");
+fn bench_batch_to_linear(c: &mut Criterion) {
+    let mut group = c.benchmark_group("batch_to_linear_f32");
     let encoded_row = test_row();
 
-    // sRGB
-    group.bench_function("srgb_powf", |b| {
+    // --- sRGB ---
+    group.bench_function("srgb/powf_loop", |b| {
         let mut row = encoded_row.clone();
         b.iter(|| {
             row.copy_from_slice(&encoded_row);
             for pixel in row.chunks_exact_mut(4) {
-                for v in &mut pixel[..3] {
-                    *v = srgb_to_linear_powf(*v);
-                }
+                for v in &mut pixel[..3] { *v = srgb_to_linear_powf(*v); }
             }
             std::hint::black_box(&row);
         });
     });
 
-    group.bench_function("srgb_fast", |b| {
+    group.bench_function("srgb/zenresize", |b| {
         let srgb = Srgb;
         let mut row = encoded_row.clone();
         b.iter(|| {
@@ -166,21 +139,32 @@ fn bench_batch_inplace(c: &mut Criterion) {
         });
     });
 
-    // BT.709
-    group.bench_function("bt709_powf", |b| {
+    group.bench_function("srgb/colorutils", |b| {
         let mut row = encoded_row.clone();
         b.iter(|| {
             row.copy_from_slice(&encoded_row);
             for pixel in row.chunks_exact_mut(4) {
                 for v in &mut pixel[..3] {
-                    *v = bt709_to_linear_powf(*v);
+                    *v = colorutils_rs::srgb_to_linear(*v);
                 }
             }
             std::hint::black_box(&row);
         });
     });
 
-    group.bench_function("bt709_fast", |b| {
+    // --- BT.709 ---
+    group.bench_function("bt709/powf_loop", |b| {
+        let mut row = encoded_row.clone();
+        b.iter(|| {
+            row.copy_from_slice(&encoded_row);
+            for pixel in row.chunks_exact_mut(4) {
+                for v in &mut pixel[..3] { *v = bt709_to_linear_powf(*v); }
+            }
+            std::hint::black_box(&row);
+        });
+    });
+
+    group.bench_function("bt709/zenresize", |b| {
         let bt709 = Bt709;
         let mut row = encoded_row.clone();
         b.iter(|| {
@@ -190,21 +174,32 @@ fn bench_batch_inplace(c: &mut Criterion) {
         });
     });
 
-    // PQ
-    group.bench_function("pq_powf", |b| {
+    group.bench_function("bt709/colorutils", |b| {
         let mut row = encoded_row.clone();
         b.iter(|| {
             row.copy_from_slice(&encoded_row);
             for pixel in row.chunks_exact_mut(4) {
                 for v in &mut pixel[..3] {
-                    *v = pq_to_linear_powf(*v);
+                    *v = colorutils_rs::rec709_to_linear(*v);
                 }
             }
             std::hint::black_box(&row);
         });
     });
 
-    group.bench_function("pq_fast", |b| {
+    // --- PQ ---
+    group.bench_function("pq/powf_loop", |b| {
+        let mut row = encoded_row.clone();
+        b.iter(|| {
+            row.copy_from_slice(&encoded_row);
+            for pixel in row.chunks_exact_mut(4) {
+                for v in &mut pixel[..3] { *v = pq_to_linear_powf(*v); }
+            }
+            std::hint::black_box(&row);
+        });
+    });
+
+    group.bench_function("pq/zenresize", |b| {
         let pq = Pq;
         let mut row = encoded_row.clone();
         b.iter(|| {
@@ -214,21 +209,32 @@ fn bench_batch_inplace(c: &mut Criterion) {
         });
     });
 
-    // HLG
-    group.bench_function("hlg_powf", |b| {
+    group.bench_function("pq/colorutils", |b| {
         let mut row = encoded_row.clone();
         b.iter(|| {
             row.copy_from_slice(&encoded_row);
             for pixel in row.chunks_exact_mut(4) {
                 for v in &mut pixel[..3] {
-                    *v = hlg_to_linear_powf(*v);
+                    *v = colorutils_rs::pq_to_linear(*v);
                 }
             }
             std::hint::black_box(&row);
         });
     });
 
-    group.bench_function("hlg_fast", |b| {
+    // --- HLG ---
+    group.bench_function("hlg/powf_loop", |b| {
+        let mut row = encoded_row.clone();
+        b.iter(|| {
+            row.copy_from_slice(&encoded_row);
+            for pixel in row.chunks_exact_mut(4) {
+                for v in &mut pixel[..3] { *v = hlg_to_linear_powf(*v); }
+            }
+            std::hint::black_box(&row);
+        });
+    });
+
+    group.bench_function("hlg/zenresize", |b| {
         let hlg = Hlg;
         let mut row = encoded_row.clone();
         b.iter(|| {
@@ -238,28 +244,43 @@ fn bench_batch_inplace(c: &mut Criterion) {
         });
     });
 
-    group.finish();
-}
-
-fn bench_batch_from_linear(c: &mut Criterion) {
-    let mut group = c.benchmark_group("batch_linear_to_f32_inplace");
-    let linear_data = linear_row();
-
-    // sRGB
-    group.bench_function("srgb_powf", |b| {
-        let mut row = linear_data.clone();
+    group.bench_function("hlg/colorutils", |b| {
+        let mut row = encoded_row.clone();
         b.iter(|| {
-            row.copy_from_slice(&linear_data);
+            row.copy_from_slice(&encoded_row);
             for pixel in row.chunks_exact_mut(4) {
                 for v in &mut pixel[..3] {
-                    *v = srgb_from_linear_powf(*v);
+                    *v = colorutils_rs::hlg_to_linear(*v);
                 }
             }
             std::hint::black_box(&row);
         });
     });
 
-    group.bench_function("srgb_fast", |b| {
+    group.finish();
+}
+
+// ============================================================================
+// Batch f32→f32 from_linear: powf vs zenresize SIMD vs colorutils-rs scalar
+// ============================================================================
+
+fn bench_batch_from_linear(c: &mut Criterion) {
+    let mut group = c.benchmark_group("batch_from_linear_f32");
+    let linear_data = linear_row();
+
+    // --- sRGB ---
+    group.bench_function("srgb/powf_loop", |b| {
+        let mut row = linear_data.clone();
+        b.iter(|| {
+            row.copy_from_slice(&linear_data);
+            for pixel in row.chunks_exact_mut(4) {
+                for v in &mut pixel[..3] { *v = srgb_from_linear_powf(*v); }
+            }
+            std::hint::black_box(&row);
+        });
+    });
+
+    group.bench_function("srgb/zenresize", |b| {
         let srgb = Srgb;
         let mut row = linear_data.clone();
         b.iter(|| {
@@ -269,21 +290,67 @@ fn bench_batch_from_linear(c: &mut Criterion) {
         });
     });
 
-    // PQ
-    group.bench_function("pq_powf", |b| {
+    group.bench_function("srgb/colorutils", |b| {
         let mut row = linear_data.clone();
         b.iter(|| {
             row.copy_from_slice(&linear_data);
             for pixel in row.chunks_exact_mut(4) {
                 for v in &mut pixel[..3] {
-                    *v = pq_from_linear_powf(*v);
+                    *v = colorutils_rs::srgb_from_linear(*v);
                 }
             }
             std::hint::black_box(&row);
         });
     });
 
-    group.bench_function("pq_fast", |b| {
+    // --- BT.709 ---
+    group.bench_function("bt709/powf_loop", |b| {
+        let mut row = linear_data.clone();
+        b.iter(|| {
+            row.copy_from_slice(&linear_data);
+            for pixel in row.chunks_exact_mut(4) {
+                for v in &mut pixel[..3] { *v = bt709_from_linear_powf(*v); }
+            }
+            std::hint::black_box(&row);
+        });
+        });
+
+    group.bench_function("bt709/zenresize", |b| {
+        let bt709 = Bt709;
+        let mut row = linear_data.clone();
+        b.iter(|| {
+            row.copy_from_slice(&linear_data);
+            bt709.linear_to_f32_inplace(&mut row, 4, true, false);
+            std::hint::black_box(&row);
+        });
+    });
+
+    group.bench_function("bt709/colorutils", |b| {
+        let mut row = linear_data.clone();
+        b.iter(|| {
+            row.copy_from_slice(&linear_data);
+            for pixel in row.chunks_exact_mut(4) {
+                for v in &mut pixel[..3] {
+                    *v = colorutils_rs::rec709_from_linear(*v);
+                }
+            }
+            std::hint::black_box(&row);
+        });
+    });
+
+    // --- PQ ---
+    group.bench_function("pq/powf_loop", |b| {
+        let mut row = linear_data.clone();
+        b.iter(|| {
+            row.copy_from_slice(&linear_data);
+            for pixel in row.chunks_exact_mut(4) {
+                for v in &mut pixel[..3] { *v = pq_from_linear_powf(*v); }
+            }
+            std::hint::black_box(&row);
+        });
+    });
+
+    group.bench_function("pq/zenresize", |b| {
         let pq = Pq;
         let mut row = linear_data.clone();
         b.iter(|| {
@@ -293,21 +360,32 @@ fn bench_batch_from_linear(c: &mut Criterion) {
         });
     });
 
-    // HLG
-    group.bench_function("hlg_powf", |b| {
+    group.bench_function("pq/colorutils", |b| {
         let mut row = linear_data.clone();
         b.iter(|| {
             row.copy_from_slice(&linear_data);
             for pixel in row.chunks_exact_mut(4) {
                 for v in &mut pixel[..3] {
-                    *v = hlg_from_linear_powf(*v);
+                    *v = colorutils_rs::pq_from_linear(*v);
                 }
             }
             std::hint::black_box(&row);
         });
     });
 
-    group.bench_function("hlg_fast", |b| {
+    // --- HLG ---
+    group.bench_function("hlg/powf_loop", |b| {
+        let mut row = linear_data.clone();
+        b.iter(|| {
+            row.copy_from_slice(&linear_data);
+            for pixel in row.chunks_exact_mut(4) {
+                for v in &mut pixel[..3] { *v = hlg_from_linear_powf(*v); }
+            }
+            std::hint::black_box(&row);
+        });
+    });
+
+    group.bench_function("hlg/zenresize", |b| {
         let hlg = Hlg;
         let mut row = linear_data.clone();
         b.iter(|| {
@@ -317,24 +395,57 @@ fn bench_batch_from_linear(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("hlg/colorutils", |b| {
+        let mut row = linear_data.clone();
+        b.iter(|| {
+            row.copy_from_slice(&linear_data);
+            for pixel in row.chunks_exact_mut(4) {
+                for v in &mut pixel[..3] {
+                    *v = colorutils_rs::hlg_from_linear(*v);
+                }
+            }
+            std::hint::black_box(&row);
+        });
+    });
+
     group.finish();
 }
 
-fn bench_scalars(c: &mut Criterion) {
-    use zenresize::fastmath;
+// ============================================================================
+// Batch u8→f32: colorutils-rs image API vs zenresize
+// ============================================================================
 
-    let encoded = test_row();
-    let linear = linear_row();
+fn bench_u8_to_linear(c: &mut Criterion) {
+    let mut group = c.benchmark_group("u8_to_linear_f32");
+    let input = test_u8_rgba();
 
-    bench_scalar_loop(c, "srgb_to_linear", srgb_to_linear_powf, fastmath::srgb_to_linear, &encoded);
-    bench_scalar_loop(c, "srgb_from_linear", srgb_from_linear_powf, fastmath::srgb_from_linear, &linear);
-    bench_scalar_loop(c, "bt709_to_linear", bt709_to_linear_powf, fastmath::bt709_to_linear, &encoded);
-    bench_scalar_loop(c, "bt709_from_linear", bt709_from_linear_powf, fastmath::bt709_from_linear, &linear);
-    bench_scalar_loop(c, "pq_to_linear", pq_to_linear_powf, fastmath::pq_to_linear, &encoded);
-    bench_scalar_loop(c, "pq_from_linear", pq_from_linear_powf, fastmath::pq_from_linear, &linear);
-    bench_scalar_loop(c, "hlg_to_linear", hlg_to_linear_powf, fastmath::hlg_to_linear, &encoded);
-    bench_scalar_loop(c, "hlg_from_linear", hlg_from_linear_powf, fastmath::hlg_from_linear, &linear);
+    group.bench_function("srgb/zenresize", |b| {
+        let srgb = Srgb;
+        let luts = srgb.build_luts();
+        let mut dst = vec![0.0f32; ROW_LEN];
+        b.iter(|| {
+            srgb.u8_to_linear_f32(&input, &mut dst, &luts, 4, true, false);
+            std::hint::black_box(&dst);
+        });
+    });
+
+    group.bench_function("srgb/colorutils", |b| {
+        let mut dst = vec![0.0f32; ROW_LEN];
+        let src_stride = 1000 * 4; // 1000 RGBA pixels * 4 bytes/pixel
+        let dst_stride = 1000 * 4 * 4; // 1000 RGBA pixels * 4 channels * 4 bytes/f32
+        b.iter(|| {
+            colorutils_rs::rgba_to_linear(
+                &input, src_stride,
+                &mut dst, dst_stride,
+                1000, 1,
+                colorutils_rs::TransferFunction::Srgb,
+            );
+            std::hint::black_box(&dst);
+        });
+    });
+
+    group.finish();
 }
 
-criterion_group!(benches, bench_scalars, bench_batch_inplace, bench_batch_from_linear);
+criterion_group!(benches, bench_batch_to_linear, bench_batch_from_linear, bench_u8_to_linear);
 criterion_main!(benches);
