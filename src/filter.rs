@@ -14,43 +14,38 @@
 
 use core::f64::consts::PI;
 
-/// Zero-cost sharpness adjustment applied during weight computation.
+/// Zero-cost sharpness/softness adjustment applied during weight computation.
 ///
-/// All variants modify the interpolation weights at weight-table construction
+/// Both variants modify the interpolation weights at weight-table construction
 /// time. There is no extra convolution pass and no runtime cost beyond the
 /// (negligible) difference in weight values.
 ///
-/// # Kernel scaling vs. lobe amplification
+/// # `KernelWidthScale` — kernel width scaling
 ///
-/// `KernelScale` changes the kernel's effective width. A wider kernel
-/// averages more input pixels (softer), a narrower one samples fewer
-/// (sharper, more aliasing risk). This is equivalent to imageflow's `blur`
-/// parameter on `InterpolationDetails`.
+/// Scales the resampling kernel's coordinate axis, making it wider (softer)
+/// or narrower (sharper). This is the `blur` field on imageflow's
+/// `InterpolationDetails` — never exposed in imageflow's public API, but
+/// used internally by the `*Sharp` filter presets (e.g., `LanczosSharp`
+/// has blur ≈ 0.95).
 ///
-/// `SharpenPercent` leaves the kernel width unchanged but amplifies the
-/// negative lobes, increasing perceived edge contrast. This is equivalent
-/// to imageflow's `f.sharpen` parameter. It only adds sharpness — if the
-/// filter already exceeds the target, no change is made.
+/// - `> 1.0`: wider kernel, softer output (e.g., `1.1` = 10% wider)
+/// - `< 1.0`: narrower kernel, sharper output, more aliasing risk
+/// - Multiplied with the preset's built-in blur value
 ///
-/// # Kernel scaling vs. post-resize Gaussian blur
+/// This is **not** equivalent to post-resize Gaussian blur. Kernel scaling
+/// stretches the entire filter shape (including negative lobes), while
+/// Gaussian blur is a separate all-positive convolution. They produce
+/// visibly different results.
 ///
-/// `KernelScale(f)` with `f > 1.0` and `post_blur(sigma)` both soften the
-/// output, but they are *not* equivalent:
+/// # `SharpenPercent` — negative lobe amplification
 ///
-/// - **Kernel scaling** multiplies the resampling kernel's coordinate axis
-///   by `f`, uniformly stretching it. In frequency domain this compresses
-///   the response by `1/f` — a hard shift of the whole MTF curve.
+/// Leaves the kernel width unchanged but separately scales positive and
+/// negative weights so the negative-weight ratio reaches the target
+/// percentage. Increases perceived edge contrast without changing the
+/// kernel's support window. Matches imageflow's `f.sharpen` parameter.
 ///
-/// - **Post-resize Gaussian blur** convolves the output with
-///   `exp(-x² / 2σ²)`, which applies a Gaussian roll-off in frequency
-///   domain: `exp(-2π²σ²f²)`. This attenuates high frequencies more
-///   aggressively than low ones.
-///
-/// For small adjustments (within ~20% of the default) the visual difference
-/// is negligible and `KernelScale` should be preferred since it's free.
-/// Post-resize blur is only useful when you need a Gaussian-shaped frequency
-/// response (e.g., matched to a specific noise model) or a fixed sigma
-/// independent of the resize ratio.
+/// Only adds sharpness — if the filter already exceeds the target ratio,
+/// no change is made.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FilterSharpness {
     /// Use the filter preset's default kernel shape. No adjustment.
@@ -58,13 +53,13 @@ pub enum FilterSharpness {
 
     /// Scale the kernel width by a factor.
     ///
-    /// `> 1.0`: wider kernel → softer output (e.g., `1.1` = 10% wider).
-    /// `< 1.0`: narrower kernel → sharper output (e.g., `0.9` = 10% narrower).
+    /// `> 1.0`: wider kernel, softer output (e.g., `1.1` = 10% wider).
+    /// `< 1.0`: narrower kernel, sharper output (e.g., `0.9` = 10% narrower).
     ///
-    /// Multiplied with the filter preset's built-in blur value. For example,
-    /// `LanczosSharp` (built-in blur ≈ 0.98) with `KernelScale(0.95)` yields
-    /// effective blur ≈ 0.93.
-    KernelScale(f64),
+    /// Multiplied with the filter preset's built-in blur. For example,
+    /// `LanczosSharp` (built-in ≈ 0.98) with `KernelWidthScale(0.95)` yields
+    /// effective ≈ 0.93.
+    KernelWidthScale(f64),
 
     /// Amplify the kernel's negative lobes to a target percentage.
     ///
@@ -72,7 +67,7 @@ pub enum FilterSharpness {
     /// Only increases sharpness beyond what the filter naturally provides.
     /// Matches imageflow's `f.sharpen` parameter.
     ///
-    /// Unlike `KernelScale`, this does not change the kernel width — it
+    /// Unlike `KernelWidthScale`, this does not change the kernel width — it
     /// separately scales positive and negative weights so the negative-weight
     /// area reaches the target ratio, increasing perceived edge contrast.
     SharpenPercent(f32),
@@ -90,7 +85,7 @@ impl FilterSharpness {
     pub(crate) fn blur_factor(&self) -> f64 {
         match self {
             FilterSharpness::Preset => 1.0,
-            FilterSharpness::KernelScale(f) => *f,
+            FilterSharpness::KernelWidthScale(f) => *f,
             FilterSharpness::SharpenPercent(_) => 1.0,
         }
     }

@@ -1052,59 +1052,6 @@ mod tests {
         );
     }
 
-    /// Empirical measurement: compare the frequency response of KernelScale
-    /// vs post-resize Gaussian blur. This test computes the MTF (modulation
-    /// transfer function) for each approach and prints the results.
-    #[test]
-    fn kernel_scale_vs_post_blur_mtf() {
-        // Build weight tables for a 2x downscale with different softening approaches
-        let filter_default = InterpolationDetails::create(Filter::Lanczos);
-        let filter_soft = filter_default.clone().with_blur(1.2); // KernelScale(1.2)
-
-        let baseline = F32WeightTable::new(200, 100, &filter_default);
-        let kernel_scaled = F32WeightTable::new(200, 100, &filter_soft);
-
-        // Measure effective PSF width via the center pixel's weights.
-        // Wider weights = more blur. Use the weighted RMS radius as a metric.
-        let center = 50usize;
-        fn rms_radius(table: &F32WeightTable, pixel: usize) -> f64 {
-            let w = table.weights(pixel);
-            let left = table.left[pixel] as f64;
-            let center_pos = left + w.len() as f64 / 2.0;
-            let mut sum_wr2 = 0.0f64;
-            let mut sum_w = 0.0f64;
-            for (i, &wt) in w.iter().enumerate() {
-                let r = (left + i as f64) - center_pos;
-                sum_wr2 += wt.abs() as f64 * r * r;
-                sum_w += wt.abs() as f64;
-            }
-            (sum_wr2 / sum_w).sqrt()
-        }
-
-        let rms_base = rms_radius(&baseline, center);
-        let rms_scaled = rms_radius(&kernel_scaled, center);
-
-        // The kernel should be wider with blur=1.2
-        assert!(
-            rms_scaled > rms_base * 1.05,
-            "KernelScale(1.2) should widen PSF: base={:.4} scaled={:.4}",
-            rms_base,
-            rms_scaled
-        );
-
-        // For a Gaussian blur of sigma s in output space, the RMS radius is s.
-        // The equivalent Gaussian sigma is roughly the difference in RMS:
-        let equivalent_sigma = (rms_scaled * rms_scaled - rms_base * rms_base).sqrt();
-        eprintln!(
-            "Lanczos 2x downscale, KernelScale(1.2): PSF RMS {:.3} → {:.3}, \
-             equivalent post-blur sigma ≈ {:.3} output pixels",
-            rms_base, rms_scaled, equivalent_sigma
-        );
-
-        // Verify the PSF width increase is reasonable
-        assert!(equivalent_sigma > 0.0 && equivalent_sigma < 3.0);
-    }
-
     /// Blur/sharpen parameter variation for weight parity tests.
     #[derive(Clone, Copy)]
     enum ParamVariation {
@@ -1279,6 +1226,113 @@ mod tests {
             "Generated param weights differ from reference file {}. \
              Set UPDATE_PARAMS_REFERENCE = true, run the test, then set it back to false.",
             reference_path.display()
+        );
+    }
+
+    /// Verify F32WeightTable's sharpen produces the same weights as
+    /// imageflow's populate_weights (with sharpen) across all param variations.
+    #[test]
+    fn f32_weight_table_sharpen_matches_imageflow() {
+        let filters = [
+            Filter::Robidoux,
+            Filter::RobidouxSharp,
+            Filter::Lanczos,
+            Filter::Lanczos2,
+            Filter::CatmullRom,
+            Filter::Mitchell,
+            Filter::Ginseng,
+            Filter::Hermite,
+        ];
+        let scalings: [(u32, u32); 6] = [
+            (4, 1),
+            (7, 3),
+            (11, 7),
+            (2, 5),
+            (8, 5),
+            (17, 11),
+        ];
+        let variations: [(f64, f32); 8] = [
+            // (blur_factor, sharpen_percent)
+            (1.0, 0.0),   // default
+            (0.8, 0.0),   // blur < 1
+            (0.9, 0.0),   // blur < 1
+            (1.1, 0.0),   // blur > 1
+            (1.2, 0.0),   // blur > 1
+            (1.0, 5.0),   // sharpen
+            (1.0, 15.0),  // sharpen
+            (1.0, 50.0),  // sharpen
+        ];
+
+        let mut max_dev = 0.0f32;
+        let mut max_dev_info = String::new();
+
+        for &filter_enum in &filters {
+            for &(blur, sharpen) in &variations {
+                let mut details = InterpolationDetails::create(filter_enum);
+                if blur != 1.0 {
+                    details = details.with_blur(blur);
+                }
+                if sharpen > 0.0 {
+                    details = details.with_sharpen_percent(sharpen);
+                }
+
+                let sharpen_ratio = details.calculate_percent_negative_weight();
+                let desired_sharpen_ratio = if sharpen > 0.0 {
+                    1.0f64.min(sharpen_ratio.max(sharpen as f64 / 100.0))
+                } else {
+                    0.0
+                };
+
+                for &(from_w, to_w) in &scalings {
+                    let table = F32WeightTable::new(from_w, to_w, &details);
+                    let scale = to_w as f64 / from_w as f64;
+                    let downscale_factor = scale.min(1.0);
+
+                    for o in 0..to_w {
+                        let result = imageflow_populate_pixel(
+                            o, from_w, scale, downscale_factor, &details,
+                            sharpen_ratio, desired_sharpen_ratio,
+                        );
+                        let Some((_left, if_weights)) = result else {
+                            continue;
+                        };
+                        let zen_weights = table.weights(o as usize);
+
+                        if zen_weights.len() != if_weights.len() {
+                            panic!(
+                                "{:?} blur={} sharpen={} {}->{}  pixel {}: \
+                                 tap count {} vs {}",
+                                filter_enum, blur, sharpen, from_w, to_w, o,
+                                zen_weights.len(), if_weights.len()
+                            );
+                        }
+
+                        for (j, (&zw, &iw)) in
+                            zen_weights.iter().zip(if_weights.iter()).enumerate()
+                        {
+                            let dev = (zw - iw).abs();
+                            if dev > max_dev {
+                                max_dev = dev;
+                                max_dev_info = format!(
+                                    "{:?} blur={} sharpen={} {}→{} px{} tap{}",
+                                    filter_enum, blur, sharpen, from_w, to_w, o, j
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        eprintln!(
+            "Max F32WeightTable vs imageflow sharpen deviation: {:.2e} ({})",
+            max_dev, max_dev_info
+        );
+        assert!(
+            max_dev < 5e-5,
+            "F32WeightTable sharpen deviates from imageflow by {:.8} at {}",
+            max_dev,
+            max_dev_info
         );
     }
 
