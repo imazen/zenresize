@@ -59,11 +59,11 @@ jobs:
           ' Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
       - uses: Swatinem/rust-cache@v2
       - name: Run tests (default features)
-        run: cargo test
+        run: cargo test ${{ matrix.strip-colorutils && '--lib' || '' }}
       - name: Run tests (no_std)
         run: cargo test --no-default-features --lib
       - name: Run tests (pretty-safe)
-        run: cargo test --features pretty-safe
+        run: cargo test --features pretty-safe ${{ matrix.strip-colorutils && '--lib' || '' }}
 
   i686:
     name: Test (Linux i686)
