@@ -15,6 +15,8 @@ use crate::fastmath;
 use crate::proven::{idx, idx_mut, sub};
 use crate::weights::{F32WeightTable, I16_PRECISION, I16WeightTable};
 use archmage::X64V3Token;
+#[cfg(feature = "avx512")]
+use archmage::X64V4Token;
 
 // Safe unaligned SIMD load/store — takes references instead of raw pointers.
 // Explicit imports because names overlap with core::arch intrinsics.
@@ -23,6 +25,8 @@ use safe_unaligned_simd::x86_64::{
     _mm_loadu_ps, _mm_loadu_si32, _mm_loadu_si64, _mm_loadu_si128, _mm_storeu_ps, _mm_storeu_si64,
     _mm_storeu_si128, _mm256_loadu_ps, _mm256_loadu_si256, _mm256_storeu_ps,
 };
+#[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+use safe_unaligned_simd::x86_64::_mm256_storeu_si256;
 
 // =============================================================================
 // Color conversion kernels
@@ -2256,6 +2260,309 @@ fn tf_row_inplace(
         }
         for v in tail.iter_mut() {
             *v = tf_scalar(*v);
+        }
+    }
+}
+
+// =============================================================================
+// AVX-512 (x86v4) kernels
+// =============================================================================
+
+// Most kernels delegate to AVX2+FMA (v3) since X64V4Token ⊃ X64V3Token.
+// Only kernels with real 512-bit implementations are written natively.
+#[cfg(feature = "avx512")]
+macro_rules! v4_delegate_v3 {
+    ($(fn $name:ident($($arg:ident: $ty:ty),* $(,)?) $(-> $ret:ty)?;)*) => {$(
+        #[archmage::arcane]
+        pub(crate) fn $name(_token: X64V4Token, $($arg: $ty),*) $(-> $ret)? {
+            paste_v3!($name)(_token.v3(), $($arg),*)
+        }
+    )*};
+}
+
+// Helper: call the _v3 variant by replacing _v4 suffix.
+// We can't do suffix manipulation in declarative macros, so we use a second
+// macro that takes the original _v4 name and generates the _v3 call.
+#[cfg(feature = "avx512")]
+macro_rules! paste_v3 {
+    (u8_to_f32_row_v4) => { u8_to_f32_row_v3 };
+    (f32_to_u8_row_v4) => { f32_to_u8_row_v3 };
+    (premultiply_alpha_row_v4) => { premultiply_alpha_row_v3 };
+    (unpremultiply_alpha_row_v4) => { unpremultiply_alpha_row_v3 };
+    (filter_h_row_f32_v4) => { filter_h_row_f32_v3 };
+    (filter_v_row_f32_v4) => { filter_v_row_f32_v3 };
+    (filter_h_u8_i16_v4) => { filter_h_u8_i16_v3 };
+    (filter_h_u8_i16_4rows_v4) => { filter_h_u8_i16_4rows_v3 };
+    (premultiply_u8_row_v4) => { premultiply_u8_row_v3 };
+    (unpremultiply_u8_row_v4) => { unpremultiply_u8_row_v3 };
+    (srgb_u8_to_linear_f32_v4) => { srgb_u8_to_linear_f32_v3 };
+    (linear_f32_to_srgb_u8_v4) => { linear_f32_to_srgb_u8_v3 };
+    (filter_h_i16_i16_v4) => { filter_h_i16_i16_v3 };
+    (filter_v_all_i16_i16_v4) => { filter_v_all_i16_i16_v3 };
+    (filter_v_row_u8_i16_v4) => { filter_v_row_u8_i16_v3 };
+    (filter_v_row_i16_v4) => { filter_v_row_i16_v3 };
+    (f32_to_f16_row_v4) => { f32_to_f16_row_v3 };
+    (f16_to_f32_row_v4) => { f16_to_f32_row_v3 };
+    (filter_h_row_f32_to_f16_v4) => { filter_h_row_f32_to_f16_v3 };
+    (filter_v_row_f16_v4) => { filter_v_row_f16_v3 };
+    (filter_v_all_f16_v4) => { filter_v_all_f16_v3 };
+    (srgb_to_linear_row_v4) => { srgb_to_linear_row_v3 };
+    (srgb_from_linear_row_v4) => { srgb_from_linear_row_v3 };
+    (bt709_to_linear_row_v4) => { bt709_to_linear_row_v3 };
+    (bt709_from_linear_row_v4) => { bt709_from_linear_row_v3 };
+    (pq_to_linear_row_v4) => { pq_to_linear_row_v3 };
+    (pq_from_linear_row_v4) => { pq_from_linear_row_v3 };
+    (hlg_to_linear_row_v4) => { hlg_to_linear_row_v3 };
+    (hlg_from_linear_row_v4) => { hlg_from_linear_row_v3 };
+}
+
+#[cfg(feature = "avx512")]
+v4_delegate_v3! {
+    fn u8_to_f32_row_v4(input: &[u8], output: &mut [f32]);
+    fn f32_to_u8_row_v4(input: &[f32], output: &mut [u8]);
+    fn premultiply_alpha_row_v4(row: &mut [f32]);
+    fn unpremultiply_alpha_row_v4(row: &mut [f32]);
+    fn filter_h_row_f32_v4(input: &[f32], output: &mut [f32], weights: &F32WeightTable, channels: usize);
+    fn filter_v_row_f32_v4(rows: &[&[f32]], output: &mut [f32], weights: &[f32]);
+    fn filter_h_u8_i16_v4(input: &[u8], output: &mut [u8], weights: &I16WeightTable, channels: usize);
+    fn filter_h_u8_i16_4rows_v4(in0: &[u8], in1: &[u8], in2: &[u8], in3: &[u8], out0: &mut [u8], out1: &mut [u8], out2: &mut [u8], out3: &mut [u8], weights: &I16WeightTable);
+    fn premultiply_u8_row_v4(input: &[u8], output: &mut [u8]);
+    fn unpremultiply_u8_row_v4(row: &mut [u8]);
+    fn srgb_u8_to_linear_f32_v4(input: &[u8], output: &mut [f32], channels: usize, has_alpha: bool);
+    fn linear_f32_to_srgb_u8_v4(input: &[f32], output: &mut [u8], channels: usize, has_alpha: bool);
+    fn filter_h_i16_i16_v4(input: &[i16], output: &mut [i16], weights: &I16WeightTable, channels: usize);
+    fn filter_v_all_i16_i16_v4(intermediate: &[i16], output: &mut [i16], h_row_len: usize, in_h: usize, out_h: usize, weights: &I16WeightTable);
+    fn filter_v_row_u8_i16_v4(rows: &[&[u8]], output: &mut [u8], weights: &[i16]);
+    fn filter_v_row_i16_v4(rows: &[&[i16]], output: &mut [i16], weights: &[i16]);
+    fn f32_to_f16_row_v4(input: &[f32], output: &mut [u16]);
+    fn f16_to_f32_row_v4(input: &[u16], output: &mut [f32]);
+    fn filter_h_row_f32_to_f16_v4(input: &[f32], output: &mut [u16], weights: &F32WeightTable, channels: usize);
+    fn filter_v_row_f16_v4(rows: &[&[u16]], output: &mut [f32], weights: &[f32]);
+    fn filter_v_all_f16_v4(intermediate: &[u16], output: &mut [f32], h_row_len: usize, in_h: usize, out_h: usize, weights: &F32WeightTable);
+    fn srgb_to_linear_row_v4(row: &mut [f32], channels: usize, has_alpha: bool);
+    fn srgb_from_linear_row_v4(row: &mut [f32], channels: usize, has_alpha: bool);
+    fn bt709_to_linear_row_v4(row: &mut [f32], channels: usize, has_alpha: bool);
+    fn bt709_from_linear_row_v4(row: &mut [f32], channels: usize, has_alpha: bool);
+    fn pq_to_linear_row_v4(row: &mut [f32], channels: usize, has_alpha: bool);
+    fn pq_from_linear_row_v4(row: &mut [f32], channels: usize, has_alpha: bool);
+    fn hlg_to_linear_row_v4(row: &mut [f32], channels: usize, has_alpha: bool);
+    fn hlg_from_linear_row_v4(row: &mut [f32], channels: usize, has_alpha: bool);
+}
+
+/// Batch vertical filter: u8→u8 via i16 weights, AVX-512.
+///
+/// Processes 32 bytes per inner-loop iteration (vs 16 for AVX2).
+/// Uses paired output row batching when consecutive rows share the same `left`.
+#[cfg(feature = "avx512")]
+#[archmage::arcane]
+pub(crate) fn filter_v_all_u8_i16_v4(
+    _token: X64V4Token,
+    intermediate: &[u8],
+    output: &mut [u8],
+    h_row_len: usize,
+    in_h: usize,
+    out_h: usize,
+    weights: &I16WeightTable,
+) {
+    const SHIFT: u32 = I16_PRECISION as u32;
+    let half = _mm512_set1_epi32(1 << (I16_PRECISION - 1));
+    // After packs_epi32 + packus_epi16 (both per-128-bit-lane), and
+    // _mm256_unpacklo/hi lane scrambling, the 32 useful result bytes
+    // sit at dword positions [0,4,1,5,8,12,9,13]. This permute gathers them.
+    let dword_perm = _mm512_set_epi32(0, 0, 0, 0, 0, 0, 0, 0, 13, 9, 12, 8, 5, 1, 4, 0);
+    let chunks32 = h_row_len / 32;
+    let in_h_i32 = in_h as i32;
+
+    // Pre-chunk all intermediate rows for 32-byte blocks.
+    let mut int_row_chunks: Vec<&[[u8; 32]]> = Vec::with_capacity(in_h);
+    for y in 0..in_h {
+        let row = &intermediate[y * h_row_len..y * h_row_len + h_row_len];
+        int_row_chunks.push(row.as_chunks::<32>().0);
+    }
+
+    let max_taps = weights.max_taps;
+    let mut row_indices = vec![0usize; max_taps];
+    let mut paired_wts_a = vec![_mm512_setzero_si512(); max_taps.div_ceil(2)];
+    let mut paired_wts_b = vec![_mm512_setzero_si512(); max_taps.div_ceil(2)];
+    let empty_chunks: &[[u8; 32]] = &[];
+    let mut tap_rows = vec![empty_chunks; max_taps];
+
+    let mut out_y = 0;
+    while out_y < out_h {
+        let left = weights.left[out_y];
+        let tap_count = weights.tap_count(out_y);
+        let w_a = weights.weights(out_y);
+
+        let batch2 = out_y + 1 < out_h
+            && weights.left[out_y + 1] == left
+            && weights.tap_count(out_y + 1) == tap_count;
+
+        let pairs = tap_count / 2;
+        let odd = !tap_count.is_multiple_of(2);
+
+        for t in 0..tap_count {
+            row_indices[t] = (left + t as i32).clamp(0, in_h_i32 - 1) as usize;
+        }
+
+        for p in 0..pairs {
+            let w0 = w_a[p * 2] as i32;
+            let w1 = w_a[p * 2 + 1] as i32;
+            paired_wts_a[p] = _mm512_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
+        }
+        let odd_wt_a = if odd {
+            _mm512_set1_epi32(w_a[tap_count - 1] as i32 & 0xFFFF)
+        } else {
+            _mm512_setzero_si512()
+        };
+
+        for (t, &ri) in row_indices[..tap_count].iter().enumerate() {
+            tap_rows[t] = &int_row_chunks[ri][..chunks32];
+        }
+
+        if batch2 {
+            let w_b = weights.weights(out_y + 1);
+            for p in 0..pairs {
+                let w0 = w_b[p * 2] as i32;
+                let w1 = w_b[p * 2 + 1] as i32;
+                paired_wts_b[p] = _mm512_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
+            }
+            let odd_wt_b = if odd {
+                _mm512_set1_epi32(w_b[tap_count - 1] as i32 & 0xFFFF)
+            } else {
+                _mm512_setzero_si512()
+            };
+
+            let out_base_a = out_y * h_row_len;
+            let (row_a, rest) = output[out_base_a..].split_at_mut(h_row_len);
+            let row_b = &mut rest[..h_row_len];
+            let (chunks_a, _) = row_a.as_chunks_mut::<32>();
+            let (chunks_b, _) = row_b.as_chunks_mut::<32>();
+
+            for ci in 0..chunks32 {
+                let mut acc_a_lo = _mm512_setzero_si512();
+                let mut acc_a_hi = _mm512_setzero_si512();
+                let mut acc_b_lo = _mm512_setzero_si512();
+                let mut acc_b_hi = _mm512_setzero_si512();
+
+                for p in 0..pairs {
+                    // Load 32 bytes from each of two tap rows.
+                    let src0 = _mm256_loadu_si256(idx(tap_rows[p * 2], ci));
+                    let src1 = _mm256_loadu_si256(idx(tap_rows[p * 2 + 1], ci));
+
+                    // Interleave and extend to i16 in 512-bit registers.
+                    let il_lo = _mm256_unpacklo_epi8(src0, src1);
+                    let il_hi = _mm256_unpackhi_epi8(src0, src1);
+                    let ext_lo = _mm512_cvtepu8_epi16(il_lo);
+                    let ext_hi = _mm512_cvtepu8_epi16(il_hi);
+
+                    acc_a_lo = _mm512_add_epi32(acc_a_lo, _mm512_madd_epi16(ext_lo, paired_wts_a[p]));
+                    acc_a_hi = _mm512_add_epi32(acc_a_hi, _mm512_madd_epi16(ext_hi, paired_wts_a[p]));
+                    acc_b_lo = _mm512_add_epi32(acc_b_lo, _mm512_madd_epi16(ext_lo, paired_wts_b[p]));
+                    acc_b_hi = _mm512_add_epi32(acc_b_hi, _mm512_madd_epi16(ext_hi, paired_wts_b[p]));
+                }
+
+                if odd {
+                    let src = _mm256_loadu_si256(idx(tap_rows[tap_count - 1], ci));
+                    let zero = _mm256_setzero_si256();
+                    let il_lo = _mm256_unpacklo_epi8(src, zero);
+                    let il_hi = _mm256_unpackhi_epi8(src, zero);
+                    let ext_lo = _mm512_cvtepu8_epi16(il_lo);
+                    let ext_hi = _mm512_cvtepu8_epi16(il_hi);
+
+                    acc_a_lo = _mm512_add_epi32(acc_a_lo, _mm512_madd_epi16(ext_lo, odd_wt_a));
+                    acc_a_hi = _mm512_add_epi32(acc_a_hi, _mm512_madd_epi16(ext_hi, odd_wt_a));
+                    acc_b_lo = _mm512_add_epi32(acc_b_lo, _mm512_madd_epi16(ext_lo, odd_wt_b));
+                    acc_b_hi = _mm512_add_epi32(acc_b_hi, _mm512_madd_epi16(ext_hi, odd_wt_b));
+                }
+
+                // Pack row A: i32→i16→u8 via 512-bit pack, then dword permute.
+                //
+                // Both pack instructions operate per 128-bit lane, and
+                // _mm256_unpacklo/hi_epi8 scrambles lanes (bytes 0-7 in lane 0,
+                // bytes 16-23 in lane 1). After packs_epi32 + packus_epi16, the
+                // 32 useful result bytes sit at dword positions [0,4,1,5,8,12,9,13].
+                // A single vpermutexvar_epi32 gathers them contiguously.
+                let ra_lo = _mm512_srai_epi32::<SHIFT>(_mm512_add_epi32(acc_a_lo, half));
+                let ra_hi = _mm512_srai_epi32::<SHIFT>(_mm512_add_epi32(acc_a_hi, half));
+                let packed_a16 = _mm512_packs_epi32(ra_lo, ra_hi);
+                let packed_a8 = _mm512_packus_epi16(packed_a16, packed_a16);
+                let perm_a = _mm512_permutexvar_epi32(dword_perm, packed_a8);
+                _mm256_storeu_si256(idx_mut(chunks_a, ci), _mm512_castsi512_si256(perm_a));
+
+                // Pack row B.
+                let rb_lo = _mm512_srai_epi32::<SHIFT>(_mm512_add_epi32(acc_b_lo, half));
+                let rb_hi = _mm512_srai_epi32::<SHIFT>(_mm512_add_epi32(acc_b_hi, half));
+                let packed_b16 = _mm512_packs_epi32(rb_lo, rb_hi);
+                let packed_b8 = _mm512_packus_epi16(packed_b16, packed_b16);
+                let perm_b = _mm512_permutexvar_epi32(dword_perm, packed_b8);
+                _mm256_storeu_si256(idx_mut(chunks_b, ci), _mm512_castsi512_si256(perm_b));
+            }
+
+            // Scalar tail for remaining bytes.
+            let tail_start = chunks32 * 32;
+            for x in tail_start..h_row_len {
+                let mut acc_a: i32 = 0;
+                let mut acc_b: i32 = 0;
+                for t in 0..tap_count {
+                    let v = intermediate[row_indices[t] * h_row_len + x] as i32;
+                    acc_a += v * w_a[t] as i32;
+                    acc_b += v * w_b[t] as i32;
+                }
+                output[out_base_a + x] =
+                    ((acc_a + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 255) as u8;
+                output[out_base_a + h_row_len + x] =
+                    ((acc_b + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 255) as u8;
+            }
+            out_y += 2;
+        } else {
+            let out_base = out_y * h_row_len;
+            let (out_chunks, _) = output[out_base..out_base + h_row_len].as_chunks_mut::<32>();
+
+            for ci in 0..chunks32 {
+                let mut acc_lo = _mm512_setzero_si512();
+                let mut acc_hi = _mm512_setzero_si512();
+
+                for p in 0..pairs {
+                    let src0 = _mm256_loadu_si256(idx(tap_rows[p * 2], ci));
+                    let src1 = _mm256_loadu_si256(idx(tap_rows[p * 2 + 1], ci));
+                    let il_lo = _mm256_unpacklo_epi8(src0, src1);
+                    let il_hi = _mm256_unpackhi_epi8(src0, src1);
+                    let ext_lo = _mm512_cvtepu8_epi16(il_lo);
+                    let ext_hi = _mm512_cvtepu8_epi16(il_hi);
+                    acc_lo = _mm512_add_epi32(acc_lo, _mm512_madd_epi16(ext_lo, paired_wts_a[p]));
+                    acc_hi = _mm512_add_epi32(acc_hi, _mm512_madd_epi16(ext_hi, paired_wts_a[p]));
+                }
+
+                if odd {
+                    let src = _mm256_loadu_si256(idx(tap_rows[tap_count - 1], ci));
+                    let zero = _mm256_setzero_si256();
+                    let il_lo = _mm256_unpacklo_epi8(src, zero);
+                    let il_hi = _mm256_unpackhi_epi8(src, zero);
+                    let ext_lo = _mm512_cvtepu8_epi16(il_lo);
+                    let ext_hi = _mm512_cvtepu8_epi16(il_hi);
+                    acc_lo = _mm512_add_epi32(acc_lo, _mm512_madd_epi16(ext_lo, odd_wt_a));
+                    acc_hi = _mm512_add_epi32(acc_hi, _mm512_madd_epi16(ext_hi, odd_wt_a));
+                }
+
+                let r_lo = _mm512_srai_epi32::<SHIFT>(_mm512_add_epi32(acc_lo, half));
+                let r_hi = _mm512_srai_epi32::<SHIFT>(_mm512_add_epi32(acc_hi, half));
+                let packed16 = _mm512_packs_epi32(r_lo, r_hi);
+                let packed8 = _mm512_packus_epi16(packed16, packed16);
+                let perm = _mm512_permutexvar_epi32(dword_perm, packed8);
+                _mm256_storeu_si256(idx_mut(out_chunks, ci), _mm512_castsi512_si256(perm));
+            }
+
+            // Scalar tail.
+            let tail_start = chunks32 * 32;
+            for x in tail_start..h_row_len {
+                let mut acc: i32 = 0;
+                for t in 0..tap_count {
+                    acc += intermediate[row_indices[t] * h_row_len + x] as i32 * w_a[t] as i32;
+                }
+                output[out_base + x] =
+                    ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 255) as u8;
+            }
+            out_y += 1;
         }
     }
 }
