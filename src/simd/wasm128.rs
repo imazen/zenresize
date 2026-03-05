@@ -215,42 +215,42 @@ macro_rules! tf_wasm {
 
 tf_wasm!(
     srgb_to_linear_row_wasm128,
-    linear_srgb::tf::rites_x4::srgb_to_linear_wasm128,
+    linear_srgb::tokens::x4::tf_srgb_to_linear_wasm128,
     linear_srgb::tf::srgb_to_linear
 );
 tf_wasm!(
     srgb_from_linear_row_wasm128,
-    linear_srgb::tf::rites_x4::linear_to_srgb_wasm128,
+    linear_srgb::tokens::x4::tf_linear_to_srgb_wasm128,
     linear_srgb::tf::linear_to_srgb
 );
 tf_wasm!(
     bt709_to_linear_row_wasm128,
-    linear_srgb::tf::rites_x4::bt709_to_linear_wasm128,
+    linear_srgb::tokens::x4::bt709_to_linear_wasm128,
     linear_srgb::tf::bt709_to_linear
 );
 tf_wasm!(
     bt709_from_linear_row_wasm128,
-    linear_srgb::tf::rites_x4::linear_to_bt709_wasm128,
+    linear_srgb::tokens::x4::linear_to_bt709_wasm128,
     linear_srgb::tf::linear_to_bt709
 );
 tf_wasm!(
     pq_to_linear_row_wasm128,
-    linear_srgb::tf::rites_x4::pq_to_linear_wasm128,
+    linear_srgb::tokens::x4::pq_to_linear_wasm128,
     linear_srgb::tf::pq_to_linear
 );
 tf_wasm!(
     pq_from_linear_row_wasm128,
-    linear_srgb::tf::rites_x4::linear_to_pq_wasm128,
+    linear_srgb::tokens::x4::linear_to_pq_wasm128,
     linear_srgb::tf::linear_to_pq
 );
 tf_wasm!(
     hlg_to_linear_row_wasm128,
-    linear_srgb::tf::rites_x4::hlg_to_linear_wasm128,
+    linear_srgb::tokens::x4::hlg_to_linear_wasm128,
     linear_srgb::tf::hlg_to_linear
 );
 tf_wasm!(
     hlg_from_linear_row_wasm128,
-    linear_srgb::tf::rites_x4::linear_to_hlg_wasm128,
+    linear_srgb::tokens::x4::linear_to_hlg_wasm128,
     linear_srgb::tf::linear_to_hlg
 );
 

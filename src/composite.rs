@@ -100,9 +100,9 @@ impl SolidBackground {
     /// The color is converted to premultiplied linear f32.
     /// For non-alpha descriptors (Gray, Rgb), alpha is set to 1.0.
     pub fn from_srgb_u8(r: u8, g: u8, b: u8, a: u8, desc: PixelDescriptor) -> Self {
-        let lr = linear_srgb::scalar::srgb_to_linear(r as f32 / 255.0);
-        let lg = linear_srgb::scalar::srgb_to_linear(g as f32 / 255.0);
-        let lb = linear_srgb::scalar::srgb_to_linear(b as f32 / 255.0);
+        let lr = linear_srgb::precise::srgb_to_linear(r as f32 / 255.0);
+        let lg = linear_srgb::precise::srgb_to_linear(g as f32 / 255.0);
+        let lb = linear_srgb::precise::srgb_to_linear(b as f32 / 255.0);
         let fa = if desc.has_alpha() {
             a as f32 / 255.0
         } else {
@@ -439,7 +439,7 @@ mod tests {
         let expected_a = 128.0 / 255.0;
         assert!((pixel[3] - expected_a).abs() < 1e-3);
         // R = srgb_to_linear(128/255) * alpha
-        let lr = linear_srgb::scalar::srgb_to_linear(128.0 / 255.0);
+        let lr = linear_srgb::precise::srgb_to_linear(128.0 / 255.0);
         assert!((pixel[0] - lr * expected_a).abs() < 1e-3);
     }
 

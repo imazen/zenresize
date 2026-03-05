@@ -214,42 +214,42 @@ macro_rules! tf_neon {
 
 tf_neon!(
     srgb_to_linear_row_neon,
-    linear_srgb::tf::rites_x4::srgb_to_linear_neon,
+    linear_srgb::tokens::x4::tf_srgb_to_linear_neon,
     linear_srgb::tf::srgb_to_linear
 );
 tf_neon!(
     srgb_from_linear_row_neon,
-    linear_srgb::tf::rites_x4::linear_to_srgb_neon,
+    linear_srgb::tokens::x4::tf_linear_to_srgb_neon,
     linear_srgb::tf::linear_to_srgb
 );
 tf_neon!(
     bt709_to_linear_row_neon,
-    linear_srgb::tf::rites_x4::bt709_to_linear_neon,
+    linear_srgb::tokens::x4::bt709_to_linear_neon,
     linear_srgb::tf::bt709_to_linear
 );
 tf_neon!(
     bt709_from_linear_row_neon,
-    linear_srgb::tf::rites_x4::linear_to_bt709_neon,
+    linear_srgb::tokens::x4::linear_to_bt709_neon,
     linear_srgb::tf::linear_to_bt709
 );
 tf_neon!(
     pq_to_linear_row_neon,
-    linear_srgb::tf::rites_x4::pq_to_linear_neon,
+    linear_srgb::tokens::x4::pq_to_linear_neon,
     linear_srgb::tf::pq_to_linear
 );
 tf_neon!(
     pq_from_linear_row_neon,
-    linear_srgb::tf::rites_x4::linear_to_pq_neon,
+    linear_srgb::tokens::x4::linear_to_pq_neon,
     linear_srgb::tf::linear_to_pq
 );
 tf_neon!(
     hlg_to_linear_row_neon,
-    linear_srgb::tf::rites_x4::hlg_to_linear_neon,
+    linear_srgb::tokens::x4::hlg_to_linear_neon,
     linear_srgb::tf::hlg_to_linear
 );
 tf_neon!(
     hlg_from_linear_row_neon,
-    linear_srgb::tf::rites_x4::linear_to_hlg_neon,
+    linear_srgb::tokens::x4::linear_to_hlg_neon,
     linear_srgb::tf::linear_to_hlg
 );
 

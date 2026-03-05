@@ -653,9 +653,9 @@ pub fn canvas_color_to_pixel(color: &CanvasColor, desc: PixelDescriptor) -> Vec<
             }
         },
         CanvasColor::Linear { r, g, b, a } => {
-            let sr = linear_srgb::scalar::linear_to_srgb_u8(*r);
-            let sg = linear_srgb::scalar::linear_to_srgb_u8(*g);
-            let sb = linear_srgb::scalar::linear_to_srgb_u8(*b);
+            let sr = linear_srgb::default::linear_to_srgb_u8(*r);
+            let sg = linear_srgb::default::linear_to_srgb_u8(*g);
+            let sb = linear_srgb::default::linear_to_srgb_u8(*b);
             let sa = (*a * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
             match desc.layout() {
                 ChannelLayout::Gray => vec![sr],
@@ -681,9 +681,9 @@ fn premul_linear_f32_to_srgb_u8_pixel(pixel: &[f32; 4], desc: PixelDescriptor) -
         (0.0, 0.0, 0.0)
     };
     // Linear to sRGB
-    let sr = linear_srgb::scalar::linear_to_srgb_u8(r);
-    let sg = linear_srgb::scalar::linear_to_srgb_u8(g);
-    let sb = linear_srgb::scalar::linear_to_srgb_u8(b);
+    let sr = linear_srgb::default::linear_to_srgb_u8(r);
+    let sg = linear_srgb::default::linear_to_srgb_u8(g);
+    let sb = linear_srgb::default::linear_to_srgb_u8(b);
     let sa = (a * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
     match desc.layout() {
         ChannelLayout::Gray => vec![sr],

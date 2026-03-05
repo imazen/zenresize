@@ -1931,32 +1931,32 @@ macro_rules! tf_x8_wrapper {
 
 tf_x8_wrapper!(
     srgb_to_linear_x8,
-    linear_srgb::tf::rites_x8::srgb_to_linear_v3
+    linear_srgb::tokens::x8::tf_srgb_to_linear_v3
 );
 tf_x8_wrapper!(
     srgb_from_linear_x8,
-    linear_srgb::tf::rites_x8::linear_to_srgb_v3
+    linear_srgb::tokens::x8::tf_linear_to_srgb_v3
 );
 tf_x8_wrapper!(
     bt709_to_linear_x8,
-    linear_srgb::tf::rites_x8::bt709_to_linear_v3
+    linear_srgb::tokens::x8::bt709_to_linear_v3
 );
 tf_x8_wrapper!(
     bt709_from_linear_x8,
-    linear_srgb::tf::rites_x8::linear_to_bt709_v3
+    linear_srgb::tokens::x8::linear_to_bt709_v3
 );
-tf_x8_wrapper!(pq_to_linear_x8, linear_srgb::tf::rites_x8::pq_to_linear_v3);
+tf_x8_wrapper!(pq_to_linear_x8, linear_srgb::tokens::x8::pq_to_linear_v3);
 tf_x8_wrapper!(
     pq_from_linear_x8,
-    linear_srgb::tf::rites_x8::linear_to_pq_v3
+    linear_srgb::tokens::x8::linear_to_pq_v3
 );
 tf_x8_wrapper!(
     hlg_to_linear_x8,
-    linear_srgb::tf::rites_x8::hlg_to_linear_v3
+    linear_srgb::tokens::x8::hlg_to_linear_v3
 );
 tf_x8_wrapper!(
     hlg_from_linear_x8,
-    linear_srgb::tf::rites_x8::linear_to_hlg_v3
+    linear_srgb::tokens::x8::linear_to_hlg_v3
 );
 
 // --- Batch transfer function row processors ---
