@@ -11,7 +11,7 @@ categories = ["graphics", "multimedia::images", "no-std"]
 
 [features]
 default = ["std", "layout"]
-std = ["archmage/std", "linear-srgb/std", "wide/std", "zenlayout?/std", "zenpixels/std"]
+std = ["archmage/std", "magetypes/std", "linear-srgb/std", "wide/std", "zenlayout?/std", "zenpixels/std"]
 avx512 = ["archmage/avx512"]
 layout = ["dep:zenlayout"]
 # Enable SIMD features on pic-scale for benchmarks (default: scalar-only)

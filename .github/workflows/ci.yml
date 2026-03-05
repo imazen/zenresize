@@ -35,7 +35,7 @@ jobs:
           - name: Windows arm64
             os: windows-11-arm
             # colorutils-rs dev-dep crashes LLVM on aarch64-windows (erydanos codegen bug)
-            skip-benches: true
+            strip-colorutils: true
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -45,10 +45,11 @@ jobs:
           sed \
             -e 's|path = "\.\./linear-srgb"|git = "https://github.com/imazen/linear-srgb"|g' \
             -e 's|path = "\.\./zenpixels/zenpixels"|git = "https://github.com/imazen/zenpixels"|g' \
+            ${{ matrix.strip-colorutils && '-e "/colorutils-rs/d" -e "/\\[\\[bench\\]\\]/{N;/transfer_bench/{N;d;}}"' || '' }} \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
       - uses: Swatinem/rust-cache@v2
       - name: Run tests (default features)
-        run: cargo test ${{ matrix.skip-benches && '--lib --tests' || '' }}
+        run: cargo test
       - name: Run tests (no_std)
         run: cargo test --no-default-features --lib
       - name: Run tests (pretty-safe)
@@ -94,8 +95,8 @@ jobs:
       - name: Install wasmtime
         uses: bytecodealliance/actions/wasmtime/setup@v1
       - uses: Swatinem/rust-cache@v2
-      - name: Build WASM (no_std)
-        run: cargo check --target wasm32-wasip1 --no-default-features --lib
+      - name: Build WASM (std)
+        run: cargo check --target wasm32-wasip1 --lib
         env:
           RUSTFLAGS: "-C target-feature=+simd128"
 
