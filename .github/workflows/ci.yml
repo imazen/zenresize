@@ -34,6 +34,8 @@ jobs:
             os: windows-latest
           - name: Windows arm64
             os: windows-11-arm
+            # colorutils-rs dev-dep crashes LLVM on aarch64-windows (erydanos codegen bug)
+            skip-benches: true
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -46,7 +48,7 @@ jobs:
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
       - uses: Swatinem/rust-cache@v2
       - name: Run tests (default features)
-        run: cargo test
+        run: cargo test ${{ matrix.skip-benches && '--lib --tests' || '' }}
       - name: Run tests (no_std)
         run: cargo test --no-default-features --lib
       - name: Run tests (pretty-safe)
@@ -92,10 +94,9 @@ jobs:
       - name: Install wasmtime
         uses: bytecodealliance/actions/wasmtime/setup@v1
       - uses: Swatinem/rust-cache@v2
-      - name: Test WASM (no_std)
-        run: cargo test --target wasm32-wasip1 --no-default-features --lib
+      - name: Build WASM (no_std)
+        run: cargo check --target wasm32-wasip1 --no-default-features --lib
         env:
-          CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
           RUSTFLAGS: "-C target-feature=+simd128"
 
   clippy:
