@@ -77,13 +77,34 @@ pub struct I16WeightTable {
 
 impl F32WeightTable {
     /// Create weight table for resampling from `in_size` to `out_size`.
+    ///
+    /// If `filter.sharpen_percent_goal` is set (via
+    /// [`InterpolationDetails::with_sharpen_percent`]), negative lobes are
+    /// amplified to reach the target ratio.
     pub fn new(in_size: u32, out_size: u32, filter: &InterpolationDetails) -> Self {
+        let sharpen_percent = filter.sharpen_percent_goal;
         debug_assert!(in_size > 0, "in_size must be positive");
         debug_assert!(out_size > 0, "out_size must be positive");
 
         let scale = out_size as f64 / in_size as f64;
         let downscale_factor = scale.min(1.0);
         let effective_window = filter.window / downscale_factor;
+
+        // Compute the sharpen ratio targets if sharpen_percent > 0.
+        let natural_ratio = if sharpen_percent > 0.0 {
+            filter.calculate_percent_negative_weight()
+        } else {
+            0.0
+        };
+        let desired_ratio = if sharpen_percent > 0.0 {
+            1.0f64.min(natural_ratio.max(sharpen_percent as f64 / 100.0))
+        } else {
+            0.0
+        };
+        // Only attempt lobe amplification if the target exceeds the abstract
+        // filter ratio. Per-pixel ratios may already exceed it (especially
+        // for downscaling), so the per-pixel normalization checks again.
+        let apply_lobe_amp = sharpen_percent > 0.0 && desired_ratio > natural_ratio;
 
         // First pass: compute weights and find max_taps
         let mut temp_weights: Vec<f64> = Vec::new();
@@ -109,21 +130,72 @@ impl F32WeightTable {
             all_weights.push(temp_weights.clone());
         }
 
-        // Second pass: fill flat array and renormalize f32 weights.
-        // The f64→f32 conversion introduces drift; renormalizing ensures
-        // each pixel's weights sum to exactly 1.0f32.
+        // Second pass: fill flat array and normalize.
         let mut weights_flat = vec![0.0f32; out_size as usize * max_taps];
         for (i, w) in all_weights.iter().enumerate() {
             let offset = i * max_taps;
             for (j, &val) in w.iter().enumerate() {
                 weights_flat[offset + j] = val as f32;
             }
-            // Renormalize f32 weights to sum to 1.0
-            let f32_sum: f32 = weights_flat[offset..offset + w.len()].iter().sum();
-            if f32_sum != 0.0 {
-                let inv = 1.0f32 / f32_sum;
-                for v in &mut weights_flat[offset..offset + w.len()] {
-                    *v *= inv;
+
+            let slice = &mut weights_flat[offset..offset + w.len()];
+
+            if apply_lobe_amp {
+                // SharpenPercent normalization: separately scale positive and
+                // negative weights to reach the desired negative-weight ratio.
+                // Computed from normalized weights (sum=1.0), where
+                // neg_ratio = |total_neg| / total_pos.
+                let mut total_pos = 0.0f64;
+                let mut total_neg = 0.0f64;
+                for &val in w.iter() {
+                    if val >= 0.0 {
+                        total_pos += val;
+                    } else {
+                        total_neg += val;
+                    }
+                }
+                // Only amplify if this pixel's actual ratio is below target.
+                // For downscaling, per-pixel ratios can exceed the abstract
+                // filter ratio, so this check is essential.
+                let actual_ratio = if total_pos > 0.0 {
+                    (-total_neg) / total_pos
+                } else {
+                    0.0
+                };
+                if total_neg < 0.0 && desired_ratio < 1.0 && desired_ratio > actual_ratio {
+                    let target_pos = 1.0 / (1.0 - desired_ratio);
+                    let target_neg = desired_ratio * -target_pos;
+                    let pos_factor = (target_pos / total_pos) as f32;
+                    let neg_factor = if total_neg == 0.0 {
+                        1.0f32
+                    } else {
+                        (target_neg / total_neg) as f32
+                    };
+                    for v in slice.iter_mut() {
+                        if *v < 0.0 {
+                            *v *= neg_factor;
+                        } else {
+                            *v *= pos_factor;
+                        }
+                    }
+                } else {
+                    // Per-pixel ratio already meets/exceeds target
+                    let f32_sum: f32 = slice.iter().sum();
+                    if f32_sum != 0.0 {
+                        let inv = 1.0f32 / f32_sum;
+                        for v in slice.iter_mut() {
+                            *v *= inv;
+                        }
+                    }
+                }
+            } else {
+                // Standard normalization: renormalize f32 weights to sum to 1.0
+                let f32_sum: f32 = slice.iter().sum();
+                if f32_sum != 0.0 {
+                    let inv = 1.0f32 / f32_sum;
+                    for v in slice.iter_mut() {
+                        *v *= inv;
+                    }
                 }
             }
         }
@@ -667,6 +739,99 @@ mod tests {
                     *w.last().unwrap() != 0.0,
                     "Last weight for pixel {} should not be zero",
                     i
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sharpen_percent_amplifies_negative_lobes() {
+        // Use upscale (2→17) where per-pixel negative ratio is low,
+        // so SharpenPercent has room to amplify.
+        let filter = InterpolationDetails::create(Filter::Robidoux);
+        let baseline = F32WeightTable::new(2, 17, &filter);
+        let filter_sharp = filter.clone().with_sharpen_percent(15.0);
+        let sharpened = F32WeightTable::new(2, 17, &filter_sharp);
+
+        // Same structure (same taps, same left indices)
+        assert_eq!(baseline.len(), sharpened.len());
+        for i in 0..baseline.len() {
+            assert_eq!(baseline.tap_count(i), sharpened.tap_count(i));
+            assert_eq!(baseline.left[i], sharpened.left[i]);
+        }
+
+        // Sharpened weights should still sum to ~1.0
+        for i in 0..sharpened.len() {
+            let sum: f32 = sharpened.weights(i).iter().sum();
+            assert!(
+                (sum - 1.0).abs() < 0.01,
+                "Sharpened weights for pixel {} sum to {}",
+                i,
+                sum
+            );
+        }
+
+        // Find a pixel with negative weights to verify amplification
+        let mut found_amplified = false;
+        for i in 0..baseline.len() {
+            let bw = baseline.weights(i);
+            let sw = sharpened.weights(i);
+            let baseline_neg: f32 = bw.iter().filter(|&&w| w < 0.0).sum();
+            let sharpened_neg: f32 = sw.iter().filter(|&&w| w < 0.0).sum();
+            if baseline_neg < 0.0 && sharpened_neg < baseline_neg {
+                found_amplified = true;
+                // Positive weights should also increase to compensate
+                let baseline_pos: f32 = bw.iter().filter(|&&w| w > 0.0).sum();
+                let sharpened_pos: f32 = sw.iter().filter(|&&w| w > 0.0).sum();
+                assert!(
+                    sharpened_pos > baseline_pos,
+                    "Pixel {}: pos should increase (baseline={} sharpened={})",
+                    i,
+                    baseline_pos,
+                    sharpened_pos
+                );
+                break;
+            }
+        }
+        assert!(found_amplified, "Expected at least one pixel with amplified negative lobes");
+    }
+
+    #[test]
+    fn sharpen_percent_zero_matches_default() {
+        let filter = InterpolationDetails::create(Filter::Lanczos);
+        let baseline = F32WeightTable::new(100, 50, &filter);
+        let filter_zero = filter.clone().with_sharpen_percent(0.0);
+        let zero_sharp = F32WeightTable::new(100, 50, &filter_zero);
+
+        for i in 0..baseline.len() {
+            let bw = baseline.weights(i);
+            let zw = zero_sharp.weights(i);
+            assert_eq!(bw.len(), zw.len());
+            for (j, (&b, &z)) in bw.iter().zip(zw.iter()).enumerate() {
+                assert_eq!(b, z, "pixel {} tap {} differs", i, j);
+            }
+        }
+    }
+
+    #[test]
+    fn sharpen_percent_below_natural_is_noop() {
+        // Box filter has 0% negative weight — any positive target is a no-op
+        let filter = InterpolationDetails::create(Filter::Box);
+        let baseline = F32WeightTable::new(100, 50, &filter);
+        let filter_sharp = filter.clone().with_sharpen_percent(15.0);
+        let sharpened = F32WeightTable::new(100, 50, &filter_sharp);
+
+        for i in 0..baseline.len() {
+            let bw = baseline.weights(i);
+            let sw = sharpened.weights(i);
+            for (j, (&b, &s)) in bw.iter().zip(sw.iter()).enumerate() {
+                assert!(
+                    (b - s).abs() < 1e-7,
+                    "Box pixel {} tap {}: baseline={} sharpened={}",
+                    i,
+                    j,
+                    b,
+                    s
                 );
             }
         }

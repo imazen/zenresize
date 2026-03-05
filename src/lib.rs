@@ -64,7 +64,7 @@ pub use execute::{
     execute_secondary, execute_secondary_with_background, execute_with_background,
     execute_with_offer, fill_canvas, orient_image, place_on_canvas, replicate_edges,
 };
-pub use filter::Filter;
+pub use filter::{Filter, FilterSharpness};
 #[cfg(feature = "layout")]
 pub use layout::{
     CanvasColor, Constraint, ConstraintMode, DecoderOffer, DecoderRequest, Gravity, IdealLayout,
