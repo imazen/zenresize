@@ -254,9 +254,13 @@ impl<B: Background> Resizer<B> {
         );
         let force_f32 = composite_f32 || cross_format || non_standard_transfer;
 
-        let filter = InterpolationDetails::create(config.filter)
-            .with_blur(config.filter_sharpness.blur_factor())
-            .with_sharpen_percent(config.filter_sharpness.sharpen_percent());
+        let mut filter = InterpolationDetails::create(config.filter);
+        if let Some(scale) = config.kernel_width_scale {
+            filter = filter.with_blur(scale);
+        }
+        if let Some(pct) = config.filter_sharpen_percent {
+            filter = filter.with_sharpen_percent(pct);
+        }
         let channels = config.channels();
         let needs_premul = config.needs_premultiply();
         let linearize = config.needs_linearization();

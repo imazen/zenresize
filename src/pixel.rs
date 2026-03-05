@@ -67,20 +67,28 @@ pub struct ResizeConfig {
     /// Post-resize unsharp mask amount (0.0 = none).
     ///
     /// Runs a separate unsharp-mask pass over the output.
-    /// Consider [`FilterSharpness::SharpenPercent`] for zero-cost sharpening
-    /// during resampling.
+    /// Consider [`sharpen_percent`](ResizeConfigBuilder::sharpen_percent)
+    /// for zero-cost sharpening during resampling.
     pub sharpen: f32,
     /// Post-resize Gaussian blur sigma (0.0 = none).
     ///
-    /// Runs a separate Gaussian convolution pass over the output (all-positive
-    /// weights, no ringing). Not equivalent to [`FilterSharpness::KernelWidthScale`],
+    /// Runs a separate all-positive Gaussian convolution pass.
+    /// Not equivalent to [`kernel_width_scale`](ResizeConfigBuilder::kernel_width_scale),
     /// which stretches the resampling kernel including its negative lobes.
     pub post_blur_sigma: f32,
-    /// Zero-cost kernel sharpness adjustment.
+    /// Kernel width scale factor (`None` = use preset default).
     ///
-    /// Applied during weight computation — no extra pass, no allocation.
-    /// See [`FilterSharpness`] for details.
-    pub filter_sharpness: crate::filter::FilterSharpness,
+    /// Multiplied with the filter preset's built-in blur. `> 1.0` widens the
+    /// kernel (softer), `< 1.0` narrows it (sharper, more aliasing risk).
+    /// Zero cost — applied during weight computation.
+    pub kernel_width_scale: Option<f64>,
+    /// Negative-lobe amplification target, as a percentage (`None` = none).
+    ///
+    /// Separately scales positive and negative weights so the negative-weight
+    /// ratio reaches this target. Range: `0.0` to ~`50.0`. Only increases
+    /// sharpness beyond what the filter naturally provides. Matches
+    /// imageflow's `f.sharpen`. Zero cost — applied during weight computation.
+    pub filter_sharpen_percent: Option<f32>,
     /// Whether to resize in linear light (true) or sRGB gamma space (false).
     ///
     /// Linear light (default) converts sRGB u8 to linear f32 before resampling.
@@ -289,7 +297,8 @@ pub struct ResizeConfigBuilder {
     output: Option<PixelDescriptor>,
     sharpen: f32,
     post_blur_sigma: f32,
-    filter_sharpness: crate::filter::FilterSharpness,
+    kernel_width_scale: Option<f64>,
+    filter_sharpen_percent: Option<f32>,
     linear: bool,
     in_stride: usize,
     out_stride: usize,
@@ -307,7 +316,8 @@ impl ResizeConfigBuilder {
             output: None,
             sharpen: 0.0,
             post_blur_sigma: 0.0,
-            filter_sharpness: crate::filter::FilterSharpness::Preset,
+            kernel_width_scale: None,
+            filter_sharpen_percent: None,
             linear: true,
             in_stride: 0,
             out_stride: 0,
@@ -347,40 +357,33 @@ impl ResizeConfigBuilder {
 
     /// Set post-resize Gaussian blur sigma (0.0 = none).
     ///
-    /// Runs a separate all-positive Gaussian convolution pass. This is **not**
-    /// equivalent to [`FilterSharpness::KernelWidthScale`] — Gaussian blur
-    /// kills high frequencies more aggressively and eliminates ringing, while
-    /// kernel width scaling preserves the filter's shape including negative
-    /// lobes.
+    /// Runs a separate all-positive Gaussian convolution pass. Not equivalent
+    /// to [`kernel_width_scale`](Self::kernel_width_scale) — Gaussian blur
+    /// kills high frequencies more aggressively and has no negative lobes.
     pub fn post_blur(mut self, sigma: f32) -> Self {
         self.post_blur_sigma = sigma;
         self
     }
 
-    /// Set zero-cost kernel sharpness adjustment.
+    /// Scale the resampling kernel width (zero cost, default 1.0).
     ///
-    /// See [`FilterSharpness`] for the available modes. Applied during weight
-    /// computation — no extra pass, no allocation.
-    pub fn filter_sharpness(mut self, sharpness: crate::filter::FilterSharpness) -> Self {
-        self.filter_sharpness = sharpness;
+    /// `> 1.0`: wider kernel, softer output. `< 1.0`: narrower, sharper.
+    /// Multiplied with the filter preset's built-in blur value.
+    /// Can be combined with [`sharpen_percent`](Self::sharpen_percent).
+    pub fn kernel_width_scale(mut self, factor: f64) -> Self {
+        self.kernel_width_scale = Some(factor);
         self
     }
 
-    /// Scale the resampling kernel width (zero cost).
-    ///
-    /// `> 1.0`: wider kernel, softer output. `< 1.0`: narrower, sharper.
-    /// Shorthand for `filter_sharpness(FilterSharpness::KernelWidthScale(f))`.
-    pub fn kernel_width_scale(self, factor: f64) -> Self {
-        self.filter_sharpness(crate::filter::FilterSharpness::KernelWidthScale(factor))
-    }
-
-    /// Set negative-lobe amplification target (zero cost).
+    /// Set negative-lobe amplification target (zero cost, default 0.0).
     ///
     /// Range: `0.0` (none) to ~`50.0` (aggressive). Matches imageflow's
-    /// `f.sharpen` parameter.
-    /// Shorthand for `filter_sharpness(FilterSharpness::SharpenPercent(pct))`.
-    pub fn sharpen_percent(self, pct: f32) -> Self {
-        self.filter_sharpness(crate::filter::FilterSharpness::SharpenPercent(pct))
+    /// `f.sharpen` parameter. Only increases sharpness beyond what the
+    /// filter naturally provides.
+    /// Can be combined with [`kernel_width_scale`](Self::kernel_width_scale).
+    pub fn sharpen_percent(mut self, pct: f32) -> Self {
+        self.filter_sharpen_percent = Some(pct);
+        self
     }
 
     /// Resize in linear light (correct, default).
@@ -420,7 +423,8 @@ impl ResizeConfigBuilder {
             output,
             sharpen: self.sharpen,
             post_blur_sigma: self.post_blur_sigma,
-            filter_sharpness: self.filter_sharpness,
+            kernel_width_scale: self.kernel_width_scale,
+            filter_sharpen_percent: self.filter_sharpen_percent,
             linear: self.linear,
             in_stride: self.in_stride,
             out_stride: self.out_stride,

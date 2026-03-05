@@ -270,9 +270,13 @@ impl<B: Background> StreamingResize<B> {
             config.linear = true;
         }
 
-        let filter = InterpolationDetails::create(config.filter)
-            .with_blur(config.filter_sharpness.blur_factor())
-            .with_sharpen_percent(config.filter_sharpness.sharpen_percent());
+        let mut filter = InterpolationDetails::create(config.filter);
+        if let Some(scale) = config.kernel_width_scale {
+            filter = filter.with_blur(scale);
+        }
+        if let Some(pct) = config.filter_sharpen_percent {
+            filter = filter.with_sharpen_percent(pct);
+        }
         let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
 
         let channels = config.channels();
