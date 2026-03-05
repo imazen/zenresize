@@ -6,15 +6,14 @@
 //! All batch benchmarks process 1000 RGBA pixels (4000 f32 values).
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use linear_srgb::default as lsrgb;
 use zenresize::{Bt709, Hlg, Pq, Srgb, TransferCurve};
 
 const ROW_LEN: usize = 4000; // 1000 RGBA pixels
 
 /// Generate test data: f32 values in [0, 1] (encoded/signal space)
 fn test_row() -> Vec<f32> {
-    (0..ROW_LEN)
-        .map(|i| i as f32 / ROW_LEN as f32)
-        .collect()
+    (0..ROW_LEN).map(|i| i as f32 / ROW_LEN as f32).collect()
 }
 
 /// Generate test data: linear f32 values for from_linear benchmarks
@@ -26,9 +25,7 @@ fn linear_row() -> Vec<f32> {
 
 /// Generate test data: u8 RGBA image (1000 pixels)
 fn test_u8_rgba() -> Vec<u8> {
-    (0..ROW_LEN)
-        .map(|i| (i % 256) as u8)
-        .collect()
+    (0..ROW_LEN).map(|i| (i % 256) as u8).collect()
 }
 
 // ============================================================================
@@ -77,16 +74,22 @@ const PQ_C2: f32 = 18.8515625;
 const PQ_C3: f32 = 18.6875;
 
 fn pq_to_linear_powf(v: f32) -> f32 {
-    if v <= 0.0 { return 0.0; }
+    if v <= 0.0 {
+        return 0.0;
+    }
     let vp = v.powf(1.0 / PQ_M2);
     let num = (vp - PQ_C1).max(0.0);
     let den = PQ_C2 - PQ_C3 * vp;
-    if den <= 0.0 { return 1.0; }
+    if den <= 0.0 {
+        return 1.0;
+    }
     (num / den).powf(1.0 / PQ_M1)
 }
 
 fn pq_from_linear_powf(v: f32) -> f32 {
-    if v <= 0.0 { return 0.0; }
+    if v <= 0.0 {
+        return 0.0;
+    }
     let vp = v.powf(PQ_M1);
     let num = PQ_C1 + PQ_C2 * vp;
     let den = 1.0 + PQ_C3 * vp;
@@ -98,15 +101,23 @@ const HLG_B: f32 = 0.28466892;
 const HLG_C: f32 = 0.55991073;
 
 fn hlg_to_linear_powf(v: f32) -> f32 {
-    if v <= 0.0 { 0.0 }
-    else if v <= 0.5 { (v * v) / 3.0 }
-    else { (((v - HLG_C) / HLG_A).exp() + HLG_B) / 12.0 }
+    if v <= 0.0 {
+        0.0
+    } else if v <= 0.5 {
+        (v * v) / 3.0
+    } else {
+        (((v - HLG_C) / HLG_A).exp() + HLG_B) / 12.0
+    }
 }
 
 fn hlg_from_linear_powf(v: f32) -> f32 {
-    if v <= 0.0 { 0.0 }
-    else if v <= 1.0 / 12.0 { (3.0 * v).sqrt() }
-    else { HLG_A * (12.0 * v - HLG_B).ln() + HLG_C }
+    if v <= 0.0 {
+        0.0
+    } else if v <= 1.0 / 12.0 {
+        (3.0 * v).sqrt()
+    } else {
+        HLG_A * (12.0 * v - HLG_B).ln() + HLG_C
+    }
 }
 
 // ============================================================================
@@ -123,7 +134,9 @@ fn bench_batch_to_linear(c: &mut Criterion) {
         b.iter(|| {
             row.copy_from_slice(&encoded_row);
             for pixel in row.chunks_exact_mut(4) {
-                for v in &mut pixel[..3] { *v = srgb_to_linear_powf(*v); }
+                for v in &mut pixel[..3] {
+                    *v = srgb_to_linear_powf(*v);
+                }
             }
             std::hint::black_box(&row);
         });
@@ -152,13 +165,37 @@ fn bench_batch_to_linear(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("srgb/linear_srgb_slice", |b| {
+        let mut row = encoded_row.clone();
+        b.iter(|| {
+            row.copy_from_slice(&encoded_row);
+            lsrgb::srgb_to_linear_slice(&mut row);
+            std::hint::black_box(&row);
+        });
+    });
+
+    group.bench_function("srgb/linear_srgb_fast_loop", |b| {
+        let mut row = encoded_row.clone();
+        b.iter(|| {
+            row.copy_from_slice(&encoded_row);
+            for pixel in row.chunks_exact_mut(4) {
+                for v in &mut pixel[..3] {
+                    *v = lsrgb::srgb_to_linear_fast(*v);
+                }
+            }
+            std::hint::black_box(&row);
+        });
+    });
+
     // --- BT.709 ---
     group.bench_function("bt709/powf_loop", |b| {
         let mut row = encoded_row.clone();
         b.iter(|| {
             row.copy_from_slice(&encoded_row);
             for pixel in row.chunks_exact_mut(4) {
-                for v in &mut pixel[..3] { *v = bt709_to_linear_powf(*v); }
+                for v in &mut pixel[..3] {
+                    *v = bt709_to_linear_powf(*v);
+                }
             }
             std::hint::black_box(&row);
         });
@@ -193,7 +230,9 @@ fn bench_batch_to_linear(c: &mut Criterion) {
         b.iter(|| {
             row.copy_from_slice(&encoded_row);
             for pixel in row.chunks_exact_mut(4) {
-                for v in &mut pixel[..3] { *v = pq_to_linear_powf(*v); }
+                for v in &mut pixel[..3] {
+                    *v = pq_to_linear_powf(*v);
+                }
             }
             std::hint::black_box(&row);
         });
@@ -228,7 +267,9 @@ fn bench_batch_to_linear(c: &mut Criterion) {
         b.iter(|| {
             row.copy_from_slice(&encoded_row);
             for pixel in row.chunks_exact_mut(4) {
-                for v in &mut pixel[..3] { *v = hlg_to_linear_powf(*v); }
+                for v in &mut pixel[..3] {
+                    *v = hlg_to_linear_powf(*v);
+                }
             }
             std::hint::black_box(&row);
         });
@@ -274,7 +315,9 @@ fn bench_batch_from_linear(c: &mut Criterion) {
         b.iter(|| {
             row.copy_from_slice(&linear_data);
             for pixel in row.chunks_exact_mut(4) {
-                for v in &mut pixel[..3] { *v = srgb_from_linear_powf(*v); }
+                for v in &mut pixel[..3] {
+                    *v = srgb_from_linear_powf(*v);
+                }
             }
             std::hint::black_box(&row);
         });
@@ -303,17 +346,41 @@ fn bench_batch_from_linear(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("srgb/linear_srgb_slice", |b| {
+        let mut row = linear_data.clone();
+        b.iter(|| {
+            row.copy_from_slice(&linear_data);
+            lsrgb::linear_to_srgb_slice(&mut row);
+            std::hint::black_box(&row);
+        });
+    });
+
+    group.bench_function("srgb/linear_srgb_fast_loop", |b| {
+        let mut row = linear_data.clone();
+        b.iter(|| {
+            row.copy_from_slice(&linear_data);
+            for pixel in row.chunks_exact_mut(4) {
+                for v in &mut pixel[..3] {
+                    *v = lsrgb::linear_to_srgb_fast(*v);
+                }
+            }
+            std::hint::black_box(&row);
+        });
+    });
+
     // --- BT.709 ---
     group.bench_function("bt709/powf_loop", |b| {
         let mut row = linear_data.clone();
         b.iter(|| {
             row.copy_from_slice(&linear_data);
             for pixel in row.chunks_exact_mut(4) {
-                for v in &mut pixel[..3] { *v = bt709_from_linear_powf(*v); }
+                for v in &mut pixel[..3] {
+                    *v = bt709_from_linear_powf(*v);
+                }
             }
             std::hint::black_box(&row);
         });
-        });
+    });
 
     group.bench_function("bt709/zenresize", |b| {
         let bt709 = Bt709;
@@ -344,7 +411,9 @@ fn bench_batch_from_linear(c: &mut Criterion) {
         b.iter(|| {
             row.copy_from_slice(&linear_data);
             for pixel in row.chunks_exact_mut(4) {
-                for v in &mut pixel[..3] { *v = pq_from_linear_powf(*v); }
+                for v in &mut pixel[..3] {
+                    *v = pq_from_linear_powf(*v);
+                }
             }
             std::hint::black_box(&row);
         });
@@ -379,7 +448,9 @@ fn bench_batch_from_linear(c: &mut Criterion) {
         b.iter(|| {
             row.copy_from_slice(&linear_data);
             for pixel in row.chunks_exact_mut(4) {
-                for v in &mut pixel[..3] { *v = hlg_from_linear_powf(*v); }
+                for v in &mut pixel[..3] {
+                    *v = hlg_from_linear_powf(*v);
+                }
             }
             std::hint::black_box(&row);
         });
@@ -435,9 +506,12 @@ fn bench_u8_to_linear(c: &mut Criterion) {
         let dst_stride = 1000 * 4 * 4; // 1000 RGBA pixels * 4 channels * 4 bytes/f32
         b.iter(|| {
             colorutils_rs::rgba_to_linear(
-                &input, src_stride,
-                &mut dst, dst_stride,
-                1000, 1,
+                &input,
+                src_stride,
+                &mut dst,
+                dst_stride,
+                1000,
+                1,
                 colorutils_rs::TransferFunction::Srgb,
             );
             std::hint::black_box(&dst);
@@ -447,5 +521,10 @@ fn bench_u8_to_linear(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_batch_to_linear, bench_batch_from_linear, bench_u8_to_linear);
+criterion_group!(
+    benches,
+    bench_batch_to_linear,
+    bench_batch_from_linear,
+    bench_u8_to_linear
+);
 criterion_main!(benches);

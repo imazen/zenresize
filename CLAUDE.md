@@ -52,6 +52,10 @@ Located in `src/simd/`:
 
 `tests/golden_outputs.rs` — Exact-match checksums for all paths. Stored in `test_outputs/` (gitignored). Must regenerate after any change to FMA accumulation order or numerical behavior in f32/4ch kernels.
 
+## Build Rules
+
+**NEVER compile with `-Ctarget-cpu=native` except for diagnostics (e.g., `cargo asm`).** We will never deploy "native" binaries. All production and benchmark builds must use dynamic dispatch via `incant!`/`arcane`/`rite`. Performance must be verified on every token tier using `dangerously_disable_token_process_wide(true)` — not just the highest tier the machine supports. Use `testable_dispatch` feature in dev-dependencies if needed to override compile-time feature guarantees.
+
 ## Investigation Notes
 
 (none currently)
