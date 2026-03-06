@@ -483,7 +483,7 @@ impl ResizeConfigBuilder {
     ///
     /// Alias for [`resize_sharpen`](Self::resize_sharpen).
     #[doc(hidden)]
-    pub fn sharpen_percent(mut self, pct: f32) -> Self {
+    pub fn sharpen_percent(self, pct: f32) -> Self {
         self.resize_sharpen(pct)
     }
 
