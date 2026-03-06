@@ -113,6 +113,25 @@ mod reference {
 // palette sRGB comparison
 // ============================================================================
 
+/// Tolerance for sRGB comparisons against palette.
+///
+/// Near the piecewise threshold (~0.003–0.04 in gamma, ~0.001–0.004 in linear),
+/// our C0-continuous constants (moxcms) diverge from palette's IEC textbook
+/// constants. This is documented and intentional — relax tolerance in that region.
+fn srgb_palette_tolerance(v: f32, is_gamma_domain: bool) -> f32 {
+    // We use C0-continuous constants (a=0.055011, threshold≈0.03929).
+    // Palette uses IEC textbook (a=0.055, threshold=0.04045).
+    // Below both thresholds, both use `v / 12.92` — tight tolerance.
+    // In the power segment, the different offset `a` shifts all values,
+    // producing ~1e-5 max difference throughout. Worst near the breakpoint.
+    let in_linear_segment = if is_gamma_domain {
+        v < 0.039
+    } else {
+        v < 0.003
+    };
+    if in_linear_segment { 1e-6 } else { 1e-5 }
+}
+
 #[test]
 fn srgb_to_linear_vs_palette() {
     use palette::encoding::{IntoLinear, Srgb as PaletteSrgb};
@@ -132,9 +151,10 @@ fn srgb_to_linear_vs_palette() {
             max_diff = diff;
             worst_input = v;
         }
+        let tol = srgb_palette_tolerance(v, true);
         assert!(
-            diff < 1e-5,
-            "sRGB to_linear({v}): ours={ours}, palette={palette_val}, diff={diff}"
+            diff < tol,
+            "sRGB to_linear({v}): ours={ours}, palette={palette_val}, diff={diff} (tol={tol})"
         );
     }
     eprintln!("sRGB to_linear vs palette: max_diff={max_diff} at {worst_input}");
@@ -159,9 +179,10 @@ fn srgb_from_linear_vs_palette() {
             max_diff = diff;
             worst_input = v;
         }
+        let tol = srgb_palette_tolerance(v, false);
         assert!(
-            diff < 1e-5,
-            "sRGB from_linear({v}): ours={ours}, palette={palette_val}, diff={diff}"
+            diff < tol,
+            "sRGB from_linear({v}): ours={ours}, palette={palette_val}, diff={diff} (tol={tol})"
         );
     }
     eprintln!("sRGB from_linear vs palette: max_diff={max_diff} at {worst_input}");
@@ -240,7 +261,7 @@ fn srgb_to_linear_vs_f64() {
             max_err = err;
         }
         assert!(
-            err < 3e-6,
+            err < 5e-7,
             "sRGB to_linear f64 ref at {v:.6}: ours={ours}, ref={ref_val}, err={err}"
         );
     }
@@ -262,7 +283,7 @@ fn srgb_from_linear_vs_f64() {
             max_err = err;
         }
         assert!(
-            err < 3e-6,
+            err < 5e-7,
             "sRGB from_linear f64 ref at {v:.6}: ours={ours}, ref={ref_val}, err={err}"
         );
     }
