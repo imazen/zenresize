@@ -104,6 +104,7 @@ enum StreamingPath {
 /// push data in the optimal format, avoiding redundant conversions. For
 /// example, a JPEG decoder could fuse YCbCr→linear i12 conversion and
 /// push via [`push_row_i16()`](StreamingResize::push_row_i16).
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkingFormat {
     /// f32 linear-light (or f32 gamma for `TransferFunction::Linear`).
@@ -117,6 +118,7 @@ pub enum WorkingFormat {
 }
 
 /// Errors from streaming resize push operations.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamingError {
     /// `push_row` was called after `finish()`.
@@ -479,7 +481,7 @@ impl<B: Background> StreamingResize<B> {
         self.config.output_row_len()
     }
 
-    /// Mutable reference to the background (e.g., for pushing rows to [`StreamedBackground`]).
+    /// Mutable reference to the background (e.g., for pushing rows to [`crate::StreamedBackground`]).
     pub fn background_mut(&mut self) -> &mut B {
         &mut self.background
     }

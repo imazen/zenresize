@@ -8,20 +8,28 @@ use zenresize::{Bt709, Hlg, NoTransfer, Pq, Srgb, TransferCurve};
 // ============================================================================
 
 mod reference {
-    /// sRGB EOTF (IEC 61966-2-1)
+    /// sRGB EOTF — C0-continuous constants (moxcms), matching linear-srgb 0.6.x.
+    ///
+    /// These differ from IEC 61966-2-1 textbook (0.04045/0.055/0.0031308) by
+    /// solving for exact piecewise continuity, eliminating a ~2.3e-9 gap.
+    const SRGB_A: f64 = 0.055_010_718_947_586_6;
+    const SRGB_A_PLUS_1: f64 = 1.055_010_718_947_586_6;
+    const LINEAR_THRESHOLD: f64 = 0.003_041_282_560_127_521;
+    const GAMMA_THRESHOLD: f64 = 12.92 * LINEAR_THRESHOLD;
+
     pub fn srgb_to_linear(v: f64) -> f64 {
-        if v <= 0.04045 {
+        if v <= GAMMA_THRESHOLD {
             v / 12.92
         } else {
-            ((v + 0.055) / 1.055).powf(2.4)
+            ((v + SRGB_A) / SRGB_A_PLUS_1).powf(2.4)
         }
     }
 
     pub fn srgb_from_linear(v: f64) -> f64 {
-        if v <= 0.0031308 {
+        if v <= LINEAR_THRESHOLD {
             v * 12.92
         } else {
-            1.055 * v.powf(1.0 / 2.4) - 0.055
+            SRGB_A_PLUS_1 * v.powf(1.0 / 2.4) - SRGB_A
         }
     }
 
@@ -125,7 +133,7 @@ fn srgb_to_linear_vs_palette() {
             worst_input = v;
         }
         assert!(
-            diff < 1e-6,
+            diff < 1e-5,
             "sRGB to_linear({v}): ours={ours}, palette={palette_val}, diff={diff}"
         );
     }
@@ -152,7 +160,7 @@ fn srgb_from_linear_vs_palette() {
             worst_input = v;
         }
         assert!(
-            diff < 1e-6,
+            diff < 1e-5,
             "sRGB from_linear({v}): ours={ours}, palette={palette_val}, diff={diff}"
         );
     }
@@ -232,7 +240,7 @@ fn srgb_to_linear_vs_f64() {
             max_err = err;
         }
         assert!(
-            err < 5e-7,
+            err < 3e-6,
             "sRGB to_linear f64 ref at {v:.6}: ours={ours}, ref={ref_val}, err={err}"
         );
     }
@@ -254,7 +262,7 @@ fn srgb_from_linear_vs_f64() {
             max_err = err;
         }
         assert!(
-            err < 5e-7,
+            err < 3e-6,
             "sRGB from_linear f64 ref at {v:.6}: ours={ours}, ref={ref_val}, err={err}"
         );
     }

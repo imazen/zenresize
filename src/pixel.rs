@@ -74,6 +74,7 @@ impl Element for f32 {
 /// | Hermite      |  0.000  |   | Lanczos      |  0.067  |
 /// | CubicBSpline |  0.000  |   | Lanczos2     |  0.043  |
 /// | Robidoux     |  0.009  |   | RobidouxSharp|  0.033  |
+#[non_exhaustive]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum LobeRatio {
     /// Use the filter's natural negative-lobe ratio (default).

@@ -17,6 +17,7 @@ use core::f64::consts::PI;
 /// Named interpolation filter presets.
 ///
 /// These match imageflow's filter names exactly for compatibility.
+#[non_exhaustive]
 #[repr(u8)]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Default)]
 pub enum Filter {

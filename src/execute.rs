@@ -192,7 +192,7 @@ pub fn execute_layout(
 /// and finalizes into a [`LayoutPlan`] before executing.
 ///
 /// Works for both primary and secondary planes — pass whichever `IdealLayout` you have.
-/// For the primary, get it from [`Pipeline::plan()`]. For a secondary plane,
+/// For the primary, get it from [`crate::Pipeline::plan()`]. For a secondary plane,
 /// get it from [`IdealLayout::derive_secondary()`].
 pub fn execute(
     source_pixels: &[u8],
@@ -226,7 +226,7 @@ pub fn execute(
 /// Execute an [`IdealLayout`] with a real [`DecoderOffer`] (decoder negotiation).
 ///
 /// Use this when the decoder can do partial work (prescale, crop, orientation).
-/// The `request` and `ideal` come from [`Pipeline::plan()`] (primary) or
+/// The `request` and `ideal` come from [`crate::Pipeline::plan()`] (primary) or
 /// [`IdealLayout::derive_secondary()`] (secondary). The `offer` describes
 /// what the decoder actually produced.
 ///
@@ -298,7 +298,7 @@ pub fn execute_secondary(
 /// # Canvas padding
 ///
 /// When the canvas is larger than the resized image (padding case):
-/// - For [`SolidBackground`]: the padding area is filled with the solid color
+/// - For [`crate::SolidBackground`]: the padding area is filled with the solid color
 ///   (automatically converted to sRGB u8).
 /// - For other backgrounds: the padding area uses the plan's `canvas_color`.
 ///

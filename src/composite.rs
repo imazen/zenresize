@@ -14,6 +14,7 @@ use alloc::{vec, vec::Vec};
 use zenpixels::PixelDescriptor;
 
 /// Error type for compositing configuration.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompositeError {
     /// `RgbaPremul` input with compositing is mathematically incorrect:
@@ -33,6 +34,9 @@ impl core::fmt::Display for CompositeError {
         }
     }
 }
+
+#[cfg(feature = "std")]
+impl std::error::Error for CompositeError {}
 
 /// Background for source-over compositing.
 ///

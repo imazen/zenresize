@@ -39,13 +39,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - name: Patch path deps to git refs
-        shell: bash
-        run: |
-          sed \
-            -e 's|path = "\.\./linear-srgb"|git = "https://github.com/imazen/linear-srgb"|g' \
-            -e 's|path = "\.\./zenpixels/zenpixels"|git = "https://github.com/imazen/zenpixels"|g' \
-            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
       - name: Strip dev-deps and benches (erydanos LLVM crash on aarch64-windows)
         if: matrix.strip-colorutils
         shell: bash
@@ -74,13 +67,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: i686-unknown-linux-gnu
-      - name: Patch path deps to git refs
-        shell: bash
-        run: |
-          sed \
-            -e 's|path = "\.\./linear-srgb"|git = "https://github.com/imazen/linear-srgb"|g' \
-            -e 's|path = "\.\./zenpixels/zenpixels"|git = "https://github.com/imazen/zenpixels"|g' \
-            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
       - uses: taiki-e/install-action@cross
       - uses: Swatinem/rust-cache@v2
         with:
@@ -96,13 +82,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip1
-      - name: Patch path deps to git refs
-        shell: bash
-        run: |
-          sed \
-            -e 's|path = "\.\./linear-srgb"|git = "https://github.com/imazen/linear-srgb"|g' \
-            -e 's|path = "\.\./zenpixels/zenpixels"|git = "https://github.com/imazen/zenpixels"|g' \
-            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
       - name: Install wasmtime
         uses: bytecodealliance/actions/wasmtime/setup@v1
       - uses: Swatinem/rust-cache@v2
@@ -119,13 +98,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - name: Patch path deps to git refs
-        shell: bash
-        run: |
-          sed \
-            -e 's|path = "\.\./linear-srgb"|git = "https://github.com/imazen/linear-srgb"|g' \
-            -e 's|path = "\.\./zenpixels/zenpixels"|git = "https://github.com/imazen/zenpixels"|g' \
-            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
       - uses: Swatinem/rust-cache@v2
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
@@ -147,13 +119,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - name: Patch path deps to git refs
-        shell: bash
-        run: |
-          sed \
-            -e 's|path = "\.\./linear-srgb"|git = "https://github.com/imazen/linear-srgb"|g' \
-            -e 's|path = "\.\./zenpixels/zenpixels"|git = "https://github.com/imazen/zenpixels"|g' \
-            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
       - uses: taiki-e/install-action@cargo-hack
       - uses: Swatinem/rust-cache@v2
       - name: Check MSRV
@@ -165,13 +130,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - name: Patch path deps to git refs
-        shell: bash
-        run: |
-          sed \
-            -e 's|path = "\.\./linear-srgb"|git = "https://github.com/imazen/linear-srgb"|g' \
-            -e 's|path = "\.\./zenpixels/zenpixels"|git = "https://github.com/imazen/zenpixels"|g' \
-            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
       - name: Generate coverage
