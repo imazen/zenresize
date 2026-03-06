@@ -295,6 +295,29 @@ The imgref functions override the config's dimensions, formats, and stride. Filt
 | `std` | yes | Enables std library. Disable for `no_std` + `alloc`. |
 | `layout` | yes | Layout negotiation and pipeline execution via [zenlayout](https://crates.io/crates/zenlayout). |
 | `avx512` | no | Native AVX-512 V-filter kernel (x86-64 only). |
+| `pretty-safe` | no | Replaces bounds-checked indexing with `get_unchecked` in SIMD kernels where bounds are proven by prior guards. ~17% fewer instructions on x86-64. Introduces `unsafe`; the default build is `#![forbid(unsafe_code)]`. |
+
+## Benchmarks
+
+The `benches/` directory contains 11 benchmark binaries covering throughput, precision, and profiling:
+
+| Benchmark | What it measures |
+|-----------|-----------------|
+| `paired_bench` | Interleaved paired comparison against pic-scale, fast_image_resize, resize. Statistical diff with 95% CI. |
+| `resize_bench` | Criterion throughput at 50%, 25%, and 200% scale across image sizes. |
+| `tango_bench` | Regression detection across code changes. |
+| `sweep_bench` | Performance across sizes (64–7680 px) and ratios (12.5%–300%). CSV output. |
+| `precision` | f32/u8 accuracy vs f64 reference and cross-library comparison. |
+| `transfer_bench` | sRGB/BT.709/PQ/HLG transfer function speed vs powf and colorutils-rs. |
+| `planar_bench` | Interleaved vs planar resize strategies at 0.5–24 MP. |
+| `profile_*` | Minimal binaries for callgrind/perf (sRGB, linear, f32, f16, streaming). |
+
+```bash
+cargo bench --bench paired_bench    # quick paired comparison
+cargo bench --bench resize_bench    # full criterion suite (HTML reports in target/criterion/)
+```
+
+The `bench-simd-competitors` feature enables SIMD on pic-scale for fair comparison (off by default, so pic-scale runs scalar-only).
 
 ## License
 
