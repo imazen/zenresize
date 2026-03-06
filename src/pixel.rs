@@ -140,9 +140,9 @@ pub struct ResizeConfig {
     /// Post-resize unsharp mask amount (0.0 = none).
     ///
     /// Runs a separate unsharp-mask pass over the output.
-    /// Consider [`sharpen_percent`](ResizeConfigBuilder::sharpen_percent)
+    /// Consider [`resize_sharpen`](ResizeConfigBuilder::resize_sharpen)
     /// for zero-cost sharpening during resampling.
-    pub sharpen: f32,
+    pub post_sharpen: f32,
     /// Post-resize Gaussian blur sigma (0.0 = none).
     ///
     /// Runs a separate all-positive Gaussian convolution pass.
@@ -365,7 +365,7 @@ pub struct ResizeConfigBuilder {
     filter: crate::filter::Filter,
     input: PixelDescriptor,
     output: Option<PixelDescriptor>,
-    sharpen: f32,
+    post_sharpen: f32,
     post_blur_sigma: f32,
     kernel_width_scale: Option<f64>,
     lobe_ratio: LobeRatio,
@@ -384,7 +384,7 @@ impl ResizeConfigBuilder {
             filter: crate::filter::Filter::default(),
             input: PixelDescriptor::RGBA8_SRGB,
             output: None,
-            sharpen: 0.0,
+            post_sharpen: 0.0,
             post_blur_sigma: 0.0,
             kernel_width_scale: None,
             lobe_ratio: LobeRatio::Natural,
@@ -419,9 +419,19 @@ impl ResizeConfigBuilder {
         self
     }
 
-    /// Set sharpening amount (0.0 = none).
+    /// Set post-resize unsharp mask amount (0.0 = none).
+    ///
+    /// Runs a separate pass after resampling. For zero-cost sharpening
+    /// during resampling, use [`resize_sharpen`](Self::resize_sharpen).
+    pub fn post_sharpen(mut self, amount: f32) -> Self {
+        self.post_sharpen = amount;
+        self
+    }
+
+    /// Deprecated alias for [`post_sharpen`](Self::post_sharpen).
+    #[doc(hidden)]
     pub fn sharpen(mut self, amount: f32) -> Self {
-        self.sharpen = amount;
+        self.post_sharpen = amount;
         self
     }
 
@@ -454,15 +464,27 @@ impl ResizeConfigBuilder {
         self
     }
 
-    /// Set negative-lobe amplification as a percentage (imageflow compat).
+    /// Sharpen during resampling by amplifying negative lobes (zero cost).
+    ///
+    /// `pct` is a percentage (0–100). Sets an absolute target ratio of
+    /// `pct / 100`. Only amplifies — values below the filter's natural
+    /// negative-lobe ratio are no-ops. For example, Lanczos has a natural
+    /// ratio of ~6.7%, so `resize_sharpen(5.0)` is a no-op but
+    /// `resize_sharpen(15.0)` amplifies.
     ///
     /// Shorthand for `.lobe_ratio(LobeRatio::SharpenPercent(pct))`.
-    /// Sets an absolute target of `pct / 100`. Only amplifies — values
-    /// below `natural_ratio × 100` are no-ops.
     /// See [`LobeRatio::SharpenPercent`] for details.
-    pub fn sharpen_percent(mut self, pct: f32) -> Self {
+    pub fn resize_sharpen(mut self, pct: f32) -> Self {
         self.lobe_ratio = LobeRatio::SharpenPercent(pct);
         self
+    }
+
+    /// Set negative-lobe amplification as a percentage (imageflow compat).
+    ///
+    /// Alias for [`resize_sharpen`](Self::resize_sharpen).
+    #[doc(hidden)]
+    pub fn sharpen_percent(mut self, pct: f32) -> Self {
+        self.resize_sharpen(pct)
     }
 
     /// Resize in linear light (correct, default).
@@ -500,7 +522,7 @@ impl ResizeConfigBuilder {
             out_height: self.out_height,
             input: self.input,
             output,
-            sharpen: self.sharpen,
+            post_sharpen: self.post_sharpen,
             post_blur_sigma: self.post_blur_sigma,
             kernel_width_scale: self.kernel_width_scale,
             lobe_ratio: self.lobe_ratio,

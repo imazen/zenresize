@@ -667,14 +667,14 @@ impl<B: Background> Resizer<B> {
         }
 
         // Post-resize sharpening (unsharp mask).
-        if config.sharpen > 0.0 {
+        if config.post_sharpen > 0.0 {
             crate::blur::unsharp_mask_u8(
                 output,
                 config.out_width,
                 config.out_height,
                 channels,
-                config.sharpen,
-                config.sharpen * 0.5 + 0.5, // sigma scales with amount
+                config.post_sharpen,
+                config.post_sharpen * 0.5 + 0.5, // sigma scales with amount
             );
         }
 
@@ -801,14 +801,14 @@ impl<B: Background> Resizer<B> {
         // Post-resize sharpening (unsharp mask).
         let config = &self.config;
         let out_channels = config.output.channels();
-        if config.sharpen > 0.0 {
+        if config.post_sharpen > 0.0 {
             crate::blur::unsharp_mask_f32(
                 output,
                 config.out_width,
                 config.out_height,
                 out_channels,
-                config.sharpen,
-                config.sharpen * 0.5 + 0.5,
+                config.post_sharpen,
+                config.post_sharpen * 0.5 + 0.5,
             );
         }
 

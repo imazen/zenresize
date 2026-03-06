@@ -1500,7 +1500,7 @@ mod tests {
 
         assert_eq!(config.filter, Filter::default());
         assert!(config.linear);
-        assert_eq!(config.sharpen, 0.0);
+        assert_eq!(config.post_sharpen, 0.0);
         assert_eq!(config.in_stride, 0);
         assert_eq!(config.out_stride, 0);
     }

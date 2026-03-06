@@ -152,7 +152,8 @@ let config = ResizeConfig::builder(in_w, in_h, out_w, out_h)
     .output(PixelDescriptor::RGBA8_SRGB)
     .linear()                        // resize in linear light (default)
     .srgb()                          // resize in sRGB space (faster, slight quality loss)
-    .sharpen(0.0)                    // post-resize unsharp mask (default: 0.0)
+    .resize_sharpen(15.0)            // sharpen during resampling (% negative lobe, default: 0)
+    .post_sharpen(0.0)               // post-resize unsharp mask (default: 0.0)
     .in_stride(stride)               // input row stride in elements (default: tightly packed)
     .out_stride(stride)              // output row stride in elements (default: tightly packed)
     .build();
@@ -165,7 +166,8 @@ If you call `.build()` with no other methods:
 - Filter: `Robidoux`
 - Format: `RGBA8_SRGB` for both input and output
 - Linear: `true` (sRGB u8 -> linear f32 -> resize -> sRGB u8)
-- Sharpen: `0.0`
+- Resize sharpen: `0.0` (natural filter ratio)
+- Post sharpen: `0.0`
 - Stride: tightly packed (width * channels)
 
 ### Config fields
@@ -181,7 +183,7 @@ config.out_height       // u32
 config.input            // PixelDescriptor
 config.output           // PixelDescriptor
 config.linear           // bool
-config.sharpen          // f32
+config.post_sharpen     // f32
 config.post_blur_sigma  // f32
 config.kernel_width_scale // Option<f64>
 config.lobe_ratio       // LobeRatio
