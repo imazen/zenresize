@@ -1,10 +1,10 @@
 # zenresize
 
-[![crates.io](https://img.shields.io/crates/v/zenresize?style=flat)](https://crates.io/crates/zenresize)
-[![docs.rs](https://img.shields.io/docsrs/zenresize?style=flat)](https://docs.rs/zenresize)
-[![CI](https://img.shields.io/github/actions/workflow/status/imazen/zenresize/ci.yml?branch=main&style=flat)](https://github.com/imazen/zenresize/actions/workflows/ci.yml)
-[![MSRV](https://img.shields.io/badge/MSRV-1.93-blue?style=flat)](https://www.rust-lang.org)
-[![license](https://img.shields.io/crates/l/zenresize?style=flat)](https://github.com/imazen/zenresize/blob/main/LICENSE)
+[![crates.io](https://img.shields.io/crates/v/zenresize?style=for-the-badge)](https://crates.io/crates/zenresize)
+[![docs.rs](https://img.shields.io/docsrs/zenresize?style=for-the-badge)](https://docs.rs/zenresize)
+[![CI](https://img.shields.io/github/actions/workflow/status/imazen/zenresize/ci.yml?branch=main&style=for-the-badge)](https://github.com/imazen/zenresize/actions/workflows/ci.yml)
+[![MSRV](https://img.shields.io/badge/MSRV-1.93-blue?style=for-the-badge)](https://www.rust-lang.org)
+[![license](https://img.shields.io/crates/l/zenresize?style=for-the-badge)](https://github.com/imazen/zenresize/blob/main/LICENSE)
 
 High-quality image resampling with 31 filters, streaming API, and SIMD acceleration.
 
