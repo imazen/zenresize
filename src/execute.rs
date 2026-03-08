@@ -16,6 +16,98 @@ use crate::layout::{
 use crate::resize::Resizer;
 use zenpixels::{AlphaMode, ChannelLayout, ChannelType, PixelDescriptor};
 
+// ─── Canvas-space background offset adapter ────────────────────────────
+
+/// Wraps a canvas-space [`Background`] to translate coordinates for the Resizer.
+///
+/// The inner background provides rows at canvas coordinates (0..canvas_h, canvas width).
+/// This wrapper maps resize-output row `y` → canvas row `y + y_offset` and extracts
+/// the sub-region starting at `x_offset` columns. Used internally by
+/// [`execute_layout_with_background`] when the background covers the full canvas.
+struct OffsetBackground<B: Background> {
+    inner: B,
+    x_offset: i32,
+    y_offset: i32,
+    canvas_w: u32,
+    canvas_h: u32,
+    ch: usize,
+    /// Buffer for one full canvas-width row from inner.fill_row().
+    canvas_row_buf: Vec<f32>,
+}
+
+impl<B: Background> OffsetBackground<B> {
+    fn new(inner: B, px: i32, py: i32, canvas_w: u32, canvas_h: u32, ch: usize) -> Self {
+        Self {
+            inner,
+            x_offset: px,
+            y_offset: py,
+            canvas_w,
+            canvas_h,
+            ch,
+            canvas_row_buf: vec![0.0f32; canvas_w as usize * ch],
+        }
+    }
+
+    fn into_inner(self) -> B {
+        self.inner
+    }
+}
+
+impl<B: Background> Background for OffsetBackground<B> {
+    fn fill_row(&mut self, dst: &mut [f32], y: u32, channels: u8) {
+        let canvas_y = self.y_offset as i64 + y as i64;
+
+        // Row outside canvas bounds → transparent
+        if canvas_y < 0 || canvas_y >= self.canvas_h as i64 {
+            dst.fill(0.0);
+            return;
+        }
+
+        // Fetch full canvas-width row from inner background
+        self.inner
+            .fill_row(&mut self.canvas_row_buf, canvas_y as u32, channels);
+
+        let ch = self.ch;
+        let dst_pixels = dst.len() / ch;
+
+        // Handle x offset with clipping
+        let x_start = self.x_offset as i64;
+        let x_end = x_start + dst_pixels as i64;
+        let canvas_w = self.canvas_w as i64;
+
+        if x_start >= canvas_w || x_end <= 0 {
+            dst.fill(0.0);
+            return;
+        }
+
+        // Zero-fill, then copy the overlapping region
+        dst.fill(0.0);
+        let src_col_start = x_start.max(0) as usize;
+        let src_col_end = x_end.min(canvas_w) as usize;
+        let dst_col_start = (src_col_start as i64 - x_start) as usize;
+        let copy_cols = src_col_end - src_col_start;
+
+        dst[dst_col_start * ch..(dst_col_start + copy_cols) * ch]
+            .copy_from_slice(&self.canvas_row_buf[src_col_start * ch..src_col_end * ch]);
+    }
+
+    #[inline(always)]
+    fn is_transparent(&self) -> bool {
+        self.inner.is_transparent()
+    }
+
+    #[inline(always)]
+    fn is_opaque(&self) -> bool {
+        self.inner.is_opaque()
+    }
+
+    // Deliberately return None — force per-row path since we need coordinate translation.
+    #[inline(always)]
+    fn solid_pixel(&self) -> Option<&[f32; 4]> {
+        None
+    }
+}
+
 /// Execute a finalized [`LayoutPlan`] on decoder output.
 ///
 /// Pipeline: trim → orient → resize → canvas placement → edge replication.
@@ -300,7 +392,12 @@ pub fn execute_secondary(
 /// When the canvas is larger than the resized image (padding case):
 /// - For [`crate::SolidBackground`]: the padding area is filled with the solid color
 ///   (automatically converted to sRGB u8).
-/// - For other backgrounds: the padding area uses the plan's `canvas_color`.
+/// - For non-solid backgrounds (e.g. [`crate::SliceBackground`]): the padding area
+///   is filled from the background data. The background must cover the full canvas
+///   dimensions (`canvas_w × canvas_h` rows at `canvas_w * channels` elements each).
+///   The resize compositing step automatically offsets into the background at the
+///   placement position.
+/// - Fallback: if no background data is available, `canvas_color` is used.
 ///
 /// # Errors
 ///
@@ -404,10 +501,21 @@ pub fn execute_layout_with_background<B: Background>(
     };
 
     // --- Step 3: Resize with compositing ---
+    let canvas_w = plan.canvas.width;
+    let canvas_h = plan.canvas.height;
+    let (px, py) = plan.placement;
+    let needs_canvas =
+        canvas_w != plan.resize_to.width || canvas_h != plan.resize_to.height || px != 0 || py != 0;
+
     // Capture solid pixel for canvas fill before moving background into Resizer.
     let solid_fill: Option<Vec<u8>> = background
         .solid_pixel()
         .map(|pixel| premul_linear_f32_to_srgb_u8_pixel(pixel, desc));
+
+    // For non-solid backgrounds with canvas expansion, the background covers the full
+    // canvas. Wrap it with OffsetBackground so the Resizer sees rows at the placement
+    // offset, then recover the inner background for canvas fill.
+    let use_offset = needs_canvas && solid_fill.is_none();
 
     let rw = plan.resize_to.width;
     let rh = plan.resize_to.height;
@@ -430,36 +538,73 @@ pub fn execute_layout_with_background<B: Background>(
         rh
     };
 
-    let resized = {
+    let (resized, mut background) = if use_offset {
+        let offset_bg = OffsetBackground::new(background, px, py, canvas_w, canvas_h, ch);
         let builder = crate::ResizeConfig::builder(orient_w, orient_h, actual_rw, actual_rh)
             .filter(filter)
             .format(desc);
-
         if let Some(ref data) = oriented {
+            let config = builder.build();
+            let mut resizer = Resizer::with_background(&config, offset_bg)?;
+            let output = resizer.resize(data);
+            (output, Some(resizer.into_background().into_inner()))
+        } else {
+            let config = builder.in_stride(trim_stride).build();
+            let mut resizer = Resizer::with_background(&config, offset_bg)?;
+            let output = resizer.resize(trimmed);
+            (output, Some(resizer.into_background().into_inner()))
+        }
+    } else {
+        let builder = crate::ResizeConfig::builder(orient_w, orient_h, actual_rw, actual_rh)
+            .filter(filter)
+            .format(desc);
+        let resized = if let Some(ref data) = oriented {
             let config = builder.build();
             Resizer::with_background(&config, background)?.resize(data)
         } else {
             let config = builder.in_stride(trim_stride).build();
             Resizer::with_background(&config, background)?.resize(trimmed)
-        }
+        };
+        (resized, None)
     };
 
     // --- Step 4: Canvas + Place ---
-    let canvas_w = plan.canvas.width;
-    let canvas_h = plan.canvas.height;
-    let (px, py) = plan.placement;
-
-    let placed = if canvas_w == resize_w && canvas_h == resize_h && px == 0 && py == 0 {
+    let placed = if !needs_canvas {
         resized
+    } else if let Some(ref pixel) = solid_fill {
+        // Solid background: fill canvas with single pixel, place resized on top
+        let mut canvas = fill_canvas(canvas_w, canvas_h, pixel.as_slice());
+        place_on_canvas(
+            &mut canvas,
+            canvas_w,
+            canvas_h,
+            &resized,
+            resize_w,
+            resize_h,
+            px,
+            py,
+            ch,
+        );
+        canvas
+    } else if let Some(ref mut bg) = background {
+        // Non-solid background: fill canvas from background rows, place resized on top
+        let mut canvas = fill_canvas_from_background(bg, canvas_w, canvas_h, desc);
+        place_on_canvas(
+            &mut canvas,
+            canvas_w,
+            canvas_h,
+            &resized,
+            resize_w,
+            resize_h,
+            px,
+            py,
+            ch,
+        );
+        canvas
     } else {
-        // The resized image already has the background composited in the placed region.
-        // For padding: use solid background color if available, else plan.canvas_color.
-        let fill_pixel = if let Some(ref pixel) = solid_fill {
-            pixel.as_slice()
-        } else {
-            &canvas_color_to_pixel(&plan.canvas_color, desc)
-        };
-        let mut canvas = fill_canvas(canvas_w, canvas_h, fill_pixel);
+        // Fallback: canvas_color (shouldn't reach here with current logic)
+        let fill_pixel = canvas_color_to_pixel(&plan.canvas_color, desc);
+        let mut canvas = fill_canvas(canvas_w, canvas_h, &fill_pixel);
         place_on_canvas(
             &mut canvas,
             canvas_w,
@@ -713,6 +858,60 @@ pub fn fill_canvas(w: u32, h: u32, pixel: &[u8]) -> Vec<u8> {
         tail[..row_len].copy_from_slice(&head[..row_len]);
     }
     buf
+}
+
+/// Fill a canvas buffer from a non-solid [`Background`] (premul linear f32 → sRGB u8).
+///
+/// Each canvas row is fetched from the background via `fill_row(y)`, unpremultiplied,
+/// gamma-corrected to sRGB, and written as u8 bytes.
+fn fill_canvas_from_background<B: Background>(
+    background: &mut B,
+    w: u32,
+    h: u32,
+    desc: PixelDescriptor,
+) -> Vec<u8> {
+    let ch = desc.channels();
+    let row_len_u8 = w as usize * ch;
+    let row_len_f32 = w as usize * ch;
+    let mut buf = vec![0u8; h as usize * row_len_u8];
+    let mut row_f32 = vec![0.0f32; row_len_f32];
+    let has_alpha = desc.has_alpha();
+
+    for y in 0..h {
+        background.fill_row(&mut row_f32, y, ch as u8);
+        let row_u8 = &mut buf[y as usize * row_len_u8..(y as usize + 1) * row_len_u8];
+        premul_f32_row_to_srgb_u8(&row_f32, row_u8, has_alpha, ch);
+    }
+    buf
+}
+
+/// Convert a row of premultiplied linear f32 pixels to sRGB u8.
+fn premul_f32_row_to_srgb_u8(src: &[f32], dst: &mut [u8], has_alpha: bool, ch: usize) {
+    if has_alpha && ch == 4 {
+        for (pixel_f32, pixel_u8) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
+            let a = pixel_f32[3];
+            let (r, g, b) = if a > 1.0 / 1024.0 {
+                let inv_a = 1.0 / a;
+                (
+                    pixel_f32[0] * inv_a,
+                    pixel_f32[1] * inv_a,
+                    pixel_f32[2] * inv_a,
+                )
+            } else {
+                (0.0, 0.0, 0.0)
+            };
+            pixel_u8[0] = linear_srgb::default::linear_to_srgb_u8(r);
+            pixel_u8[1] = linear_srgb::default::linear_to_srgb_u8(g);
+            pixel_u8[2] = linear_srgb::default::linear_to_srgb_u8(b);
+            pixel_u8[3] = (a * 255.0 + 0.5).min(255.0).max(0.0) as u8;
+        }
+    } else {
+        for (pixel_f32, pixel_u8) in src.chunks_exact(ch).zip(dst.chunks_exact_mut(ch)) {
+            for i in 0..ch {
+                pixel_u8[i] = linear_srgb::default::linear_to_srgb_u8(pixel_f32[i]);
+            }
+        }
+    }
 }
 
 /// Blit an image onto a canvas at the given placement offset.

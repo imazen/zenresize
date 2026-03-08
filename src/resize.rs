@@ -423,6 +423,11 @@ impl<B: Background> Resizer<B> {
         &mut self.background
     }
 
+    /// Consume the resizer and return the background.
+    pub fn into_background(self) -> B {
+        self.background
+    }
+
     /// Resize a u8 image, allocating and returning the output.
     ///
     /// # Panics
