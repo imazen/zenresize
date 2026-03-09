@@ -45,6 +45,7 @@ use crate::pixel::ResizeConfig;
 use crate::simd;
 use crate::transfer::{Bt709, Hlg, Pq, Srgb, TransferCurve};
 use crate::weights::{F32WeightTable, I16WeightTable};
+use whereat::{At, ResultAtExt, at};
 use zenpixels::{AlphaMode, ChannelType, TransferFunction};
 
 /// Build V-filter row references from a ring buffer cache.
@@ -250,9 +251,12 @@ impl<B: Background> StreamingResize<B> {
     ///
     /// Returns [`CompositeError::PremultipliedInput`] if the input format
     /// is `RgbaPremul` (compositing premultiplied input is mathematically incorrect).
-    pub fn with_background(config: &ResizeConfig, background: B) -> Result<Self, CompositeError> {
+    pub fn with_background(
+        config: &ResizeConfig,
+        background: B,
+    ) -> Result<Self, At<CompositeError>> {
         if config.input.alpha == Some(AlphaMode::Premultiplied) {
-            return Err(CompositeError::PremultipliedInput);
+            return Err(at!(CompositeError::PremultipliedInput));
         }
         Ok(Self::new_inner(config, background, true, 0))
     }
@@ -553,14 +557,14 @@ impl<B: Background> StreamingResize<B> {
     /// Returns [`StreamingError::AlreadyFinished`] if called after `finish()`.
     /// Returns [`StreamingError::InputTooShort`] if `row` is shorter than required.
     /// Returns [`StreamingError::RingBufferOverflow`] if output was not drained.
-    pub fn push_row(&mut self, row: &[u8]) -> Result<(), StreamingError> {
+    pub fn push_row(&mut self, row: &[u8]) -> Result<(), At<StreamingError>> {
         if self.finished {
-            return Err(StreamingError::AlreadyFinished);
+            return Err(at!(StreamingError::AlreadyFinished));
         }
         let pixel_len = self.config.input_row_len();
         let stride = self.config.effective_in_stride();
         if row.len() < pixel_len.min(stride) {
-            return Err(StreamingError::InputTooShort);
+            return Err(at!(StreamingError::InputTooShort));
         }
 
         let pixel_data = &row[..pixel_len];
@@ -568,7 +572,7 @@ impl<B: Background> StreamingResize<B> {
         match self.path {
             StreamingPath::I16Srgb => {
                 // u8 → optional premul → cache u8 directly (no linearization)
-                self.check_ring_buffer()?;
+                self.check_ring_buffer().at()?;
                 let cache_slot = self.cache_write_idx % self.cache_size;
                 if self.needs_premul {
                     simd::premultiply_u8_row(
@@ -588,7 +592,7 @@ impl<B: Background> StreamingResize<B> {
                     pixel_data,
                     &mut self.linearized_row_i16[..pixel_len],
                 );
-                return self.push_row_internal_i16();
+                return self.push_row_internal_i16().at();
             }
             StreamingPath::F32 => {}
         }
@@ -645,7 +649,7 @@ impl<B: Background> StreamingResize<B> {
             simd::premultiply_alpha_row(&mut self.temp_input_f32[..pixel_len]);
         }
 
-        self.push_row_internal()
+        self.push_row_internal().at()
     }
 
     /// Push multiple rows of u8 input pixels from a contiguous buffer.
@@ -670,17 +674,17 @@ impl<B: Background> StreamingResize<B> {
         buf: &[u8],
         stride: usize,
         count: u32,
-    ) -> Result<u32, StreamingError> {
+    ) -> Result<u32, At<StreamingError>> {
         let expected_len = if count == 0 {
             0
         } else {
             stride * (count as usize - 1) + self.config.input_row_len()
         };
         if buf.len() < expected_len {
-            return Err(StreamingError::InputTooShort);
+            return Err(at!(StreamingError::InputTooShort));
         }
         for i in 0..count as usize {
-            self.push_row(&buf[i * stride..])?;
+            self.push_row(&buf[i * stride..]).at()?;
         }
         Ok(self.output_rows_available())
     }
@@ -694,18 +698,18 @@ impl<B: Background> StreamingResize<B> {
     /// Returns [`StreamingError::AlreadyFinished`] if called after `finish()`.
     /// Returns [`StreamingError::InputTooShort`] if `row` is shorter than required.
     /// Returns [`StreamingError::RingBufferOverflow`] if output was not drained.
-    pub fn push_row_f32(&mut self, row: &[f32]) -> Result<(), StreamingError> {
+    pub fn push_row_f32(&mut self, row: &[f32]) -> Result<(), At<StreamingError>> {
         debug_assert_eq!(
             self.path,
             StreamingPath::F32,
             "push_row_f32 requires f32 path"
         );
         if self.finished {
-            return Err(StreamingError::AlreadyFinished);
+            return Err(at!(StreamingError::AlreadyFinished));
         }
         let pixel_len = self.config.input_row_len();
         if row.len() < pixel_len {
-            return Err(StreamingError::InputTooShort);
+            return Err(at!(StreamingError::InputTooShort));
         }
 
         self.temp_input_f32[..pixel_len].copy_from_slice(&row[..pixel_len]);
@@ -714,7 +718,7 @@ impl<B: Background> StreamingResize<B> {
             simd::premultiply_alpha_row(&mut self.temp_input_f32[..pixel_len]);
         }
 
-        self.push_row_internal()
+        self.push_row_internal().at()
     }
 
     /// Push one row of f32 input by writing directly into the resizer's internal buffer.
@@ -729,14 +733,17 @@ impl<B: Background> StreamingResize<B> {
     ///
     /// Returns [`StreamingError::AlreadyFinished`] if called after `finish()`.
     /// Returns [`StreamingError::RingBufferOverflow`] if output was not drained.
-    pub fn push_row_f32_with<F: FnOnce(&mut [f32])>(&mut self, f: F) -> Result<(), StreamingError> {
+    pub fn push_row_f32_with<F: FnOnce(&mut [f32])>(
+        &mut self,
+        f: F,
+    ) -> Result<(), At<StreamingError>> {
         debug_assert_eq!(
             self.path,
             StreamingPath::F32,
             "push_row_f32_with requires f32 path"
         );
         if self.finished {
-            return Err(StreamingError::AlreadyFinished);
+            return Err(at!(StreamingError::AlreadyFinished));
         }
         let pixel_len = self.config.input_row_len();
         f(&mut self.temp_input_f32[..pixel_len]);
@@ -745,7 +752,7 @@ impl<B: Background> StreamingResize<B> {
             simd::premultiply_alpha_row(&mut self.temp_input_f32[..pixel_len]);
         }
 
-        self.push_row_internal()
+        self.push_row_internal().at()
     }
 
     /// Push one row of u16 input pixels. Linearizes, premultiplies, and caches the row.
@@ -760,14 +767,14 @@ impl<B: Background> StreamingResize<B> {
     /// Returns [`StreamingError::AlreadyFinished`] if called after `finish()`.
     /// Returns [`StreamingError::InputTooShort`] if `row` is shorter than required.
     /// Returns [`StreamingError::RingBufferOverflow`] if output was not drained.
-    pub fn push_row_u16(&mut self, row: &[u16]) -> Result<(), StreamingError> {
+    pub fn push_row_u16(&mut self, row: &[u16]) -> Result<(), At<StreamingError>> {
         if self.finished {
-            return Err(StreamingError::AlreadyFinished);
+            return Err(at!(StreamingError::AlreadyFinished));
         }
         let pixel_len = self.config.input_row_len();
         let stride = self.config.effective_in_stride();
         if row.len() < pixel_len.min(stride) {
-            return Err(StreamingError::InputTooShort);
+            return Err(at!(StreamingError::InputTooShort));
         }
 
         let pixel_data = &row[..pixel_len];
@@ -835,7 +842,7 @@ impl<B: Background> StreamingResize<B> {
             }
         }
 
-        self.push_row_internal()
+        self.push_row_internal().at()
     }
 
     /// Push one row of i16 data directly into the i16 ring buffer.
@@ -850,23 +857,23 @@ impl<B: Background> StreamingResize<B> {
     /// # Panics (debug)
     ///
     /// Panics if `working_format()` is [`WorkingFormat::F32`].
-    pub fn push_row_i16(&mut self, row: &[i16]) -> Result<(), StreamingError> {
+    pub fn push_row_i16(&mut self, row: &[i16]) -> Result<(), At<StreamingError>> {
         debug_assert!(
             matches!(self.path, StreamingPath::I16Srgb | StreamingPath::I16Linear),
             "push_row_i16 requires an i16 path"
         );
         if self.finished {
-            return Err(StreamingError::AlreadyFinished);
+            return Err(at!(StreamingError::AlreadyFinished));
         }
         let pixel_len = self.config.input_row_len();
         if row.len() < pixel_len {
-            return Err(StreamingError::InputTooShort);
+            return Err(at!(StreamingError::InputTooShort));
         }
 
         match self.path {
             StreamingPath::I16Srgb => {
                 // i16 → u8 cache (values are u8-range zero-extended)
-                self.check_ring_buffer()?;
+                self.check_ring_buffer().at()?;
                 let cache_slot = self.cache_write_idx % self.cache_size;
                 for (s, d) in row[..pixel_len]
                     .iter()
@@ -881,7 +888,7 @@ impl<B: Background> StreamingResize<B> {
             StreamingPath::I16Linear => {
                 // Copy directly into the linearized_row_i16 buffer, then push
                 self.linearized_row_i16[..pixel_len].copy_from_slice(&row[..pixel_len]);
-                self.push_row_internal_i16()
+                self.push_row_internal_i16().at()
             }
             StreamingPath::F32 => unreachable!("guarded by debug_assert"),
         }
@@ -895,18 +902,18 @@ impl<B: Background> StreamingResize<B> {
     /// # Panics (debug)
     ///
     /// Panics if `working_format()` is not [`WorkingFormat::F32`].
-    pub fn push_row_linear_f32(&mut self, row: &[f32]) -> Result<(), StreamingError> {
+    pub fn push_row_linear_f32(&mut self, row: &[f32]) -> Result<(), At<StreamingError>> {
         debug_assert_eq!(
             self.path,
             StreamingPath::F32,
             "push_row_linear_f32 requires f32 path"
         );
         if self.finished {
-            return Err(StreamingError::AlreadyFinished);
+            return Err(at!(StreamingError::AlreadyFinished));
         }
         let pixel_len = self.config.input_row_len();
         if row.len() < pixel_len {
-            return Err(StreamingError::InputTooShort);
+            return Err(at!(StreamingError::InputTooShort));
         }
 
         // Copy into temp buffer (skip transfer function)
@@ -916,7 +923,7 @@ impl<B: Background> StreamingResize<B> {
             simd::premultiply_alpha_row(&mut self.temp_input_f32[..pixel_len]);
         }
 
-        self.push_row_internal()
+        self.push_row_internal().at()
     }
 
     /// Signal end of input. No more rows may be pushed after this call.
@@ -1299,22 +1306,24 @@ impl<B: Background> StreamingResize<B> {
     }
 
     /// Check ring buffer overflow before any cache write.
-    fn check_ring_buffer(&self) -> Result<(), StreamingError> {
+    #[track_caller]
+    fn check_ring_buffer(&self) -> Result<(), At<StreamingError>> {
         if self.output_rows_produced < self.config.out_height {
             let oldest_needed =
                 self.v_weights.left[self.output_rows_produced as usize].max(0) as usize;
             if self.cache_write_idx > oldest_needed
                 && self.cache_write_idx - oldest_needed >= self.cache_size
             {
-                return Err(StreamingError::RingBufferOverflow);
+                return Err(at!(StreamingError::RingBufferOverflow));
             }
         }
         Ok(())
     }
 
     /// Internal: convert f32 → f16 and cache the row into the f16 ring buffer.
-    fn push_row_internal(&mut self) -> Result<(), StreamingError> {
-        self.check_ring_buffer()?;
+    #[track_caller]
+    fn push_row_internal(&mut self) -> Result<(), At<StreamingError>> {
+        self.check_ring_buffer().at()?;
 
         let cache_slot = self.cache_write_idx % self.cache_size;
         let pixel_len = self.config.in_width as usize * self.channels;
@@ -1329,8 +1338,9 @@ impl<B: Background> StreamingResize<B> {
     }
 
     /// Internal: cache i16 row from `linearized_row_i16` into the i16 ring buffer (I16Linear path).
-    fn push_row_internal_i16(&mut self) -> Result<(), StreamingError> {
-        self.check_ring_buffer()?;
+    #[track_caller]
+    fn push_row_internal_i16(&mut self) -> Result<(), At<StreamingError>> {
+        self.check_ring_buffer().at()?;
 
         let cache_slot = self.cache_write_idx % self.cache_size;
         let pixel_len = self.config.in_width as usize * self.channels;
@@ -1589,7 +1599,10 @@ mod tests {
         resizer.finish();
 
         let row = vec![128u8; 10 * 4];
-        assert_eq!(resizer.push_row(&row), Err(StreamingError::AlreadyFinished));
+        assert_eq!(
+            resizer.push_row(&row).unwrap_err().into_inner(),
+            StreamingError::AlreadyFinished
+        );
     }
 
     #[test]
@@ -1599,8 +1612,8 @@ mod tests {
 
         let short_row = vec![128u8; 10]; // needs 10*4=40
         assert_eq!(
-            resizer.push_row(&short_row),
-            Err(StreamingError::InputTooShort)
+            resizer.push_row(&short_row).unwrap_err().into_inner(),
+            StreamingError::InputTooShort
         );
     }
 
@@ -1787,7 +1800,10 @@ mod tests {
         );
         let result = StreamingResize::with_background(&config, bg);
         assert!(
-            matches!(result, Err(CompositeError::PremultipliedInput)),
+            matches!(
+                result.as_ref().map_err(|e| e.error()),
+                Err(&CompositeError::PremultipliedInput)
+            ),
             "expected PremultipliedInput error"
         );
     }

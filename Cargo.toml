@@ -11,7 +11,7 @@ categories = ["graphics", "multimedia::images", "no-std"]
 
 [features]
 default = ["std", "layout"]
-std = ["archmage/std", "magetypes/std", "linear-srgb/std", "wide/std", "zenlayout?/std", "zenpixels/std"]
+std = ["archmage/std", "magetypes/std", "linear-srgb/std", "wide/std", "zenlayout?/std", "zenpixels/std", "whereat/std"]
 avx512 = ["archmage/avx512"]
 layout = ["dep:zenlayout"]
 # Enable SIMD features on pic-scale for benchmarks (default: scalar-only)
@@ -32,6 +32,7 @@ zenpixels = { version = "0.1", default-features = false }
 imgref = "1.12"
 libm = { version = "0.2", default-features = false }
 rgb = { version = "0.8", default-features = false }
+whereat = { path = "/home/lilith/work/whereat", default-features = false }
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }

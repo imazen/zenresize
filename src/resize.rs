@@ -15,6 +15,7 @@ use crate::proven;
 use crate::simd;
 use crate::transfer::{Bt709, Hlg, Pq, Srgb, TransferCurve};
 use crate::weights::{F32WeightTable, I16WeightTable};
+use whereat::{At, at};
 use zenpixels::{AlphaMode, ChannelType, TransferFunction};
 
 // =============================================================================
@@ -221,9 +222,12 @@ impl<B: Background> Resizer<B> {
     ///
     /// Returns [`CompositeError::PremultipliedInput`] if the input format
     /// is `RgbaPremul` (compositing premultiplied input is mathematically incorrect).
-    pub fn with_background(config: &ResizeConfig, background: B) -> Result<Self, CompositeError> {
+    pub fn with_background(
+        config: &ResizeConfig,
+        background: B,
+    ) -> Result<Self, At<CompositeError>> {
         if config.input.alpha == Some(AlphaMode::Premultiplied) {
-            return Err(CompositeError::PremultipliedInput);
+            return Err(at!(CompositeError::PremultipliedInput));
         }
         Ok(Self::new_inner(config, background, true))
     }
@@ -1840,7 +1844,10 @@ mod tests {
         );
         let result = Resizer::with_background(&config, bg);
         assert!(
-            matches!(result, Err(CompositeError::PremultipliedInput)),
+            matches!(
+                result.as_ref().map_err(|e| e.error()),
+                Err(&CompositeError::PremultipliedInput)
+            ),
             "expected PremultipliedInput error"
         );
     }

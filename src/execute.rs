@@ -14,6 +14,7 @@ use crate::layout::{
     CanvasColor, DecoderOffer, DecoderRequest, IdealLayout, LayoutPlan, Orientation,
 };
 use crate::resize::Resizer;
+use whereat::{At, ResultAtExt, at};
 use zenpixels::{AlphaMode, ChannelLayout, ChannelType, PixelDescriptor};
 
 // ─── Canvas-space background offset adapter ────────────────────────────
@@ -411,7 +412,7 @@ pub fn execute_layout_with_background<B: Background>(
     desc: PixelDescriptor,
     filter: Filter,
     background: B,
-) -> Result<Vec<u8>, CompositeError> {
+) -> Result<Vec<u8>, At<CompositeError>> {
     // Transparent background → delegate to non-composite path
     if background.is_transparent() {
         return Ok(execute_layout(
@@ -429,7 +430,7 @@ pub fn execute_layout_with_background<B: Background>(
         "execute_layout_with_background only supports u8 formats"
     );
     if desc.alpha == Some(AlphaMode::Premultiplied) {
-        return Err(CompositeError::PremultipliedInput);
+        return Err(at!(CompositeError::PremultipliedInput));
     }
     let ch = desc.channels();
 
@@ -545,12 +546,12 @@ pub fn execute_layout_with_background<B: Background>(
             .format(desc);
         if let Some(ref data) = oriented {
             let config = builder.build();
-            let mut resizer = Resizer::with_background(&config, offset_bg)?;
+            let mut resizer = Resizer::with_background(&config, offset_bg).at()?;
             let output = resizer.resize(data);
             (output, Some(resizer.into_background().into_inner()))
         } else {
             let config = builder.in_stride(trim_stride).build();
-            let mut resizer = Resizer::with_background(&config, offset_bg)?;
+            let mut resizer = Resizer::with_background(&config, offset_bg).at()?;
             let output = resizer.resize(trimmed);
             (output, Some(resizer.into_background().into_inner()))
         }
@@ -560,10 +561,14 @@ pub fn execute_layout_with_background<B: Background>(
             .format(desc);
         let resized = if let Some(ref data) = oriented {
             let config = builder.build();
-            Resizer::with_background(&config, background)?.resize(data)
+            Resizer::with_background(&config, background)
+                .at()?
+                .resize(data)
         } else {
             let config = builder.in_stride(trim_stride).build();
-            Resizer::with_background(&config, background)?.resize(trimmed)
+            Resizer::with_background(&config, background)
+                .at()?
+                .resize(trimmed)
         };
         (resized, None)
     };
@@ -650,7 +655,7 @@ pub fn execute_with_background<B: Background>(
     desc: PixelDescriptor,
     filter: Filter,
     background: B,
-) -> Result<Vec<u8>, CompositeError> {
+) -> Result<Vec<u8>, At<CompositeError>> {
     let pre_orient = ideal
         .orientation
         .inverse()
@@ -673,6 +678,7 @@ pub fn execute_with_background<B: Background>(
         filter,
         background,
     )
+    .at()
 }
 
 /// Convenience: derive and execute a secondary plane with background compositing.
@@ -692,10 +698,10 @@ pub fn execute_secondary_with_background<B: Background>(
     desc: PixelDescriptor,
     filter: Filter,
     background: B,
-) -> Result<Vec<u8>, CompositeError> {
+) -> Result<Vec<u8>, At<CompositeError>> {
     let (sec_ideal, _sec_request) =
         primary_ideal.derive_secondary(primary_source, secondary_source, secondary_target);
-    execute_with_background(source_pixels, &sec_ideal, desc, filter, background)
+    execute_with_background(source_pixels, &sec_ideal, desc, filter, background).at()
 }
 
 /// Apply an [`Orientation`] transform to an image buffer.
@@ -1726,6 +1732,9 @@ mod tests {
         let bg = crate::composite::SolidBackground::white(format);
         let result = execute_layout_with_background(&img, w, h, &plan, format, Filter::Lanczos, bg);
 
-        assert!(matches!(result, Err(CompositeError::PremultipliedInput)));
+        assert!(matches!(
+            result.as_ref().map_err(|e| e.error()),
+            Err(&CompositeError::PremultipliedInput)
+        ));
     }
 }

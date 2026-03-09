@@ -32,6 +32,8 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
+whereat::define_at_crate_info!();
+
 pub(crate) mod blur;
 pub(crate) mod color;
 pub mod composite;
@@ -83,3 +85,6 @@ pub use composite::{
 pub use resize::{resize_3ch, resize_4ch, resize_gray8};
 
 pub use transfer::{Bt709, Hlg, NoTransfer, Pq, Srgb, TransferCurve};
+
+// Re-export whereat types for downstream consumers
+pub use whereat::{At, ResultAtExt};
