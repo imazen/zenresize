@@ -63,9 +63,10 @@ pub use zenpixels::{AlphaMode, ChannelLayout, ChannelType, PixelDescriptor, Tran
 // Re-exports: minimal public API
 #[cfg(feature = "layout")]
 pub use execute::{
-    canvas_color_to_pixel, execute, execute_layout, execute_layout_with_background,
-    execute_secondary, execute_secondary_with_background, execute_with_background,
-    execute_with_offer, fill_canvas, orient_image, place_on_canvas, replicate_edges,
+    canvas_color_to_pixel, config_from_plan, execute, execute_layout,
+    execute_layout_with_background, execute_secondary, execute_secondary_with_background,
+    execute_with_background, execute_with_offer, fill_canvas, orient_image, place_on_canvas,
+    replicate_edges, streaming_from_plan,
 };
 pub use filter::Filter;
 #[cfg(feature = "layout")]

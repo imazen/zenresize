@@ -1009,6 +1009,138 @@ pub fn replicate_edges(
     }
 }
 
+// ─── LayoutPlan → ResizeConfig / StreamingResize helpers ─────────────
+
+/// Build a [`ResizeConfig`] from a [`LayoutPlan`] with crop and padding.
+///
+/// Converts the plan's trim (→ [`crate::SourceRegion`]), resize target,
+/// and canvas placement (→ [`crate::Padding`]) into a single config
+/// suitable for [`crate::StreamingResize`] or [`crate::Resizer`].
+///
+/// Returns `None` if the plan requires a non-identity orientation
+/// (rotations can't be expressed as row-at-a-time crop/pad).
+///
+/// **Edge replication** (`content_size`) is not handled — call
+/// [`replicate_edges()`] on the final output if needed.
+///
+/// # Arguments
+///
+/// * `decoder_width`, `decoder_height` — Dimensions of the decoder output
+///   (before trim/orient/resize).
+/// * `plan` — The finalized layout plan.
+/// * `desc` — Pixel format for both input and output.
+/// * `filter` — Resampling filter.
+pub fn config_from_plan(
+    decoder_width: u32,
+    decoder_height: u32,
+    plan: &LayoutPlan,
+    desc: PixelDescriptor,
+    filter: Filter,
+) -> Option<crate::ResizeConfig> {
+    if !plan.remaining_orientation.is_identity() {
+        return None;
+    }
+
+    let (trim_x, trim_y, trim_w, trim_h) = if let Some(trim) = plan.trim {
+        (trim.x, trim.y, trim.width, trim.height)
+    } else {
+        (0, 0, decoder_width, decoder_height)
+    };
+
+    let rw = plan.resize_to.width;
+    let rh = plan.resize_to.height;
+
+    let mut builder = crate::ResizeConfig::builder(decoder_width, decoder_height, rw, rh)
+        .filter(filter)
+        .format(desc);
+
+    // Source region from trim
+    if plan.trim.is_some() {
+        builder = builder.crop(trim_x, trim_y, trim_w, trim_h);
+    }
+
+    // Padding from canvas placement
+    let canvas_w = plan.canvas.width;
+    let canvas_h = plan.canvas.height;
+    let (px, py) = plan.placement;
+
+    let needs_canvas = canvas_w != rw || canvas_h != rh || px != 0 || py != 0;
+    if needs_canvas {
+        let pad_left = px.max(0) as u32;
+        let pad_top = py.max(0) as u32;
+        let pad_right = canvas_w.saturating_sub(rw + pad_left);
+        let pad_bottom = canvas_h.saturating_sub(rh + pad_top);
+
+        let color = canvas_color_to_f32(&plan.canvas_color, desc);
+        builder = builder
+            .padding(pad_top, pad_right, pad_bottom, pad_left)
+            .padding_color(color);
+    }
+
+    Some(builder.build())
+}
+
+/// Create a [`crate::StreamingResize`] from a [`LayoutPlan`].
+///
+/// Returns `None` if the plan requires a non-identity orientation.
+/// See [`config_from_plan()`] for details.
+///
+/// # Example
+///
+/// ```ignore
+/// let plan = ideal.finalize(&request, &offer);
+/// if let Some(mut stream) = streaming_from_plan(w, h, &plan, desc, filter) {
+///     for y in 0..h {
+///         stream.push_row(&rows[y]).unwrap();
+///         while let Some(out) = stream.next_output_row() {
+///             encoder.write_row(out);
+///         }
+///     }
+///     stream.finish();
+///     while let Some(out) = stream.next_output_row() {
+///         encoder.write_row(out);
+///     }
+/// }
+/// ```
+pub fn streaming_from_plan(
+    decoder_width: u32,
+    decoder_height: u32,
+    plan: &LayoutPlan,
+    desc: PixelDescriptor,
+    filter: Filter,
+) -> Option<crate::StreamingResize> {
+    let config = config_from_plan(decoder_width, decoder_height, plan, desc, filter)?;
+    Some(crate::StreamingResize::new(&config))
+}
+
+/// Convert a [`CanvasColor`] to `[f32; 4]` in the output's color space (0.0–1.0).
+fn canvas_color_to_f32(color: &CanvasColor, desc: PixelDescriptor) -> [f32; 4] {
+    match color {
+        CanvasColor::Transparent => [0.0, 0.0, 0.0, 0.0],
+        CanvasColor::Srgb { r, g, b, a } => [
+            *r as f32 / 255.0,
+            *g as f32 / 255.0,
+            *b as f32 / 255.0,
+            *a as f32 / 255.0,
+        ],
+        CanvasColor::Linear { r, g, b, a } => {
+            // Convert linear to output space
+            if desc.transfer == zenpixels::TransferFunction::Linear {
+                [*r, *g, *b, *a]
+            } else {
+                // Linear → sRGB (0.0–1.0 range)
+                [
+                    linear_srgb::default::linear_to_srgb_u8(*r) as f32 / 255.0,
+                    linear_srgb::default::linear_to_srgb_u8(*g) as f32 / 255.0,
+                    linear_srgb::default::linear_to_srgb_u8(*b) as f32 / 255.0,
+                    *a,
+                ]
+            }
+        }
+        _ => [0.0, 0.0, 0.0, 0.0],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1736,5 +1868,292 @@ mod tests {
             result.as_ref().map_err(|e| e.error()),
             Err(&CompositeError::PremultipliedInput)
         ));
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 19: config_from_plan with trim → SourceRegion
+    // -----------------------------------------------------------------------
+    #[test]
+    fn config_from_plan_trim_to_source_region() {
+        let src_w = 100u32;
+        let src_h = 80u32;
+        let format = PixelDescriptor::RGBA8_SRGB;
+
+        // Trim 20,10,60,50 → resize to 30×25
+        let plan = LayoutPlan::identity(Size::new(30, 25))
+            .with_trim(Rect::new(20, 10, 60, 50))
+            .with_resize_to(Size::new(30, 25))
+            .with_canvas(Size::new(30, 25));
+
+        let config = config_from_plan(src_w, src_h, &plan, format, Filter::Lanczos)
+            .expect("identity orientation should produce config");
+
+        // Source region should match trim
+        let region = config.source_region.as_ref().expect("should have source region");
+        assert_eq!(region.x, 20);
+        assert_eq!(region.y, 10);
+        assert_eq!(region.width, 60);
+        assert_eq!(region.height, 50);
+
+        // Resize dimensions
+        assert_eq!(config.out_width, 30);
+        assert_eq!(config.out_height, 25);
+
+        // No padding (canvas == resize_to)
+        assert!(config.padding.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 20: config_from_plan with FitPad → Padding
+    // -----------------------------------------------------------------------
+    #[test]
+    fn config_from_plan_fit_pad_to_padding() {
+        let src_w = 100u32;
+        let src_h = 50u32;
+        let format = PixelDescriptor::RGBA8_SRGB;
+
+        let (ideal, request) = Pipeline::new(src_w, src_h)
+            .constrain(
+                Constraint::new(ConstraintMode::FitPad, 80, 80).canvas_color(CanvasColor::white()),
+            )
+            .plan()
+            .unwrap();
+
+        let offer = DecoderOffer::full_decode(src_w, src_h);
+        let plan = ideal.finalize(&request, &offer);
+
+        // FitPad 100×50 into 80×80: resize to 80×40, pad to 80×80
+        assert_eq!(plan.resize_to, Size::new(80, 40));
+        assert_eq!(plan.canvas, Size::new(80, 80));
+
+        let config = config_from_plan(src_w, src_h, &plan, format, Filter::Lanczos)
+            .expect("identity orientation should produce config");
+
+        // Resize target
+        assert_eq!(config.out_width, 80);
+        assert_eq!(config.out_height, 40);
+
+        // Padding: centered vertically → 20px top, 20px bottom
+        let padding = config.padding.as_ref().expect("should have padding");
+        assert_eq!(padding.top, 20);
+        assert_eq!(padding.bottom, 20);
+        assert_eq!(padding.left, 0);
+        assert_eq!(padding.right, 0);
+
+        // Canvas color is white sRGB → [1.0, 1.0, 1.0, 1.0]
+        assert_eq!(padding.color, [1.0, 1.0, 1.0, 1.0]);
+
+        // Total output dimensions
+        assert_eq!(config.total_output_width(), 80);
+        assert_eq!(config.total_output_height(), 80);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 21: config_from_plan returns None for non-identity orientation
+    // -----------------------------------------------------------------------
+    #[test]
+    fn config_from_plan_none_for_rotation() {
+        let format = PixelDescriptor::RGBA8_SRGB;
+        let plan = LayoutPlan::identity(Size::new(10, 10))
+            .with_remaining_orientation(Orientation::Rotate90);
+
+        assert!(config_from_plan(10, 10, &plan, format, Filter::Lanczos).is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 22: streaming_from_plan matches execute_layout for identity plans
+    // -----------------------------------------------------------------------
+    #[test]
+    fn streaming_from_plan_matches_execute_layout() {
+        let src_w = 100u32;
+        let src_h = 50u32;
+        let ch = 4usize;
+        let format = PixelDescriptor::RGBA8_SRGB;
+        let img = make_test_image(src_w, src_h, ch);
+
+        let (ideal, request) = Pipeline::new(src_w, src_h)
+            .constrain(
+                Constraint::new(ConstraintMode::FitPad, 80, 80).canvas_color(CanvasColor::white()),
+            )
+            .plan()
+            .unwrap();
+
+        let offer = DecoderOffer::full_decode(src_w, src_h);
+        let plan = ideal.finalize(&request, &offer);
+
+        // Fullframe path
+        let result_fullframe = execute_layout(&img, src_w, src_h, &plan, format, Filter::Lanczos);
+
+        // Streaming path
+        let mut stream = streaming_from_plan(src_w, src_h, &plan, format, Filter::Lanczos)
+            .expect("identity orientation");
+
+        let row_len = src_w as usize * ch;
+        let mut output_rows: Vec<Vec<u8>> = Vec::new();
+
+        for y in 0..src_h {
+            let row = &img[y as usize * row_len..(y as usize + 1) * row_len];
+            stream.push_row(row).unwrap();
+            while let Some(out) = stream.next_output_row() {
+                output_rows.push(out.to_vec());
+            }
+        }
+        stream.finish();
+        while let Some(out) = stream.next_output_row() {
+            output_rows.push(out.to_vec());
+        }
+
+        let streaming_result: Vec<u8> = output_rows.into_iter().flatten().collect();
+        assert_eq!(streaming_result.len(), result_fullframe.len());
+
+        // The fullframe and streaming paths use different pipeline order (H-first vs V-first)
+        // and different internal precision, so exact match isn't expected. But dimensions and
+        // padding area should match.
+        let out_w = plan.canvas.width as usize;
+        let out_h = plan.canvas.height as usize;
+        assert_eq!(streaming_result.len(), out_w * out_h * ch);
+        assert_eq!(result_fullframe.len(), out_w * out_h * ch);
+
+        // Padding rows (top 20) should be white in both
+        let py = plan.placement.1 as usize;
+        for y in 0..py {
+            for x in 0..out_w {
+                let off = (y * out_w + x) * ch;
+                let sf = &streaming_result[off..off + ch];
+                let ff = &result_fullframe[off..off + ch];
+                assert_eq!(sf, ff, "padding pixel ({x},{y}) should match");
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 23: streaming_from_plan with trim+pad combined
+    // -----------------------------------------------------------------------
+    #[test]
+    fn streaming_from_plan_trim_and_pad() {
+        let src_w = 80u32;
+        let src_h = 60u32;
+        let ch = 4usize;
+        let format = PixelDescriptor::RGBA8_SRGB;
+        let img = make_test_image(src_w, src_h, ch);
+
+        // Trim center 40×30, resize to 20×15, place on 30×30 canvas with white bg
+        let plan = LayoutPlan::identity(Size::new(20, 15))
+            .with_trim(Rect::new(20, 15, 40, 30))
+            .with_resize_to(Size::new(20, 15))
+            .with_canvas(Size::new(30, 30))
+            .with_placement(5, 7)
+            .with_canvas_color(CanvasColor::white());
+
+        let mut stream = streaming_from_plan(src_w, src_h, &plan, format, Filter::Lanczos)
+            .expect("identity orientation");
+
+        let row_len = src_w as usize * ch;
+        let mut output_rows: Vec<Vec<u8>> = Vec::new();
+
+        for y in 0..src_h {
+            let row = &img[y as usize * row_len..(y as usize + 1) * row_len];
+            stream.push_row(row).unwrap();
+            while let Some(out) = stream.next_output_row() {
+                output_rows.push(out.to_vec());
+            }
+        }
+        stream.finish();
+        while let Some(out) = stream.next_output_row() {
+            output_rows.push(out.to_vec());
+        }
+
+        // Total output: 30×30
+        assert_eq!(output_rows.len(), 30);
+        assert_eq!(output_rows[0].len(), 30 * ch);
+
+        // Top 7 rows should be white padding
+        for y in 0..7 {
+            for x in 0..30 {
+                let px = &output_rows[y][x * ch..(x + 1) * ch];
+                assert_eq!(px, &[255, 255, 255, 255], "top pad row {y}, col {x}");
+            }
+        }
+
+        // Bottom 8 rows (30 - 7 - 15 = 8) should be white padding
+        for y in 22..30 {
+            for x in 0..30 {
+                let px = &output_rows[y][x * ch..(x + 1) * ch];
+                assert_eq!(px, &[255, 255, 255, 255], "bottom pad row {y}, col {x}");
+            }
+        }
+
+        // Left padding (cols 0..5) in content rows should be white
+        for y in 7..22 {
+            for x in 0..5 {
+                let px = &output_rows[y][x * ch..(x + 1) * ch];
+                assert_eq!(
+                    px,
+                    &[255, 255, 255, 255],
+                    "left pad row {y}, col {x}"
+                );
+            }
+        }
+
+        // Right padding (cols 25..30) in content rows should be white
+        for y in 7..22 {
+            for x in 25..30 {
+                let px = &output_rows[y][x * ch..(x + 1) * ch];
+                assert_eq!(
+                    px,
+                    &[255, 255, 255, 255],
+                    "right pad row {y}, col {x}"
+                );
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 24: canvas_color_to_f32 conversion
+    // -----------------------------------------------------------------------
+    #[test]
+    fn canvas_color_to_f32_conversions() {
+        let srgb_format = PixelDescriptor::RGBA8_SRGB;
+        let linear_format = PixelDescriptor::RGBAF32_LINEAR;
+
+        // Transparent → [0, 0, 0, 0]
+        assert_eq!(
+            canvas_color_to_f32(&CanvasColor::Transparent, srgb_format),
+            [0.0, 0.0, 0.0, 0.0]
+        );
+
+        // White sRGB → [1.0, 1.0, 1.0, 1.0]
+        assert_eq!(
+            canvas_color_to_f32(&CanvasColor::white(), srgb_format),
+            [1.0, 1.0, 1.0, 1.0]
+        );
+
+        // Black sRGB → [0.0, 0.0, 0.0, 1.0]
+        let black = CanvasColor::Srgb {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        };
+        assert_eq!(
+            canvas_color_to_f32(&black, srgb_format),
+            [0.0, 0.0, 0.0, 1.0]
+        );
+
+        // Linear white on linear format → passthrough
+        let linear_white = CanvasColor::Linear {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        assert_eq!(
+            canvas_color_to_f32(&linear_white, linear_format),
+            [1.0, 1.0, 1.0, 1.0]
+        );
+
+        // Linear white on sRGB format → converted to sRGB
+        let result = canvas_color_to_f32(&linear_white, srgb_format);
+        assert_eq!(result, [1.0, 1.0, 1.0, 1.0]); // 1.0 linear → 255 sRGB → 1.0
     }
 }
