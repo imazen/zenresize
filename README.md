@@ -6,7 +6,7 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.93-blue?style=for-the-badge)](https://www.rust-lang.org)
 [![license](https://img.shields.io/crates/l/zenresize?style=for-the-badge)](https://github.com/imazen/zenresize/blob/main/LICENSE)
 
-High-quality image resampling with 31 filters, streaming API, and SIMD acceleration.
+High-quality image resampling with crop, resize, and canvas padding -- streaming or fullframe, SIMD-accelerated.
 
 ## Quick Start
 
@@ -24,8 +24,24 @@ let output = Resizer::new(&config).resize(&input);
 assert_eq!(output.len(), 512 * 384 * 4);
 ```
 
+## Operations
+
+All operations work in the streaming API. Crop and padding also work independently (without resize) by setting output dimensions equal to crop/content dimensions.
+
+| Operation | What it does | Builder method |
+|-----------|-------------|----------------|
+| **Resize** | Resample to new dimensions with a choice of 31 filters | `.filter(Filter::Lanczos)` |
+| **Crop** | Extract a rectangular region from the input | `.crop(x, y, w, h)` |
+| **Pad** | Add solid-color border around the output | `.padding(top, right, bottom, left)` |
+| **Crop + Resize** | Extract region, then resize it | `.crop(...)` on a config with different output dims |
+| **Resize + Pad** | Resize, then add padding | `.padding(...)` on a config with different input/output dims |
+| **Crop + Resize + Pad** | All three in sequence | `.crop(...)` + `.padding(...)` |
+
+The pipeline order is always: **crop** (input side) -> **resize** -> **pad** (output side).
+
 ## Features
 
+- **Crop, resize, and pad** -- independently or combined, streaming or fullframe
 - 31 resampling filters (Lanczos, Mitchell, Robidoux, Ginseng, etc.)
 - sRGB-aware linear-light processing for correct gamma handling
 - Row-at-a-time streaming API for pipeline integration
@@ -144,6 +160,117 @@ while let Some(out_row) = stream.next_output_row_f32() {
 }
 ```
 
+## Source Region (Crop)
+
+Extract a rectangular region from the input before resizing. The streaming API accepts full-width input rows; the resizer skips rows outside the vertical range and extracts the horizontal region internally.
+
+```rust
+use zenresize::{StreamingResize, ResizeConfig, Filter, PixelDescriptor};
+
+// Crop a 400x300 region starting at (100, 50), resize to 200x150
+let config = ResizeConfig::builder(1000, 800, 200, 150)
+    .filter(Filter::Lanczos)
+    .format(PixelDescriptor::RGBA8_SRGB)
+    .crop(100, 50, 400, 300)
+    .build();
+
+let mut stream = StreamingResize::new(&config);
+
+// Push full-width rows -- rows outside [50..350) are skipped automatically
+for y in 0..800 {
+    stream.push_row(&source_rows[y]).unwrap();
+    while let Some(out) = stream.next_output_row() {
+        // 200 * 4 bytes per row
+    }
+}
+```
+
+Crop without resize (extract only):
+
+```rust
+// Extract 400x300 at (100, 50), no resize
+let config = ResizeConfig::builder(1000, 800, 400, 300)
+    .format(PixelDescriptor::RGBA8_SRGB)
+    .crop(100, 50, 400, 300)
+    .build();
+```
+
+## Output Padding
+
+Add a solid-color border around the resized output. The total output becomes `(left + width + right)` by `(top + height + bottom)`.
+
+```rust
+use zenresize::{StreamingResize, ResizeConfig, Filter, PixelDescriptor};
+
+// Resize 1000x800 -> 500x400, then add 20px black border
+let config = ResizeConfig::builder(1000, 800, 500, 400)
+    .filter(Filter::Lanczos)
+    .format(PixelDescriptor::RGBA8_SRGB)
+    .padding_uniform(20)
+    .padding_color([0.0, 0.0, 0.0, 1.0])
+    .build();
+
+let mut stream = StreamingResize::new(&config);
+
+// output_row_len() is (20 + 500 + 20) * 4 = 2160
+// total_output_height() is 20 + 400 + 20 = 440
+// Top padding rows are available before any input is pushed
+
+for y in 0..800 {
+    stream.push_row(&source_rows[y]).unwrap();
+    while let Some(out) = stream.next_output_row() {
+        // First 20 rows: solid black
+        // Next 400 rows: 20px black + 500px content + 20px black
+        // Last 20 rows: solid black
+    }
+}
+```
+
+Asymmetric letterboxing:
+
+```rust
+let config = ResizeConfig::builder(1000, 800, 500, 400)
+    .format(PixelDescriptor::RGBA8_SRGB)
+    .padding(40, 0, 40, 0)              // 40px top/bottom only
+    .padding_color([0.0, 0.0, 0.0, 1.0])
+    .build();
+// Total output: 500 x 480
+```
+
+Padding without resize:
+
+```rust
+let config = ResizeConfig::builder(500, 400, 500, 400)
+    .format(PixelDescriptor::RGBA8_SRGB)
+    .padding_uniform(10)
+    .padding_color([1.0, 1.0, 1.0, 1.0]) // white border
+    .build();
+// Total output: 520 x 420
+```
+
+### Padding color
+
+The `padding_color` values are 0.0-1.0 in the output's color space. For sRGB u8 output, 0.5 maps to value 128. For linear f32, 0.5 maps to 0.5. Only the first N channels are used (N = channel count of the output format).
+
+Works with all output types: u8 (`next_output_row`), f32 (`next_output_row_f32`), u16 (`next_output_row_u16`).
+
+## Crop + Resize + Pad
+
+All three operations compose naturally:
+
+```rust
+// Extract 800x600 region, resize to 400x300, add 10px white border
+let config = ResizeConfig::builder(2000, 1500, 400, 300)
+    .filter(Filter::Lanczos)
+    .format(PixelDescriptor::RGBA8_SRGB)
+    .crop(200, 100, 800, 600)
+    .padding_uniform(10)
+    .padding_color([1.0, 1.0, 1.0, 1.0])
+    .build();
+
+// Pipeline: crop 800x600 -> resize to 400x300 -> pad to 420x320
+```
+
 ## ResizeConfig
 
 All resize operations take a `ResizeConfig` built with the builder pattern.
@@ -160,6 +287,9 @@ let config = ResizeConfig::builder(in_w, in_h, out_w, out_h)
     .srgb()                          // resize in sRGB space (faster, slight quality loss)
     .resize_sharpen(15.0)            // sharpen during resampling (% negative lobe, default: 0)
     .post_sharpen(0.0)               // post-resize unsharp mask (default: 0.0)
+    .crop(x, y, w, h)               // source region (default: full input)
+    .padding(top, right, bottom, left)  // output padding (default: none)
+    .padding_color([0.0, 0.0, 0.0, 1.0])  // padding fill color
     .in_stride(stride)               // input row stride in elements (default: tightly packed)
     .out_stride(stride)              // output row stride in elements (default: tightly packed)
     .build();
@@ -182,10 +312,10 @@ If you call `.build()` with no other methods:
 
 ```rust
 config.filter           // Filter
-config.in_width         // u32
-config.in_height        // u32
-config.out_width        // u32
-config.out_height       // u32
+config.in_width         // u32 (full source width)
+config.in_height        // u32 (full source height)
+config.out_width        // u32 (content output width, before padding)
+config.out_height       // u32 (content output height, before padding)
 config.input            // PixelDescriptor
 config.output           // PixelDescriptor
 config.linear           // bool
@@ -195,30 +325,53 @@ config.kernel_width_scale // Option<f64>
 config.lobe_ratio       // LobeRatio
 config.in_stride        // usize (0 = tightly packed)
 config.out_stride       // usize (0 = tightly packed)
+config.source_region    // Option<SourceRegion> (crop rectangle)
+config.padding          // Option<Padding> (output padding)
 ```
 
-## Pixel Descriptors
-
-`PixelDescriptor` (from [zenpixels](https://crates.io/crates/zenpixels)) describes pixel format, channel layout, alpha mode, and transfer function in one value. Use the provided constants:
+Helper methods:
 
 ```rust
-use zenresize::PixelDescriptor;
-
-// sRGB u8
-PixelDescriptor::RGBA8_SRGB    // 4ch, straight alpha
-PixelDescriptor::RGBX8_SRGB    // 4ch, no alpha (padding byte)
-PixelDescriptor::RGB8_SRGB     // 3ch
-PixelDescriptor::GRAY8_SRGB    // 1ch grayscale
-PixelDescriptor::BGRA8_SRGB    // 4ch, BGR byte order
-
-// Linear f32
-PixelDescriptor::RGBAF32_LINEAR
-PixelDescriptor::RGBF32_LINEAR
-
-// sRGB u16
-PixelDescriptor::RGBA16_SRGB
-PixelDescriptor::RGB16_SRGB
+config.resize_in_width()     // crop width if set, else in_width
+config.resize_in_height()    // crop height if set, else in_height
+config.total_output_width()  // out_width + left + right padding
+config.total_output_height() // out_height + top + bottom padding
+config.total_output_row_len() // total_output_width * channels
 ```
+
+## Pixel Formats
+
+`PixelDescriptor` (from [zenpixels](https://crates.io/crates/zenpixels)) describes pixel format, channel layout, alpha mode, and transfer function in one value.
+
+### Supported formats
+
+| Format | Channels | Type | Transfer | Constant |
+|--------|----------|------|----------|----------|
+| RGBA sRGB | 4 (straight alpha) | u8 | sRGB | `RGBA8_SRGB` |
+| RGBX sRGB | 4 (no alpha) | u8 | sRGB | `RGBX8_SRGB` |
+| RGB sRGB | 3 | u8 | sRGB | `RGB8_SRGB` |
+| Gray sRGB | 1 | u8 | sRGB | `GRAY8_SRGB` |
+| BGRA sRGB | 4 (straight alpha) | u8 | sRGB | `BGRA8_SRGB` |
+| RGBA linear | 4 (straight alpha) | f32 | Linear | `RGBAF32_LINEAR` |
+| RGB linear | 3 | f32 | Linear | `RGBF32_LINEAR` |
+| RGBA sRGB | 4 (straight alpha) | u16 | sRGB | `RGBA16_SRGB` |
+| RGB sRGB | 3 | u16 | sRGB | `RGB16_SRGB` |
+
+Cross-format resize is supported: any input type to any output type (u8 <-> u16 <-> f32).
+
+### Transfer functions
+
+All five transfer functions work with all channel types and layouts:
+
+| Transfer | Description |
+|----------|-------------|
+| `Srgb` | Standard sRGB gamma (default) |
+| `Linear` | Linear light (identity) |
+| `Bt709` | BT.709 broadcast gamma |
+| `Pq` | HDR10 Perceptual Quantizer |
+| `Hlg` | Hybrid Log-Gamma (HDR) |
+
+### Channel order
 
 **Channel order doesn't matter.** The sRGB transfer function is the same for R, G, and B, and the convolution kernels operate on N floats per pixel. Pass BGRA data as `RGBA8_SRGB` -- no swizzling needed. (Use `BGRA8_SRGB` if you want the descriptor to be semantically accurate, but the resize output is identical either way.)
 
