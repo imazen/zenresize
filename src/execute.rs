@@ -1017,8 +1017,10 @@ pub fn replicate_edges(
 /// and canvas placement (→ [`crate::Padding`]) into a single config
 /// suitable for [`crate::StreamingResize`] or [`crate::Resizer`].
 ///
-/// Returns `None` if the plan requires a non-identity orientation
-/// (rotations can't be expressed as row-at-a-time crop/pad).
+/// When the plan has a non-identity orientation, the resize and padding
+/// dimensions are pre-inverted so that a post-resize orientation transform
+/// produces the correct final dimensions. Use [`streaming_from_plan()`]
+/// which automatically applies the orientation via [`crate::OrientOutput`].
 ///
 /// **Edge replication** (`content_size`) is not handled — call
 /// [`replicate_edges()`] on the final output if needed.
@@ -1036,10 +1038,9 @@ pub fn config_from_plan(
     plan: &LayoutPlan,
     desc: PixelDescriptor,
     filter: Filter,
-) -> Option<crate::ResizeConfig> {
-    if !plan.remaining_orientation.is_identity() {
-        return None;
-    }
+) -> crate::ResizeConfig {
+    let orient = plan.remaining_orientation;
+    let swaps = orient.swaps_axes();
 
     let (trim_x, trim_y, trim_w, trim_h) = if let Some(trim) = plan.trim {
         (trim.x, trim.y, trim.width, trim.height)
@@ -1047,22 +1048,35 @@ pub fn config_from_plan(
         (0, 0, decoder_width, decoder_height)
     };
 
-    let rw = plan.resize_to.width;
-    let rh = plan.resize_to.height;
+    // resize_to is in post-orientation space. For streaming (resize→orient),
+    // we need pre-orientation dimensions: swap if the orientation swaps axes.
+    let (rw, rh) = if swaps {
+        (plan.resize_to.height, plan.resize_to.width)
+    } else {
+        (plan.resize_to.width, plan.resize_to.height)
+    };
 
     let mut builder = crate::ResizeConfig::builder(decoder_width, decoder_height, rw, rh)
         .filter(filter)
         .format(desc);
 
-    // Source region from trim
+    // Source region from trim (always in decoder/source coords — no swap needed)
     if plan.trim.is_some() {
         builder = builder.crop(trim_x, trim_y, trim_w, trim_h);
     }
 
     // Padding from canvas placement
-    let canvas_w = plan.canvas.width;
-    let canvas_h = plan.canvas.height;
-    let (px, py) = plan.placement;
+    // Canvas dimensions and placement are post-orientation, so pre-invert for streaming.
+    let (canvas_w, canvas_h) = if swaps {
+        (plan.canvas.height, plan.canvas.width)
+    } else {
+        (plan.canvas.width, plan.canvas.height)
+    };
+    let (px, py) = if swaps {
+        (plan.placement.1, plan.placement.0)
+    } else {
+        plan.placement
+    };
 
     let needs_canvas = canvas_w != rw || canvas_h != rh || px != 0 || py != 0;
     if needs_canvas {
@@ -1077,29 +1091,31 @@ pub fn config_from_plan(
             .padding_color(color);
     }
 
-    Some(builder.build())
+    builder.build()
 }
 
 /// Create a [`crate::StreamingResize`] from a [`LayoutPlan`].
 ///
-/// Returns `None` if the plan requires a non-identity orientation.
-/// See [`config_from_plan()`] for details.
+/// Handles all layout operations including orientation. Non-identity
+/// orientations are applied as a post-resize transform — the streaming
+/// resizer buffers output internally for non-row-local transforms.
+///
+/// See [`config_from_plan()`] for details on geometry mapping.
 ///
 /// # Example
 ///
 /// ```ignore
 /// let plan = ideal.finalize(&request, &offer);
-/// if let Some(mut stream) = streaming_from_plan(w, h, &plan, desc, filter) {
-///     for y in 0..h {
-///         stream.push_row(&rows[y]).unwrap();
-///         while let Some(out) = stream.next_output_row() {
-///             encoder.write_row(out);
-///         }
-///     }
-///     stream.finish();
+/// let mut stream = streaming_from_plan(w, h, &plan, desc, filter);
+/// for y in 0..h {
+///     stream.push_row(&rows[y]).unwrap();
 ///     while let Some(out) = stream.next_output_row() {
 ///         encoder.write_row(out);
 ///     }
+/// }
+/// stream.finish();
+/// while let Some(out) = stream.next_output_row() {
+///     encoder.write_row(out);
 /// }
 /// ```
 pub fn streaming_from_plan(
@@ -1108,9 +1124,10 @@ pub fn streaming_from_plan(
     plan: &LayoutPlan,
     desc: PixelDescriptor,
     filter: Filter,
-) -> Option<crate::StreamingResize> {
-    let config = config_from_plan(decoder_width, decoder_height, plan, desc, filter)?;
-    Some(crate::StreamingResize::new(&config))
+) -> crate::StreamingResize {
+    let config = config_from_plan(decoder_width, decoder_height, plan, desc, filter);
+    let orient: crate::OrientOutput = plan.remaining_orientation.into();
+    crate::StreamingResize::new(&config).with_orientation(orient)
 }
 
 /// Convert a [`CanvasColor`] to `[f32; 4]` in the output's color space (0.0–1.0).
@@ -1885,8 +1902,7 @@ mod tests {
             .with_resize_to(Size::new(30, 25))
             .with_canvas(Size::new(30, 25));
 
-        let config = config_from_plan(src_w, src_h, &plan, format, Filter::Lanczos)
-            .expect("identity orientation should produce config");
+        let config = config_from_plan(src_w, src_h, &plan, format, Filter::Lanczos);
 
         // Source region should match trim
         let region = config.source_region.as_ref().expect("should have source region");
@@ -1926,8 +1942,7 @@ mod tests {
         assert_eq!(plan.resize_to, Size::new(80, 40));
         assert_eq!(plan.canvas, Size::new(80, 80));
 
-        let config = config_from_plan(src_w, src_h, &plan, format, Filter::Lanczos)
-            .expect("identity orientation should produce config");
+        let config = config_from_plan(src_w, src_h, &plan, format, Filter::Lanczos);
 
         // Resize target
         assert_eq!(config.out_width, 80);
@@ -1949,15 +1964,19 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Test 21: config_from_plan returns None for non-identity orientation
+    // Test 21: config_from_plan pre-inverts dimensions for rotation
     // -----------------------------------------------------------------------
     #[test]
-    fn config_from_plan_none_for_rotation() {
+    fn config_from_plan_swaps_dims_for_rotation() {
         let format = PixelDescriptor::RGBA8_SRGB;
-        let plan = LayoutPlan::identity(Size::new(10, 10))
+        // Plan says resize_to = 20x10 (post-orient), orientation = Rotate90 (swaps axes)
+        // So the resize config should target 10x20 (pre-orient)
+        let plan = LayoutPlan::identity(Size::new(20, 10))
             .with_remaining_orientation(Orientation::Rotate90);
 
-        assert!(config_from_plan(10, 10, &plan, format, Filter::Lanczos).is_none());
+        let config = config_from_plan(30, 30, &plan, format, Filter::Lanczos);
+        assert_eq!(config.out_width, 10); // swapped
+        assert_eq!(config.out_height, 20); // swapped
     }
 
     // -----------------------------------------------------------------------
@@ -1985,8 +2004,7 @@ mod tests {
         let result_fullframe = execute_layout(&img, src_w, src_h, &plan, format, Filter::Lanczos);
 
         // Streaming path
-        let mut stream = streaming_from_plan(src_w, src_h, &plan, format, Filter::Lanczos)
-            .expect("identity orientation");
+        let mut stream = streaming_from_plan(src_w, src_h, &plan, format, Filter::Lanczos);
 
         let row_len = src_w as usize * ch;
         let mut output_rows: Vec<Vec<u8>> = Vec::new();
@@ -2045,8 +2063,7 @@ mod tests {
             .with_placement(5, 7)
             .with_canvas_color(CanvasColor::white());
 
-        let mut stream = streaming_from_plan(src_w, src_h, &plan, format, Filter::Lanczos)
-            .expect("identity orientation");
+        let mut stream = streaming_from_plan(src_w, src_h, &plan, format, Filter::Lanczos);
 
         let row_len = src_w as usize * ch;
         let mut output_rows: Vec<Vec<u8>> = Vec::new();

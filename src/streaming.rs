@@ -48,6 +48,99 @@ use crate::weights::{F32WeightTable, I16WeightTable};
 use whereat::{At, ResultAtExt, at};
 use zenpixels::{AlphaMode, ChannelType, TransferFunction};
 
+/// Post-resize orientation transform.
+///
+/// Applied after resize completes. For streaming, this means the resizer
+/// buffers output rows internally and applies the transform before serving.
+///
+/// Variants match EXIF orientation values 1–8 and the `Orientation` enum
+/// from `zenlayout`, but this type is always available (no feature gate).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OrientOutput {
+    /// No transform (EXIF 1).
+    #[default]
+    Identity,
+    /// Horizontal flip — mirror each row (EXIF 2).
+    /// Applied per-row; no buffering needed.
+    FlipH,
+    /// 180° rotation (EXIF 3).
+    Rotate180,
+    /// Vertical flip — reverse row order (EXIF 4).
+    FlipV,
+    /// Transpose — reflect over main diagonal (EXIF 5).
+    Transpose,
+    /// 90° clockwise rotation (EXIF 6).
+    Rotate90,
+    /// Reflect over anti-diagonal (EXIF 7).
+    Transverse,
+    /// 270° clockwise (90° counter-clockwise) rotation (EXIF 8).
+    Rotate270,
+}
+
+impl OrientOutput {
+    /// Whether this orientation swaps width and height.
+    #[inline]
+    pub const fn swaps_axes(self) -> bool {
+        matches!(
+            self,
+            Self::Transpose | Self::Rotate90 | Self::Transverse | Self::Rotate270
+        )
+    }
+
+    /// Whether this is a no-op.
+    #[inline]
+    pub const fn is_identity(self) -> bool {
+        matches!(self, Self::Identity)
+    }
+
+    /// Whether this can be applied per-row without buffering the full image.
+    #[inline]
+    pub const fn is_row_local(self) -> bool {
+        matches!(self, Self::Identity | Self::FlipH)
+    }
+
+    /// Compute output dimensions after applying this orientation.
+    #[inline]
+    pub const fn output_dimensions(self, w: u32, h: u32) -> (u32, u32) {
+        if self.swaps_axes() { (h, w) } else { (w, h) }
+    }
+
+    /// Forward-map source pixel `(sx, sy)` to destination pixel `(dx, dy)`.
+    ///
+    /// `(w, h)` are the source dimensions (before orientation).
+    #[inline]
+    fn forward_map(self, sx: u32, sy: u32, w: u32, h: u32) -> (u32, u32) {
+        match self {
+            Self::Identity => (sx, sy),
+            Self::FlipH => (w - 1 - sx, sy),
+            Self::Rotate90 => (h - 1 - sy, sx),
+            Self::Transpose => (sy, sx),
+            Self::Rotate180 => (w - 1 - sx, h - 1 - sy),
+            Self::FlipV => (sx, h - 1 - sy),
+            Self::Rotate270 => (sy, w - 1 - sx),
+            Self::Transverse => (h - 1 - sy, w - 1 - sx),
+        }
+    }
+}
+
+#[cfg(feature = "layout")]
+impl From<crate::layout::Orientation> for OrientOutput {
+    fn from(o: crate::layout::Orientation) -> Self {
+        match o {
+            crate::layout::Orientation::Identity => Self::Identity,
+            crate::layout::Orientation::FlipH => Self::FlipH,
+            crate::layout::Orientation::Rotate180 => Self::Rotate180,
+            crate::layout::Orientation::FlipV => Self::FlipV,
+            crate::layout::Orientation::Transpose => Self::Transpose,
+            crate::layout::Orientation::Rotate90 => Self::Rotate90,
+            crate::layout::Orientation::Transverse => Self::Transverse,
+            crate::layout::Orientation::Rotate270 => Self::Rotate270,
+            _ => Self::Identity, // non_exhaustive fallback
+        }
+    }
+}
+
 /// Build V-filter row references from a ring buffer cache.
 ///
 /// Uses a 128-slot stack array for the common case (up to ~21× downscale with
@@ -237,6 +330,24 @@ pub struct StreamingResize<B: Background = NoBackground> {
     /// Whether cropping is active.
     has_crop: bool,
 
+    // === Post-resize orientation ===
+    /// Orientation transform applied after resize.
+    orient: OrientOutput,
+    /// Buffer for the full oriented output image (u8).
+    /// Empty when `orient.is_row_local()`.
+    /// Layout: `oriented_w * oriented_h * channels` bytes.
+    orient_buf: Vec<u8>,
+    /// Number of oriented rows already emitted.
+    orient_rows_emitted: u32,
+    /// Width after orientation (may differ from resize output if axes swap).
+    oriented_w: u32,
+    /// Height after orientation.
+    oriented_h: u32,
+    /// Whether all resize output has been captured into orient_buf.
+    orient_ready: bool,
+    /// Resize output rows captured so far (for non-row-local orientations).
+    orient_captured: u32,
+
     // === Padding state (zero-cost when not padding) ===
     /// Padding pixels above the content.
     pad_top: u32,
@@ -281,6 +392,39 @@ impl StreamingResize<NoBackground> {
 }
 
 impl<B: Background> StreamingResize<B> {
+    /// Set a post-resize orientation transform.
+    ///
+    /// After all input rows have been pushed and all resize output produced,
+    /// the resizer applies this orientation to the output. For non-row-local
+    /// orientations (anything other than `Identity` or `FlipH`), the full
+    /// output is buffered internally — memory cost is `out_w * out_h * channels`
+    /// bytes.
+    ///
+    /// For FlipH, each output row is reversed in-place — no extra buffering.
+    ///
+    /// Must be called before pushing any rows.
+    ///
+    /// # Panics
+    ///
+    /// Panics if rows have already been pushed.
+    pub fn with_orientation(mut self, orient: OrientOutput) -> Self {
+        assert_eq!(
+            self.input_rows_received, 0,
+            "with_orientation must be called before pushing rows"
+        );
+        let (ow, oh) = orient.output_dimensions(
+            self.config.total_output_width(),
+            self.config.total_output_height(),
+        );
+        self.oriented_w = ow;
+        self.oriented_h = oh;
+        if !orient.is_row_local() {
+            self.orient_buf = vec![0u8; ow as usize * oh as usize * self.channels];
+        }
+        self.orient = orient;
+        self
+    }
+
     /// Create a streaming resizer with background compositing.
     ///
     /// Performs source-over compositing between the resized foreground and the
@@ -384,6 +528,8 @@ impl<B: Background> StreamingResize<B> {
         let cache_size = v_weights.max_taps + extra_slack;
         let in_row_len = resize_in_w as usize * channels;
         let out_row_len = config.out_width as usize * channels;
+        let cfg_total_w = config.total_output_width();
+        let cfg_total_h = config.total_output_height();
 
         // Only allocate bg row buffer for non-solid, non-transparent backgrounds
         let needs_bg_row =
@@ -530,6 +676,13 @@ impl<B: Background> StreamingResize<B> {
                     pad_top_emitted: 0,
                     pad_bottom_emitted: 0,
                     has_padding,
+                    orient: OrientOutput::Identity,
+                    orient_buf: Vec::new(),
+                    orient_rows_emitted: 0,
+                    oriented_w: cfg_total_w,
+                    oriented_h: cfg_total_h,
+                    orient_ready: false,
+                    orient_captured: 0,
                 }
             }
             StreamingPath::I16Srgb => {
@@ -589,6 +742,13 @@ impl<B: Background> StreamingResize<B> {
                     pad_top_emitted: 0,
                     pad_bottom_emitted: 0,
                     has_padding,
+                    orient: OrientOutput::Identity,
+                    orient_buf: Vec::new(),
+                    orient_rows_emitted: 0,
+                    oriented_w: cfg_total_w,
+                    oriented_h: cfg_total_h,
+                    orient_ready: false,
+                    orient_captured: 0,
                 }
             }
             StreamingPath::I16Linear => {
@@ -648,6 +808,13 @@ impl<B: Background> StreamingResize<B> {
                     pad_top_emitted: 0,
                     pad_bottom_emitted: 0,
                     has_padding,
+                    orient: OrientOutput::Identity,
+                    orient_buf: Vec::new(),
+                    orient_rows_emitted: 0,
+                    oriented_w: cfg_total_w,
+                    oriented_h: cfg_total_h,
+                    orient_ready: false,
+                    orient_captured: 0,
                 }
             }
         }
@@ -669,8 +836,13 @@ impl<B: Background> StreamingResize<B> {
     ///
     /// When padding is set, this returns the padded width
     /// (`(left + out_width + right) * channels`).
+    /// When orientation swaps axes, this returns the oriented width.
     pub fn output_row_len(&self) -> usize {
-        self.config.total_output_row_len()
+        if self.orient.is_identity() {
+            self.config.total_output_row_len()
+        } else {
+            self.oriented_w as usize * self.channels
+        }
     }
 
     /// Mutable reference to the background (e.g., for pushing rows to [`crate::StreamedBackground`]).
@@ -714,15 +886,18 @@ impl<B: Background> StreamingResize<B> {
 
     /// Total output rows produced so far, including padding rows.
     pub fn total_rows_emitted(&self) -> u32 {
+        if !self.orient.is_row_local() {
+            return self.orient_rows_emitted;
+        }
         self.pad_top_emitted + self.output_rows_produced + self.pad_bottom_emitted
     }
 
-    /// Total output height including padding.
+    /// Total output height including padding and orientation.
     pub fn total_output_height(&self) -> u32 {
-        self.config.total_output_height()
+        self.oriented_h
     }
 
-    /// Check if all output rows have been produced (including padding).
+    /// Check if all output rows have been produced (including padding and orientation).
     pub fn is_complete(&self) -> bool {
         self.total_rows_emitted() >= self.total_output_height()
     }
@@ -731,7 +906,22 @@ impl<B: Background> StreamingResize<B> {
     ///
     /// This is the number of consecutive `next_output_row()` calls that will
     /// return `Some` before returning `None`. Includes padding rows.
+    ///
+    /// For non-row-local orientations, returns 0 until all resize output
+    /// has been captured, then returns the remaining oriented rows.
     pub fn output_rows_available(&self) -> u32 {
+        if !self.orient.is_row_local() {
+            return if self.orient_ready {
+                self.oriented_h - self.orient_rows_emitted
+            } else {
+                0
+            };
+        }
+        self.output_rows_available_inner()
+    }
+
+    /// Inner implementation of output_rows_available (resize + padding only).
+    fn output_rows_available_inner(&self) -> u32 {
         let mut count = 0u32;
 
         // Remaining top padding
@@ -818,6 +1008,7 @@ impl<B: Background> StreamingResize<B> {
                 }
                 self.cache_write_idx += 1;
                 self.input_rows_received += 1;
+                self.eagerly_capture_orient_rows();
                 return Ok(());
             }
             StreamingPath::I16Linear => {
@@ -1227,6 +1418,21 @@ impl<B: Background> StreamingResize<B> {
     /// ```
     pub fn finish(&mut self) -> u32 {
         self.finished = true;
+        if !self.orient.is_row_local() {
+            // Capture any remaining resize output rows
+            let row_len = self.config.total_output_row_len();
+            loop {
+                let dst_offset = self.orient_captured as usize * row_len;
+                if dst_offset + row_len > self.orient_buf.len() {
+                    break;
+                }
+                if !self.capture_one_orient_row(dst_offset, row_len) {
+                    break;
+                }
+                self.orient_captured += 1;
+            }
+            self.apply_orient_transform();
+        }
         self.output_rows_available()
     }
 
@@ -1241,63 +1447,124 @@ impl<B: Background> StreamingResize<B> {
     /// rows (left/right) automatically. The returned slice length is
     /// `output_row_len()` (which includes padding width).
     ///
+    /// When orientation is set, non-row-local transforms buffer internally
+    /// and only return rows after `finish()` has been called. FlipH is
+    /// applied per-row with no buffering.
+    ///
     /// Lazily produces one output row: V-filter → H-filter → composite → unpremultiply → u8 convert.
     /// The returned slice borrows from the resizer's internal buffer and is valid
     /// until the next method call on this resizer.
     pub fn next_output_row(&mut self) -> Option<&[u8]> {
+        // Non-row-local orientation: serve from orient_buf after transform is applied
+        if !self.orient.is_row_local() {
+            if !self.orient_ready {
+                return None;
+            }
+            if self.orient_rows_emitted >= self.oriented_h {
+                return None;
+            }
+            let row_len = self.oriented_w as usize * self.channels;
+            let offset = self.orient_rows_emitted as usize * row_len;
+            self.orient_rows_emitted += 1;
+            return Some(&self.orient_buf[offset..offset + row_len]);
+        }
+
+        // Identity: produce normally (most common path)
+        if self.orient.is_identity() {
+            return self.next_output_row_unoriented();
+        }
+
+        // FlipH: produce into output_buf_u8, flip pixels in-place.
+        // We produce directly and flip, avoiding borrow aliasing.
         if !self.has_padding {
-            return self.next_content_row_u8();
-        }
-        let total_row_len = self.config.total_output_row_len();
-
-        // Phase 1: top padding
-        if self.pad_top_emitted < self.pad_top {
-            self.pad_top_emitted += 1;
-            return Some(&self.pad_full_row_u8[..total_row_len]);
-        }
-
-        // Phase 2: content rows with left/right padding
-        if self.output_rows_produced < self.config.out_height {
             if !self.can_produce_next_output() {
                 return None;
             }
-            let content_len = self.config.out_width as usize * self.channels;
-            let content_start = self.pad_left_elements;
-            // Produce content into the padded buffer's content region
-            let mut tmp = core::mem::take(&mut self.padded_output_buf_u8);
+            let row_len = self.config.out_width as usize * self.channels;
+            let mut tmp = core::mem::take(&mut self.output_buf_u8);
             match self.path {
-                StreamingPath::I16Srgb => {
-                    self.produce_next_i16_srgb(
-                        &mut tmp[content_start..content_start + content_len],
-                    );
-                }
-                StreamingPath::I16Linear => {
-                    self.produce_next_i16_linear(
-                        &mut tmp[content_start..content_start + content_len],
-                    );
-                }
+                StreamingPath::I16Srgb => self.produce_next_i16_srgb(&mut tmp[..row_len]),
+                StreamingPath::I16Linear => self.produce_next_i16_linear(&mut tmp[..row_len]),
                 StreamingPath::F32 => {
                     self.produce_next_f32();
                     Self::encode_output_u8(
-                        &self.temp_output_f32[..content_len],
-                        &mut tmp[content_start..content_start + content_len],
+                        &self.temp_output_f32[..row_len],
+                        &mut tmp[..row_len],
                         self.config.effective_output_transfer(),
                         self.channels,
                         self.alpha_is_last,
                     );
                 }
             }
-            self.padded_output_buf_u8 = tmp;
-            return Some(&self.padded_output_buf_u8[..total_row_len]);
-        }
+            flip_h_row(&mut tmp[..row_len], self.channels);
+            self.output_buf_u8 = tmp;
+            Some(&self.output_buf_u8[..row_len])
+        } else {
+            // Padded FlipH: produce into padded buffer, flip entire row
+            let total_row_len = self.config.total_output_row_len();
 
-        // Phase 3: bottom padding
-        if self.pad_bottom_emitted < self.pad_bottom {
-            self.pad_bottom_emitted += 1;
-            return Some(&self.pad_full_row_u8[..total_row_len]);
-        }
+            // Phase 1: top padding
+            if self.pad_top_emitted < self.pad_top {
+                self.pad_top_emitted += 1;
+                // Padding is uniform color — flipping is identity, but do it for correctness
+                if self.output_buf_u8.len() < total_row_len {
+                    self.output_buf_u8.resize(total_row_len, 0);
+                }
+                self.output_buf_u8[..total_row_len]
+                    .copy_from_slice(&self.pad_full_row_u8[..total_row_len]);
+                flip_h_row(&mut self.output_buf_u8[..total_row_len], self.channels);
+                return Some(&self.output_buf_u8[..total_row_len]);
+            }
 
-        None
+            // Phase 2: content rows with left/right padding
+            if self.output_rows_produced < self.config.out_height {
+                if !self.can_produce_next_output() {
+                    return None;
+                }
+                let content_len = self.config.out_width as usize * self.channels;
+                let content_start = self.pad_left_elements;
+                let mut tmp = core::mem::take(&mut self.padded_output_buf_u8);
+                match self.path {
+                    StreamingPath::I16Srgb => {
+                        self.produce_next_i16_srgb(
+                            &mut tmp[content_start..content_start + content_len],
+                        );
+                    }
+                    StreamingPath::I16Linear => {
+                        self.produce_next_i16_linear(
+                            &mut tmp[content_start..content_start + content_len],
+                        );
+                    }
+                    StreamingPath::F32 => {
+                        self.produce_next_f32();
+                        Self::encode_output_u8(
+                            &self.temp_output_f32[..content_len],
+                            &mut tmp[content_start..content_start + content_len],
+                            self.config.effective_output_transfer(),
+                            self.channels,
+                            self.alpha_is_last,
+                        );
+                    }
+                }
+                flip_h_row(&mut tmp[..total_row_len], self.channels);
+                self.padded_output_buf_u8 = tmp;
+                return Some(&self.padded_output_buf_u8[..total_row_len]);
+            }
+
+            // Phase 3: bottom padding
+            if self.pad_bottom_emitted < self.pad_bottom {
+                self.pad_bottom_emitted += 1;
+                if self.output_buf_u8.len() < total_row_len {
+                    self.output_buf_u8.resize(total_row_len, 0);
+                }
+                self.output_buf_u8[..total_row_len]
+                    .copy_from_slice(&self.pad_full_row_u8[..total_row_len]);
+                flip_h_row(&mut self.output_buf_u8[..total_row_len], self.channels);
+                return Some(&self.output_buf_u8[..total_row_len]);
+            }
+
+            None
+        }
     }
 
     /// Pull the next output row directly into a caller-provided u8 buffer.
@@ -1962,6 +2229,7 @@ impl<B: Background> StreamingResize<B> {
 
         self.cache_write_idx += 1;
         self.input_rows_received += 1;
+        self.eagerly_capture_orient_rows();
         Ok(())
     }
 
@@ -1977,7 +2245,232 @@ impl<B: Background> StreamingResize<B> {
 
         self.cache_write_idx += 1;
         self.input_rows_received += 1;
+        self.eagerly_capture_orient_rows();
         Ok(())
+    }
+
+    /// Eagerly produce all available resize output rows into the orientation buffer.
+    ///
+    /// Only does work for non-row-local orientations. For Identity/FlipH, this is a no-op.
+    /// This keeps the ring buffer from overflowing by consuming output rows as they
+    /// become available, even though the caller won't see them until after `finish()`.
+    fn eagerly_capture_orient_rows(&mut self) {
+        if self.orient.is_row_local() {
+            return;
+        }
+        let row_len = self.config.total_output_row_len();
+        loop {
+            let dst_offset = self.orient_captured as usize * row_len;
+            if dst_offset + row_len > self.orient_buf.len() {
+                break;
+            }
+            if !self.capture_one_orient_row(dst_offset, row_len) {
+                break;
+            }
+            self.orient_captured += 1;
+        }
+    }
+
+    /// Produce one unoriented output row and copy it into `orient_buf[dst_offset..]`.
+    ///
+    /// Returns `true` if a row was produced, `false` if no more available.
+    /// Uses `next_output_row_unoriented()` → copy to avoid borrow aliasing.
+    fn capture_one_orient_row(&mut self, dst_offset: usize, row_len: usize) -> bool {
+        // Phase 1: top padding
+        if self.pad_top_emitted < self.pad_top {
+            self.pad_top_emitted += 1;
+            self.orient_buf[dst_offset..dst_offset + row_len]
+                .copy_from_slice(&self.pad_full_row_u8[..row_len]);
+            return true;
+        }
+
+        // Phase 2: content rows
+        if self.output_rows_produced < self.config.out_height && self.can_produce_next_output() {
+            // Produce into output_buf_u8, then copy to orient_buf
+            self.produce_content_row_to_output_buf(row_len);
+            self.orient_buf[dst_offset..dst_offset + row_len]
+                .copy_from_slice(&self.output_buf_u8[..row_len]);
+            return true;
+        }
+
+        // Phase 3: bottom padding
+        if self.pad_bottom_emitted < self.pad_bottom {
+            self.pad_bottom_emitted += 1;
+            self.orient_buf[dst_offset..dst_offset + row_len]
+                .copy_from_slice(&self.pad_full_row_u8[..row_len]);
+            return true;
+        }
+
+        false
+    }
+
+    /// Produce one content row (with optional padding) into `output_buf_u8`.
+    fn produce_content_row_to_output_buf(&mut self, total_row_len: usize) {
+        if self.has_padding {
+            let content_len = self.config.out_width as usize * self.channels;
+            let content_start = self.pad_left_elements;
+            // Ensure output_buf_u8 is large enough for padded row
+            if self.output_buf_u8.len() < total_row_len {
+                self.output_buf_u8.resize(total_row_len, 0);
+            }
+            // Copy padding template
+            self.output_buf_u8[..total_row_len]
+                .copy_from_slice(&self.padded_output_buf_u8[..total_row_len]);
+            // Produce content into the content region
+            let mut tmp = core::mem::take(&mut self.output_buf_u8);
+            match self.path {
+                StreamingPath::I16Srgb => {
+                    self.produce_next_i16_srgb(
+                        &mut tmp[content_start..content_start + content_len],
+                    );
+                }
+                StreamingPath::I16Linear => {
+                    self.produce_next_i16_linear(
+                        &mut tmp[content_start..content_start + content_len],
+                    );
+                }
+                StreamingPath::F32 => {
+                    self.produce_next_f32();
+                    Self::encode_output_u8(
+                        &self.temp_output_f32[..content_len],
+                        &mut tmp[content_start..content_start + content_len],
+                        self.config.effective_output_transfer(),
+                        self.channels,
+                        self.alpha_is_last,
+                    );
+                }
+            }
+            self.output_buf_u8 = tmp;
+        } else {
+            // No padding — produce content directly
+            let mut tmp = core::mem::take(&mut self.output_buf_u8);
+            match self.path {
+                StreamingPath::I16Srgb => self.produce_next_i16_srgb(&mut tmp[..total_row_len]),
+                StreamingPath::I16Linear => {
+                    self.produce_next_i16_linear(&mut tmp[..total_row_len])
+                }
+                StreamingPath::F32 => {
+                    self.produce_next_f32();
+                    Self::encode_output_u8(
+                        &self.temp_output_f32[..total_row_len],
+                        &mut tmp[..total_row_len],
+                        self.config.effective_output_transfer(),
+                        self.channels,
+                        self.alpha_is_last,
+                    );
+                }
+            }
+            self.output_buf_u8 = tmp;
+        }
+    }
+
+    /// Produce the next output row WITHOUT orientation — raw resize + padding output.
+    ///
+    /// This is the core output pipeline that `next_output_row` delegates to.
+    /// Returns `None` if no row is available (not enough input or all done).
+    fn next_output_row_unoriented(&mut self) -> Option<&[u8]> {
+        if !self.has_padding {
+            return self.next_content_row_u8();
+        }
+        let total_row_len = self.config.total_output_row_len();
+
+        // Phase 1: top padding
+        if self.pad_top_emitted < self.pad_top {
+            self.pad_top_emitted += 1;
+            return Some(&self.pad_full_row_u8[..total_row_len]);
+        }
+
+        // Phase 2: content rows with left/right padding
+        if self.output_rows_produced < self.config.out_height {
+            if !self.can_produce_next_output() {
+                return None;
+            }
+            let content_len = self.config.out_width as usize * self.channels;
+            let content_start = self.pad_left_elements;
+            let mut tmp = core::mem::take(&mut self.padded_output_buf_u8);
+            match self.path {
+                StreamingPath::I16Srgb => {
+                    self.produce_next_i16_srgb(
+                        &mut tmp[content_start..content_start + content_len],
+                    );
+                }
+                StreamingPath::I16Linear => {
+                    self.produce_next_i16_linear(
+                        &mut tmp[content_start..content_start + content_len],
+                    );
+                }
+                StreamingPath::F32 => {
+                    self.produce_next_f32();
+                    Self::encode_output_u8(
+                        &self.temp_output_f32[..content_len],
+                        &mut tmp[content_start..content_start + content_len],
+                        self.config.effective_output_transfer(),
+                        self.channels,
+                        self.alpha_is_last,
+                    );
+                }
+            }
+            self.padded_output_buf_u8 = tmp;
+            return Some(&self.padded_output_buf_u8[..total_row_len]);
+        }
+
+        // Phase 3: bottom padding
+        if self.pad_bottom_emitted < self.pad_bottom {
+            self.pad_bottom_emitted += 1;
+            return Some(&self.pad_full_row_u8[..total_row_len]);
+        }
+
+        None
+    }
+
+    /// Accessor for the current orientation.
+    pub fn orientation(&self) -> OrientOutput {
+        self.orient
+    }
+
+    /// Apply the orientation transform to the buffered resize output.
+    ///
+    /// Called by `finish()` after all resize rows have been captured.
+    fn apply_orient_transform(&mut self) {
+        if self.orient.is_row_local() || self.orient_ready {
+            return;
+        }
+        let src_h = self.config.total_output_height();
+        let src_w = self.config.total_output_width();
+        let ch = self.channels;
+        let src_stride = src_w as usize * ch;
+        let dst_w = self.oriented_w;
+        let dst_stride = dst_w as usize * ch;
+
+        // For non-row-local orientations, scatter source pixels to destination.
+        // We need a separate destination buffer to avoid aliasing.
+        let mut dst = vec![0u8; dst_stride * self.oriented_h as usize];
+
+        for sy in 0..src_h {
+            for sx in 0..src_w {
+                let (dx, dy) = self.orient.forward_map(sx, sy, src_w, src_h);
+                let src_off = sy as usize * src_stride + sx as usize * ch;
+                let dst_off = dy as usize * dst_stride + dx as usize * ch;
+                dst[dst_off..dst_off + ch]
+                    .copy_from_slice(&self.orient_buf[src_off..src_off + ch]);
+            }
+        }
+
+        self.orient_buf = dst;
+        self.orient_ready = true;
+    }
+}
+
+/// Reverse the pixel order of a u8 row in-place.
+fn flip_h_row(row: &mut [u8], channels: usize) {
+    let pixel_count = row.len() / channels;
+    for i in 0..pixel_count / 2 {
+        let j = pixel_count - 1 - i;
+        let a = i * channels;
+        let b = j * channels;
+        for c in 0..channels {
+            row.swap(a + c, b + c);
+        }
     }
 }
 
@@ -3505,5 +3998,153 @@ mod tests {
         let bg_row = vec![0.5f32; 8];
         resizer.background_mut().push_row(&bg_row);
         assert_eq!(resizer.background_mut().rows_pushed(), 1);
+    }
+
+    // === Orientation tests ===
+
+    #[test]
+    fn test_orient_identity_passthrough() {
+        let config = make_config(4, 4, 4, 4);
+        let mut r1 = StreamingResize::new(&config);
+        let mut r2 = StreamingResize::new(&config).with_orientation(OrientOutput::Identity);
+
+        let row = vec![128u8; 4 * 4];
+        let rows1 = push_drain_collect_u8(&mut r1, &row, 4);
+        let rows2 = push_drain_collect_u8(&mut r2, &row, 4);
+        assert_eq!(rows1, rows2);
+    }
+
+    #[test]
+    fn test_orient_flip_h() {
+        // 4x2 image with distinct columns — compare oriented vs unoriented
+        let config = ResizeConfig::builder(4, 2, 4, 2)
+            .format(PixelDescriptor::RGBA8_SRGB)
+            .srgb()
+            .build();
+
+        let row = vec![
+            10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255,
+        ];
+
+        // Get unoriented output
+        let mut plain = StreamingResize::new(&config);
+        let plain_rows = push_drain_collect_u8(&mut plain, &row, 2);
+
+        // Get FlipH output
+        let mut flipped = StreamingResize::new(&config).with_orientation(OrientOutput::FlipH);
+        let flip_rows = push_drain_collect_u8(&mut flipped, &row, 2);
+
+        assert_eq!(flip_rows.len(), plain_rows.len());
+        // Each row should have its pixels reversed relative to the unoriented output
+        for (plain_row, flip_row) in plain_rows.iter().zip(flip_rows.iter()) {
+            let plain_pixels: Vec<&[u8]> = plain_row.chunks_exact(4).collect();
+            let flip_pixels: Vec<&[u8]> = flip_row.chunks_exact(4).collect();
+            let reversed: Vec<&[u8]> = plain_pixels.iter().rev().copied().collect();
+            assert_eq!(flip_pixels, reversed, "FlipH should reverse pixel order per row");
+        }
+    }
+
+    #[test]
+    fn test_orient_flip_v() {
+        // 2x4 image — compare oriented vs unoriented
+        let config = ResizeConfig::builder(2, 4, 2, 4)
+            .format(PixelDescriptor::RGBA8_SRGB)
+            .srgb()
+            .build();
+
+        let rows_in = [
+            vec![10u8, 0, 0, 255, 10, 0, 0, 255],
+            vec![20, 0, 0, 255, 20, 0, 0, 255],
+            vec![30, 0, 0, 255, 30, 0, 0, 255],
+            vec![40, 0, 0, 255, 40, 0, 0, 255],
+        ];
+
+        // Get unoriented output
+        let mut plain = StreamingResize::new(&config);
+        for row in &rows_in {
+            plain.push_row(row).unwrap();
+        }
+        plain.finish();
+        let mut plain_rows = Vec::new();
+        while let Some(row) = plain.next_output_row() {
+            plain_rows.push(row.to_vec());
+        }
+
+        // Get FlipV output
+        let mut flipped = StreamingResize::new(&config).with_orientation(OrientOutput::FlipV);
+        for row in &rows_in {
+            flipped.push_row(row).unwrap();
+            // FlipV is non-row-local — no output until finish()
+            assert!(flipped.next_output_row().is_none());
+        }
+        let remaining = flipped.finish();
+        assert_eq!(remaining, 4);
+        let mut flip_rows = Vec::new();
+        while let Some(row) = flipped.next_output_row() {
+            flip_rows.push(row.to_vec());
+        }
+
+        assert_eq!(flip_rows.len(), plain_rows.len());
+        // Rows should be in reverse order relative to unoriented output
+        for (i, flip_row) in flip_rows.iter().enumerate() {
+            let plain_row = &plain_rows[plain_rows.len() - 1 - i];
+            assert_eq!(flip_row, plain_row, "FlipV row {i} should match reversed plain row");
+        }
+    }
+
+    #[test]
+    fn test_orient_rotate90() {
+        // 4x2 identity resize with Rotate90 → output should be 2x4
+        let config = ResizeConfig::builder(4, 2, 4, 2)
+            .format(PixelDescriptor::RGBA8_SRGB)
+            .srgb()
+            .build();
+        let mut resizer =
+            StreamingResize::new(&config).with_orientation(OrientOutput::Rotate90);
+
+        assert_eq!(resizer.output_row_len(), 2 * 4); // oriented width = 2
+        assert_eq!(resizer.total_output_height(), 4); // oriented height = 4
+
+        let row0 = vec![
+            10, 0, 0, 255, 20, 0, 0, 255, 30, 0, 0, 255, 40, 0, 0, 255,
+        ];
+        let row1 = vec![
+            50, 0, 0, 255, 60, 0, 0, 255, 70, 0, 0, 255, 80, 0, 0, 255,
+        ];
+
+        resizer.push_row(&row0).unwrap();
+        resizer.push_row(&row1).unwrap();
+        let remaining = resizer.finish();
+        assert_eq!(remaining, 4);
+
+        let mut output = Vec::new();
+        while let Some(row) = resizer.next_output_row() {
+            output.push(row.to_vec());
+        }
+        assert_eq!(output.len(), 4);
+        assert!(resizer.is_complete());
+    }
+
+    #[test]
+    fn test_orient_dimensions_reporting() {
+        let config = ResizeConfig::builder(10, 20, 10, 20)
+            .format(PixelDescriptor::RGBA8_SRGB)
+            .srgb()
+            .build();
+
+        // Identity: 10x20
+        let r = StreamingResize::new(&config).with_orientation(OrientOutput::Identity);
+        assert_eq!(r.output_row_len(), 10 * 4);
+        assert_eq!(r.total_output_height(), 20);
+
+        // Rotate90: 20x10
+        let r = StreamingResize::new(&config).with_orientation(OrientOutput::Rotate90);
+        assert_eq!(r.output_row_len(), 20 * 4);
+        assert_eq!(r.total_output_height(), 10);
+
+        // FlipH: 10x20 (same dims)
+        let r = StreamingResize::new(&config).with_orientation(OrientOutput::FlipH);
+        assert_eq!(r.output_row_len(), 10 * 4);
+        assert_eq!(r.total_output_height(), 20);
     }
 }

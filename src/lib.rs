@@ -77,7 +77,7 @@ pub use layout::{
 pub use pixel::{Element, LobeRatio, Padding, ResizeConfig, ResizeConfigBuilder, SourceRegion};
 pub use plane::PlaneResizer;
 pub use resize::Resizer;
-pub use streaming::{StreamingError, StreamingResize, WorkingFormat};
+pub use streaming::{OrientOutput, StreamingError, StreamingResize, WorkingFormat};
 
 pub use composite::{
     Background, CompositeError, NoBackground, SliceBackground, SolidBackground, StreamedBackground,
