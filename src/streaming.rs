@@ -1547,6 +1547,99 @@ impl<B: Background> StreamingResize<B> {
         false
     }
 
+    /// Pull the next output row as premultiplied linear f32 — **before** compositing
+    /// and unpremultiply. This is the building block for external two-stream compositing.
+    ///
+    /// Returns `None` if more input rows are needed. Does NOT apply the owned
+    /// background or unpremultiply — the caller handles both.
+    ///
+    /// Requires the f32 path (panics on i16 paths). The f32 path is selected
+    /// automatically for compositing-eligible configs (linear, 3ch, f32 I/O, u16 I/O),
+    /// or can be forced with `.linear()` on the builder.
+    ///
+    /// Padding is NOT included in the returned slice — only resize content rows are
+    /// returned. Use [`total_output_width()`](ResizeConfig::total_output_width) and
+    /// the padding config to assemble the final output.
+    ///
+    /// # Two-stream compositing example
+    ///
+    /// ```ignore
+    /// let mut fg = StreamingResize::new(&fg_config);
+    /// let mut bg = StreamingResize::new(&bg_config);
+    ///
+    /// // Push rows to both resizers...
+    ///
+    /// // Pull and composite:
+    /// let fg_row = fg.next_output_row_premul_linear_f32().unwrap();
+    /// let mut composited = fg_row.to_vec();
+    /// let bg_row = bg.next_output_row_premul_linear_f32().unwrap();
+    /// composite_over_premul(&mut composited, bg_row, 4);
+    /// unpremultiply_f32_row(&mut composited);
+    /// // encode composited to u8...
+    /// ```
+    pub fn next_output_row_premul_linear_f32(&mut self) -> Option<&[f32]> {
+        assert_eq!(
+            self.path,
+            StreamingPath::F32,
+            "next_output_row_premul_linear_f32 requires f32 path (use .linear() on config)"
+        );
+
+        if !self.can_produce_next_output() {
+            return None;
+        }
+        self.produce_next_f32_raw();
+        let row_len = self.config.out_width as usize * self.channels;
+        Some(&self.temp_output_f32[..row_len])
+    }
+
+    /// Pull the next output row, compositing the resized foreground over a
+    /// caller-provided premultiplied linear f32 background row.
+    ///
+    /// This is the clean API for two-stream compositing: the caller manages the
+    /// background stream independently and provides one row at a time.
+    ///
+    /// `bg_premul_linear` must have at least `out_width * channels` elements.
+    /// The compositing uses Porter-Duff source-over in premultiplied linear space.
+    ///
+    /// Requires the f32 path.
+    pub fn next_output_row_over(&mut self, bg_premul_linear: &[f32]) -> Option<&[u8]> {
+        assert_eq!(
+            self.path,
+            StreamingPath::F32,
+            "next_output_row_over requires f32 path"
+        );
+
+        if !self.can_produce_next_output() {
+            return None;
+        }
+        self.produce_next_f32_raw();
+        let row_len = self.config.out_width as usize * self.channels;
+
+        // Composite fg over bg
+        if self.channels == 4 {
+            composite::composite_over_premul(
+                &mut self.temp_output_f32[..row_len],
+                &bg_premul_linear[..row_len],
+                4,
+            );
+        }
+
+        // Unpremultiply
+        if self.needs_premul {
+            simd::unpremultiply_alpha_row(&mut self.temp_output_f32[..row_len]);
+        }
+
+        // Encode to u8
+        Self::encode_output_u8(
+            &self.temp_output_f32[..row_len],
+            &mut self.output_buf_u8[..row_len],
+            self.config.effective_output_transfer(),
+            self.channels,
+            self.alpha_is_last,
+        );
+        Some(&self.output_buf_u8[..row_len])
+    }
+
     // Non-padded content row helpers (factored out to avoid duplication)
 
     fn next_content_row_u8(&mut self) -> Option<&[u8]> {
@@ -1696,10 +1789,10 @@ impl<B: Background> StreamingResize<B> {
         needed_max < self.input_rows_received
     }
 
-    /// V-filter → H-filter one output row into `temp_output_f32`, apply composite and unpremultiply.
-    /// Increments `output_rows_produced`. Caller must check `can_produce_next_output` first.
-    /// Only called for the F32 path. Ring buffer stores f16 (u16), V-filter outputs f32.
-    fn produce_next_f32(&mut self) {
+    /// V-filter → H-filter one output row into `temp_output_f32` (premultiplied linear).
+    /// Does NOT apply composite or unpremultiply. Increments `output_rows_produced`.
+    /// Caller must check `can_produce_next_output` first.
+    fn produce_next_f32_raw(&mut self) {
         let out_y = self.output_rows_produced;
 
         let left = self.v_weights.left[out_y as usize];
@@ -1730,7 +1823,18 @@ impl<B: Background> StreamingResize<B> {
             self.channels,
         );
 
-        // Step 3: composite + unpremul (operates on temp_output_f32)
+        self.output_rows_produced += 1;
+    }
+
+    /// V-filter → H-filter → composite → unpremultiply one output row.
+    /// Result in `temp_output_f32`. Increments `output_rows_produced`.
+    fn produce_next_f32(&mut self) {
+        self.produce_next_f32_raw();
+
+        let out_y = self.output_rows_produced - 1; // raw already incremented
+        let out_row_len = self.config.out_width as usize * self.channels;
+
+        // composite + unpremul (operates on temp_output_f32)
         composite::composite_dispatch(
             &mut self.temp_output_f32[..out_row_len],
             &mut self.background,
@@ -1742,8 +1846,6 @@ impl<B: Background> StreamingResize<B> {
         if self.needs_premul {
             simd::unpremultiply_alpha_row(&mut self.temp_output_f32[..out_row_len]);
         }
-
-        self.output_rows_produced += 1;
     }
 
     /// Produce one output row via the I16Srgb path: u8 V-filter → u8 H-filter → u8 output.
@@ -3304,5 +3406,104 @@ mod tests {
             assert!((pixel[0] - 0.5).abs() < 0.01, "f32 padding R: {}", pixel[0]);
             assert!((pixel[3] - 1.0).abs() < 0.01, "f32 padding A: {}", pixel[3]);
         }
+    }
+
+    #[test]
+    fn test_premul_linear_f32_output() {
+        // Test that next_output_row_premul_linear_f32 returns premultiplied data
+        let config = ResizeConfig::builder(4, 4, 2, 2)
+            .filter(crate::Filter::Lanczos)
+            .format(PixelDescriptor::RGBA8_SRGB)
+            .linear() // force f32 path
+            .build();
+
+        let mut resizer = StreamingResize::new(&config);
+        let row = vec![128u8; 4 * 4];
+        for _ in 0..4 {
+            resizer.push_row(&row).unwrap();
+            while let Some(out) = resizer.next_output_row_premul_linear_f32() {
+                // Should be premul linear f32, not u8
+                assert_eq!(out.len(), 2 * 4);
+                // Values should be in [0, 1] range (linear f32)
+                for &v in out {
+                    assert!(v >= 0.0 && v <= 1.1, "premul value out of range: {v}");
+                }
+            }
+        }
+        resizer.finish();
+        while let Some(out) = resizer.next_output_row_premul_linear_f32() {
+            assert_eq!(out.len(), 2 * 4);
+        }
+    }
+
+    #[test]
+    fn test_next_output_row_over_matches_with_background() {
+        // Compare next_output_row_over() against with_background(SolidBackground)
+        let config = ResizeConfig::builder(8, 8, 4, 4)
+            .filter(crate::Filter::Lanczos)
+            .format(PixelDescriptor::RGBA8_SRGB)
+            .linear()
+            .build();
+
+        // Semi-transparent input
+        let mut input = vec![0u8; 8 * 4];
+        for pixel in input.chunks_exact_mut(4) {
+            pixel[0] = 200; // R
+            pixel[1] = 100; // G
+            pixel[2] = 50;  // B
+            pixel[3] = 128; // A = 50%
+        }
+
+        // Path A: with_background(SolidBackground::white)
+        let bg = crate::composite::SolidBackground::white(PixelDescriptor::RGBA8_SRGB);
+        let mut resizer_a = StreamingResize::with_background(&config, bg).unwrap();
+        let mut rows_a = Vec::new();
+        for _ in 0..8 {
+            resizer_a.push_row(&input).unwrap();
+            while let Some(out) = resizer_a.next_output_row() {
+                rows_a.push(out.to_vec());
+            }
+        }
+        resizer_a.finish();
+        while let Some(out) = resizer_a.next_output_row() {
+            rows_a.push(out.to_vec());
+        }
+
+        // Path B: next_output_row_over with white bg row
+        let mut resizer_b = StreamingResize::new(&config);
+        // White in premul linear = [1.0, 1.0, 1.0, 1.0]
+        let white_bg = vec![1.0f32; 4 * 4];
+        let mut rows_b = Vec::new();
+        for _ in 0..8 {
+            resizer_b.push_row(&input).unwrap();
+            while let Some(out) = resizer_b.next_output_row_over(&white_bg) {
+                rows_b.push(out.to_vec());
+            }
+        }
+        resizer_b.finish();
+        while let Some(out) = resizer_b.next_output_row_over(&white_bg) {
+            rows_b.push(out.to_vec());
+        }
+
+        assert_eq!(rows_a.len(), rows_b.len());
+        for (i, (a, b)) in rows_a.iter().zip(rows_b.iter()).enumerate() {
+            assert_eq!(a, b, "row {i} mismatch between with_background and next_output_row_over");
+        }
+    }
+
+    #[test]
+    fn test_background_mut_accessible() {
+        let bg = crate::composite::StreamedBackground::new(4, 8);
+        let config = ResizeConfig::builder(4, 4, 2, 2)
+            .filter(crate::Filter::Lanczos)
+            .format(PixelDescriptor::RGBA8_SRGB)
+            .linear()
+            .build();
+        let mut resizer = StreamingResize::with_background(&config, bg).unwrap();
+
+        // Should be able to push rows via background_mut
+        let bg_row = vec![0.5f32; 8];
+        resizer.background_mut().push_row(&bg_row);
+        assert_eq!(resizer.background_mut().rows_pushed(), 1);
     }
 }

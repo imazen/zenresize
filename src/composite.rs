@@ -269,10 +269,13 @@ impl Background for StreamedBackground {
 
 /// Source-over composite: premultiplied foreground over premultiplied background.
 ///
+/// Applies Porter-Duff source-over in-place: `src[i] += bg[i] * (1 - src_alpha)`.
+/// Both `src` and `bg` must be premultiplied linear f32.
+///
 /// For non-4-channel data (Gray, Rgb), this is a no-op since those formats
 /// have no alpha and are therefore fully opaque.
 #[inline]
-pub(crate) fn composite_over_premul(src: &mut [f32], bg: &[f32], channels: u8) {
+pub fn composite_over_premul(src: &mut [f32], bg: &[f32], channels: u8) {
     if channels != 4 {
         return; // Gray/Rgb are opaque — no blending needed
     }
@@ -289,7 +292,7 @@ pub(crate) fn composite_over_premul(src: &mut [f32], bg: &[f32], channels: u8) {
 ///
 /// No row buffer needed — pixel values live in registers.
 #[inline]
-pub(crate) fn composite_over_solid_premul(src: &mut [f32], pixel: &[f32; 4]) {
+pub fn composite_over_solid_premul(src: &mut [f32], pixel: &[f32; 4]) {
     for s in src.chunks_exact_mut(4) {
         let inv_a = 1.0 - s[3];
         s[0] += pixel[0] * inv_a;
@@ -303,7 +306,7 @@ pub(crate) fn composite_over_solid_premul(src: &mut [f32], pixel: &[f32; 4]) {
 ///
 /// Output alpha is always 1.0 (opaque bg + any fg → opaque output).
 #[inline]
-pub(crate) fn composite_over_solid_opaque_premul(src: &mut [f32], pixel: &[f32; 4]) {
+pub fn composite_over_solid_opaque_premul(src: &mut [f32], pixel: &[f32; 4]) {
     for s in src.chunks_exact_mut(4) {
         let inv_a = 1.0 - s[3];
         s[0] += pixel[0] * inv_a;
@@ -311,6 +314,15 @@ pub(crate) fn composite_over_solid_opaque_premul(src: &mut [f32], pixel: &[f32; 
         s[2] += pixel[2] * inv_a;
         s[3] = 1.0; // bg opaque + any fg → opaque output
     }
+}
+
+/// Unpremultiply alpha on a premultiplied linear f32 row (4ch RGBA, in-place).
+///
+/// Divides RGB channels by alpha. Fully transparent pixels (alpha = 0) are left
+/// as zeros. Use after compositing to convert back to straight alpha.
+#[inline]
+pub fn unpremultiply_f32_row(row: &mut [f32]) {
+    crate::simd::unpremultiply_alpha_row(row);
 }
 
 /// Three-tier composite dispatch used by both [`Resizer`] and [`StreamingResize`].

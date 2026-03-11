@@ -81,6 +81,8 @@ pub use streaming::{StreamingError, StreamingResize, WorkingFormat};
 
 pub use composite::{
     Background, CompositeError, NoBackground, SliceBackground, SolidBackground, StreamedBackground,
+    composite_over_premul, composite_over_solid_opaque_premul, composite_over_solid_premul,
+    unpremultiply_f32_row,
 };
 
 pub use resize::{resize_3ch, resize_4ch, resize_gray8};
