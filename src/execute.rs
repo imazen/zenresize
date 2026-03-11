@@ -1125,9 +1125,25 @@ pub fn streaming_from_plan(
     desc: PixelDescriptor,
     filter: Filter,
 ) -> crate::StreamingResize {
+    streaming_from_plan_batched(decoder_width, decoder_height, plan, desc, filter, 1)
+}
+
+/// Like [`streaming_from_plan()`] but with a batch hint for the ring buffer.
+///
+/// Use this when you'll push multiple rows at once via [`StreamingResize::push_rows()`].
+/// The batch hint sizes the ring buffer to accommodate that many rows per push
+/// without overflow.
+pub fn streaming_from_plan_batched(
+    decoder_width: u32,
+    decoder_height: u32,
+    plan: &LayoutPlan,
+    desc: PixelDescriptor,
+    filter: Filter,
+    batch_hint: u32,
+) -> crate::StreamingResize {
     let config = config_from_plan(decoder_width, decoder_height, plan, desc, filter);
     let orient: crate::OrientOutput = plan.remaining_orientation.into();
-    crate::StreamingResize::new(&config).with_orientation(orient)
+    crate::StreamingResize::with_batch_hint(&config, batch_hint).with_orientation(orient)
 }
 
 /// Convert a [`CanvasColor`] to `[f32; 4]` in the output's color space (0.0–1.0).
