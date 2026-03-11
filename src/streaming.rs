@@ -222,6 +222,46 @@ pub struct StreamingResize<B: Background = NoBackground> {
     background: B,
     /// Row buffer for non-solid backgrounds. Empty for NoBackground and SolidBackground.
     composite_bg_row: Vec<f32>,
+
+    // === Crop state (zero-cost when not cropping) ===
+    /// Current source row index (0-based, tracks full source image rows pushed).
+    source_row_index: u32,
+    /// Byte offset into source rows for horizontal crop (crop_x * channels).
+    crop_x_offset: usize,
+    /// First source row to use (inclusive).
+    crop_y_start: u32,
+    /// Last source row to use (exclusive: crop_y + crop_h).
+    crop_y_end: u32,
+    /// Full source width for push_row validation (differs from resize_in_w when cropping).
+    source_in_width: u32,
+    /// Whether cropping is active.
+    has_crop: bool,
+
+    // === Padding state (zero-cost when not padding) ===
+    /// Padding pixels above the content.
+    pad_top: u32,
+    /// Padding pixels below the content.
+    pad_bottom: u32,
+    /// Number of elements for left padding (pad_left * channels).
+    pad_left_elements: usize,
+    /// Pre-filled full-width padding row (u8). Empty when no padding.
+    pad_full_row_u8: Vec<u8>,
+    /// Padded output buffer for content rows (u8, pre-filled with pad color).
+    padded_output_buf_u8: Vec<u8>,
+    /// Pre-filled full-width padding row (f32). Empty when no padding or u8-only output.
+    pad_full_row_f32: Vec<f32>,
+    /// Padded output buffer for content rows (f32).
+    padded_output_buf_f32: Vec<f32>,
+    /// Pre-filled full-width padding row (u16). Empty when no padding or u8-only output.
+    pad_full_row_u16: Vec<u16>,
+    /// Padded output buffer for content rows (u16).
+    padded_output_buf_u16: Vec<u16>,
+    /// Top padding rows emitted so far.
+    pad_top_emitted: u32,
+    /// Bottom padding rows emitted so far.
+    pad_bottom_emitted: u32,
+    /// Whether padding is active.
+    has_padding: bool,
 }
 
 impl StreamingResize<NoBackground> {
@@ -285,11 +325,29 @@ impl<B: Background> StreamingResize<B> {
             crate::pixel::LobeRatio::Exact(r) => filter = filter.with_lobe_ratio(*r),
             crate::pixel::LobeRatio::SharpenPercent(p) => filter = filter.with_sharpen_percent(*p),
         }
-        let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
+
+        // Crop: use crop dimensions for weight tables
+        let resize_in_w = config.resize_in_width();
+        let resize_in_h = config.resize_in_height();
+        let v_weights = F32WeightTable::new(resize_in_h, config.out_height, &filter);
 
         let channels = config.channels();
         let needs_premul = config.needs_premultiply();
         let alpha_is_last = config.input.has_alpha();
+
+        // Crop state
+        let has_crop = config.source_region.is_some();
+        let (crop_x_offset, crop_y_start, crop_y_end, source_in_width) =
+            if let Some(ref r) = config.source_region {
+                (
+                    r.x as usize * channels,
+                    r.y,
+                    r.y + r.height,
+                    config.in_width,
+                )
+            } else {
+                (0, 0, config.in_height, config.in_width)
+            };
 
         // Path selection: mirrors fullframe Resizer paths 0/1.
         // I16Srgb: identity transfer (no linearization), u8 4ch.
@@ -324,7 +382,7 @@ impl<B: Background> StreamingResize<B> {
             2
         };
         let cache_size = v_weights.max_taps + extra_slack;
-        let in_row_len = config.in_width as usize * channels;
+        let in_row_len = resize_in_w as usize * channels;
         let out_row_len = config.out_width as usize * channels;
 
         // Only allocate bg row buffer for non-solid, non-transparent backgrounds
@@ -339,9 +397,85 @@ impl<B: Background> StreamingResize<B> {
         // Reusable output conversion buffers (always needed for u8 output)
         let output_buf_u8 = vec![0u8; out_row_len];
 
+        // Padding buffers
+        let has_padding = config.padding.as_ref().is_some_and(|p| !p.is_empty());
+        let (
+            pad_top,
+            pad_bottom,
+            pad_left_elements,
+            pad_full_row_u8,
+            padded_output_buf_u8,
+            pad_full_row_f32,
+            padded_output_buf_f32,
+            pad_full_row_u16,
+            padded_output_buf_u16,
+        ) = if has_padding {
+            let p = config.padding.as_ref().unwrap();
+            let total_w = (p.left + config.out_width + p.right) as usize;
+            let total_row_len = total_w * channels;
+            let pad_left_el = p.left as usize * channels;
+
+            // Convert color to u8 pixel
+            let mut pad_pixel_u8 = vec![0u8; channels];
+            for (i, b) in pad_pixel_u8.iter_mut().enumerate() {
+                *b = (p.color[i.min(3)] * 255.0 + 0.5) as u8;
+            }
+            let mut full_u8 = vec![0u8; total_row_len];
+            for pixel in full_u8.chunks_exact_mut(channels) {
+                pixel.copy_from_slice(&pad_pixel_u8);
+            }
+            let padded_u8 = full_u8.clone();
+
+            // f32 padding buffers
+            let mut pad_pixel_f32 = vec![0.0f32; channels];
+            for (i, v) in pad_pixel_f32.iter_mut().enumerate() {
+                *v = p.color[i.min(3)];
+            }
+            let mut full_f32 = vec![0.0f32; total_row_len];
+            for pixel in full_f32.chunks_exact_mut(channels) {
+                pixel.copy_from_slice(&pad_pixel_f32);
+            }
+            let padded_f32 = full_f32.clone();
+
+            // u16 padding buffers
+            let mut pad_pixel_u16 = vec![0u16; channels];
+            for (i, v) in pad_pixel_u16.iter_mut().enumerate() {
+                *v = (p.color[i.min(3)] * 65535.0 + 0.5) as u16;
+            }
+            let mut full_u16 = vec![0u16; total_row_len];
+            for pixel in full_u16.chunks_exact_mut(channels) {
+                pixel.copy_from_slice(&pad_pixel_u16);
+            }
+            let padded_u16 = full_u16.clone();
+
+            (
+                p.top,
+                p.bottom,
+                pad_left_el,
+                full_u8,
+                padded_u8,
+                full_f32,
+                padded_f32,
+                full_u16,
+                padded_u16,
+            )
+        } else {
+            (
+                0,
+                0,
+                0,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+        };
+
         match path {
             StreamingPath::F32 => {
-                let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
+                let h_weights = F32WeightTable::new(resize_in_w, config.out_width, &filter);
                 let h_padding = h_weights.max_taps * channels;
                 let v_cache_row_len = in_row_len + h_padding;
 
@@ -378,12 +512,29 @@ impl<B: Background> StreamingResize<B> {
                     finished: false,
                     background,
                     composite_bg_row,
+                    source_row_index: 0,
+                    crop_x_offset,
+                    crop_y_start,
+                    crop_y_end,
+                    source_in_width,
+                    has_crop,
+                    pad_top,
+                    pad_bottom,
+                    pad_left_elements,
+                    pad_full_row_u8,
+                    padded_output_buf_u8,
+                    pad_full_row_f32,
+                    padded_output_buf_f32,
+                    pad_full_row_u16,
+                    padded_output_buf_u16,
+                    pad_top_emitted: 0,
+                    pad_bottom_emitted: 0,
+                    has_padding,
                 }
             }
             StreamingPath::I16Srgb => {
-                let i16_h_weights = I16WeightTable::new(config.in_width, config.out_width, &filter);
-                let i16_v_weights =
-                    I16WeightTable::new(config.in_height, config.out_height, &filter);
+                let i16_h_weights = I16WeightTable::new(resize_in_w, config.out_width, &filter);
+                let i16_v_weights = I16WeightTable::new(resize_in_h, config.out_height, &filter);
 
                 // V-filter output needs H-filter SIMD padding (zeroed)
                 let h_padding_bytes = i16_h_weights.groups4 * 16;
@@ -420,12 +571,29 @@ impl<B: Background> StreamingResize<B> {
                     finished: false,
                     background,
                     composite_bg_row,
+                    source_row_index: 0,
+                    crop_x_offset,
+                    crop_y_start,
+                    crop_y_end,
+                    source_in_width,
+                    has_crop,
+                    pad_top,
+                    pad_bottom,
+                    pad_left_elements,
+                    pad_full_row_u8,
+                    padded_output_buf_u8,
+                    pad_full_row_f32,
+                    padded_output_buf_f32,
+                    pad_full_row_u16,
+                    padded_output_buf_u16,
+                    pad_top_emitted: 0,
+                    pad_bottom_emitted: 0,
+                    has_padding,
                 }
             }
             StreamingPath::I16Linear => {
-                let i16_h_weights = I16WeightTable::new(config.in_width, config.out_width, &filter);
-                let i16_v_weights =
-                    I16WeightTable::new(config.in_height, config.out_height, &filter);
+                let i16_h_weights = I16WeightTable::new(resize_in_w, config.out_width, &filter);
+                let i16_v_weights = I16WeightTable::new(resize_in_h, config.out_height, &filter);
 
                 // H-filter SIMD padding for i16 data (in i16 elements)
                 let h_padding_i16 = i16_h_weights.groups4 * 16;
@@ -462,6 +630,24 @@ impl<B: Background> StreamingResize<B> {
                     finished: false,
                     background,
                     composite_bg_row,
+                    source_row_index: 0,
+                    crop_x_offset,
+                    crop_y_start,
+                    crop_y_end,
+                    source_in_width,
+                    has_crop,
+                    pad_top,
+                    pad_bottom,
+                    pad_left_elements,
+                    pad_full_row_u8,
+                    padded_output_buf_u8,
+                    pad_full_row_f32,
+                    padded_output_buf_f32,
+                    pad_full_row_u16,
+                    padded_output_buf_u16,
+                    pad_top_emitted: 0,
+                    pad_bottom_emitted: 0,
+                    has_padding,
                 }
             }
         }
@@ -473,16 +659,18 @@ impl<B: Background> StreamingResize<B> {
 
     /// Number of elements per input row (for sizing decode buffers).
     ///
-    /// Equal to `in_width * channels`.
+    /// When a source region is set, this still returns the full source width
+    /// (`in_width * channels`), since `push_row` accepts full-width rows.
     pub fn input_row_len(&self) -> usize {
-        self.config.input_row_len()
+        self.source_in_width as usize * self.channels
     }
 
     /// Number of elements per output row (for sizing encode buffers).
     ///
-    /// Equal to `out_width * channels`.
+    /// When padding is set, this returns the padded width
+    /// (`(left + out_width + right) * channels`).
     pub fn output_row_len(&self) -> usize {
-        self.config.output_row_len()
+        self.config.total_output_row_len()
     }
 
     /// Mutable reference to the background (e.g., for pushing rows to [`crate::StreamedBackground`]).
@@ -505,9 +693,18 @@ impl<B: Background> StreamingResize<B> {
     }
 
     /// How many input rows must be pushed before the first output row.
+    ///
+    /// When padding is set and `pad_top > 0`, returns 0 since top padding
+    /// rows are available immediately without any input.
     pub fn initial_input_rows_needed(&self) -> u32 {
+        if self.pad_top > 0 {
+            return 0;
+        }
         let first_right = self.first_output_row_max_input();
-        (first_right + 1).min(self.config.in_height)
+        let resize_in_h = self.config.resize_in_height();
+        let crop_offset = self.crop_y_start;
+        // Account for crop: the caller needs to push crop_y_start + needed rows
+        (first_right + 1).min(resize_in_h) + crop_offset
     }
 
     /// Total output rows produced so far.
@@ -515,29 +712,51 @@ impl<B: Background> StreamingResize<B> {
         self.output_rows_produced
     }
 
-    /// Check if all output rows have been produced.
+    /// Total output rows produced so far, including padding rows.
+    pub fn total_rows_emitted(&self) -> u32 {
+        self.pad_top_emitted + self.output_rows_produced + self.pad_bottom_emitted
+    }
+
+    /// Total output height including padding.
+    pub fn total_output_height(&self) -> u32 {
+        self.config.total_output_height()
+    }
+
+    /// Check if all output rows have been produced (including padding).
     pub fn is_complete(&self) -> bool {
-        self.output_rows_produced >= self.config.out_height
+        self.total_rows_emitted() >= self.total_output_height()
     }
 
     /// Count how many output rows can be produced right now without more input.
     ///
     /// This is the number of consecutive `next_output_row()` calls that will
-    /// return `Some` before returning `None`.
+    /// return `Some` before returning `None`. Includes padding rows.
     pub fn output_rows_available(&self) -> u32 {
         let mut count = 0u32;
+
+        // Remaining top padding
+        count += self.pad_top.saturating_sub(self.pad_top_emitted);
+
+        // Content rows available
         let mut probe_y = self.output_rows_produced;
+        let resize_in_h = self.config.resize_in_height();
         while probe_y < self.config.out_height {
             let left = self.v_weights.left[probe_y as usize];
             let tap_count = self.v_weights.tap_count(probe_y as usize);
             let right = left + tap_count as i32 - 1;
-            let needed_max = right.min(self.config.in_height as i32 - 1).max(0) as u32;
+            let needed_max = right.min(resize_in_h as i32 - 1).max(0) as u32;
             if needed_max >= self.input_rows_received {
                 break;
             }
             count += 1;
             probe_y += 1;
         }
+
+        // Bottom padding (only available after all content is produced)
+        if probe_y >= self.config.out_height {
+            count += self.pad_bottom.saturating_sub(self.pad_bottom_emitted);
+        }
+
         count
     }
 
@@ -547,10 +766,11 @@ impl<B: Background> StreamingResize<B> {
 
     /// Push one row of u8 input pixels. Linearizes, premultiplies, and caches the row.
     ///
+    /// When a source region is set, rows outside the vertical range are skipped
+    /// automatically. The row must be full-width (`in_width * channels` elements).
+    ///
     /// Caller MUST drain all available output rows (via `next_output_row` or
     /// `next_output_row_into`) before pushing the next input row.
-    ///
-    /// `row` must contain at least `input_row_len()` elements.
     ///
     /// # Errors
     ///
@@ -561,13 +781,27 @@ impl<B: Background> StreamingResize<B> {
         if self.finished {
             return Err(at!(StreamingError::AlreadyFinished));
         }
-        let pixel_len = self.config.input_row_len();
+
+        // Validate against full source width
+        let source_row_len = self.source_in_width as usize * self.channels;
         let stride = self.config.effective_in_stride();
-        if row.len() < pixel_len.min(stride) {
+        if row.len() < source_row_len.min(stride) {
             return Err(at!(StreamingError::InputTooShort));
         }
 
-        let pixel_data = &row[..pixel_len];
+        // Vertical crop: skip rows outside the crop region
+        if self.has_crop {
+            let src_y = self.source_row_index;
+            self.source_row_index += 1;
+            if src_y < self.crop_y_start || src_y >= self.crop_y_end {
+                return Ok(());
+            }
+        }
+
+        // Extract horizontal crop region (or use full row)
+        let resize_row_len = self.config.resize_in_width() as usize * self.channels;
+        let pixel_data = &row[self.crop_x_offset..self.crop_x_offset + resize_row_len];
+        let pixel_len = resize_row_len;
 
         match self.path {
             StreamingPath::I16Srgb => {
@@ -675,10 +909,11 @@ impl<B: Background> StreamingResize<B> {
         stride: usize,
         count: u32,
     ) -> Result<u32, At<StreamingError>> {
+        let source_row_len = self.source_in_width as usize * self.channels;
         let expected_len = if count == 0 {
             0
         } else {
-            stride * (count as usize - 1) + self.config.input_row_len()
+            stride * (count as usize - 1) + source_row_len
         };
         if buf.len() < expected_len {
             return Err(at!(StreamingError::InputTooShort));
@@ -690,6 +925,9 @@ impl<B: Background> StreamingResize<B> {
     }
 
     /// Push one row of f32 input pixels. Premultiplies (if needed) and caches the row.
+    ///
+    /// When a source region is set, rows outside the vertical range are skipped.
+    /// The row must be full-width (`in_width * channels` elements).
     ///
     /// Caller MUST drain all available output rows before pushing the next input row.
     ///
@@ -707,12 +945,24 @@ impl<B: Background> StreamingResize<B> {
         if self.finished {
             return Err(at!(StreamingError::AlreadyFinished));
         }
-        let pixel_len = self.config.input_row_len();
-        if row.len() < pixel_len {
+        let source_row_len = self.source_in_width as usize * self.channels;
+        if row.len() < source_row_len {
             return Err(at!(StreamingError::InputTooShort));
         }
 
-        self.temp_input_f32[..pixel_len].copy_from_slice(&row[..pixel_len]);
+        // Vertical crop
+        if self.has_crop {
+            let src_y = self.source_row_index;
+            self.source_row_index += 1;
+            if src_y < self.crop_y_start || src_y >= self.crop_y_end {
+                return Ok(());
+            }
+        }
+
+        let pixel_len = self.config.resize_in_width() as usize * self.channels;
+        let crop_offset_f32 = self.crop_x_offset; // same element offset for f32
+        self.temp_input_f32[..pixel_len]
+            .copy_from_slice(&row[crop_offset_f32..crop_offset_f32 + pixel_len]);
 
         if self.needs_premul {
             simd::premultiply_alpha_row(&mut self.temp_input_f32[..pixel_len]);
@@ -723,9 +973,13 @@ impl<B: Background> StreamingResize<B> {
 
     /// Push one row of f32 input by writing directly into the resizer's internal buffer.
     ///
-    /// The closure receives `&mut [f32]` of length `input_row_len()`. Write your
-    /// f32 pixel data into this slice. After the closure returns, premultiply and
-    /// cache run without a `copy_from_slice` (saves one memcpy vs `push_row_f32`).
+    /// The closure receives `&mut [f32]` of length `resize_in_width * channels`
+    /// (crop width if cropping, else full width). Write your f32 pixel data into
+    /// this slice. After the closure returns, premultiply and cache run without
+    /// a `copy_from_slice` (saves one memcpy vs `push_row_f32`).
+    ///
+    /// When a source region is set, the caller must handle vertical crop
+    /// externally and only call this for rows within the crop region.
     ///
     /// Caller MUST drain all available output rows before pushing the next input row.
     ///
@@ -745,7 +999,7 @@ impl<B: Background> StreamingResize<B> {
         if self.finished {
             return Err(at!(StreamingError::AlreadyFinished));
         }
-        let pixel_len = self.config.input_row_len();
+        let pixel_len = self.config.resize_in_width() as usize * self.channels;
         f(&mut self.temp_input_f32[..pixel_len]);
 
         if self.needs_premul {
@@ -771,13 +1025,23 @@ impl<B: Background> StreamingResize<B> {
         if self.finished {
             return Err(at!(StreamingError::AlreadyFinished));
         }
-        let pixel_len = self.config.input_row_len();
+        let source_row_len = self.source_in_width as usize * self.channels;
         let stride = self.config.effective_in_stride();
-        if row.len() < pixel_len.min(stride) {
+        if row.len() < source_row_len.min(stride) {
             return Err(at!(StreamingError::InputTooShort));
         }
 
-        let pixel_data = &row[..pixel_len];
+        // Vertical crop
+        if self.has_crop {
+            let src_y = self.source_row_index;
+            self.source_row_index += 1;
+            if src_y < self.crop_y_start || src_y >= self.crop_y_end {
+                return Ok(());
+            }
+        }
+
+        let pixel_len = self.config.resize_in_width() as usize * self.channels;
+        let pixel_data = &row[self.crop_x_offset..self.crop_x_offset + pixel_len];
 
         match self.config.effective_input_transfer() {
             TransferFunction::Srgb => {
@@ -865,10 +1129,22 @@ impl<B: Background> StreamingResize<B> {
         if self.finished {
             return Err(at!(StreamingError::AlreadyFinished));
         }
-        let pixel_len = self.config.input_row_len();
-        if row.len() < pixel_len {
+        let source_row_len = self.source_in_width as usize * self.channels;
+        if row.len() < source_row_len {
             return Err(at!(StreamingError::InputTooShort));
         }
+
+        // Vertical crop
+        if self.has_crop {
+            let src_y = self.source_row_index;
+            self.source_row_index += 1;
+            if src_y < self.crop_y_start || src_y >= self.crop_y_end {
+                return Ok(());
+            }
+        }
+
+        let pixel_len = self.config.resize_in_width() as usize * self.channels;
+        let row = &row[self.crop_x_offset..self.crop_x_offset + pixel_len];
 
         match self.path {
             StreamingPath::I16Srgb => {
@@ -911,13 +1187,23 @@ impl<B: Background> StreamingResize<B> {
         if self.finished {
             return Err(at!(StreamingError::AlreadyFinished));
         }
-        let pixel_len = self.config.input_row_len();
-        if row.len() < pixel_len {
+        let source_row_len = self.source_in_width as usize * self.channels;
+        if row.len() < source_row_len {
             return Err(at!(StreamingError::InputTooShort));
         }
 
-        // Copy into temp buffer (skip transfer function)
-        self.temp_input_f32[..pixel_len].copy_from_slice(&row[..pixel_len]);
+        // Vertical crop
+        if self.has_crop {
+            let src_y = self.source_row_index;
+            self.source_row_index += 1;
+            if src_y < self.crop_y_start || src_y >= self.crop_y_end {
+                return Ok(());
+            }
+        }
+
+        let pixel_len = self.config.resize_in_width() as usize * self.channels;
+        self.temp_input_f32[..pixel_len]
+            .copy_from_slice(&row[self.crop_x_offset..self.crop_x_offset + pixel_len]);
 
         if self.needs_premul {
             simd::premultiply_alpha_row(&mut self.temp_input_f32[..pixel_len]);
@@ -951,17 +1237,325 @@ impl<B: Background> StreamingResize<B> {
     /// Pull the next output row as u8. Returns `None` if more input is needed
     /// or all output rows have been produced.
     ///
+    /// When padding is set, emits padding rows (top/bottom) and pads content
+    /// rows (left/right) automatically. The returned slice length is
+    /// `output_row_len()` (which includes padding width).
+    ///
     /// Lazily produces one output row: V-filter → H-filter → composite → unpremultiply → u8 convert.
     /// The returned slice borrows from the resizer's internal buffer and is valid
     /// until the next method call on this resizer.
     pub fn next_output_row(&mut self) -> Option<&[u8]> {
+        if !self.has_padding {
+            return self.next_content_row_u8();
+        }
+        let total_row_len = self.config.total_output_row_len();
+
+        // Phase 1: top padding
+        if self.pad_top_emitted < self.pad_top {
+            self.pad_top_emitted += 1;
+            return Some(&self.pad_full_row_u8[..total_row_len]);
+        }
+
+        // Phase 2: content rows with left/right padding
+        if self.output_rows_produced < self.config.out_height {
+            if !self.can_produce_next_output() {
+                return None;
+            }
+            let content_len = self.config.out_width as usize * self.channels;
+            let content_start = self.pad_left_elements;
+            // Produce content into the padded buffer's content region
+            let mut tmp = core::mem::take(&mut self.padded_output_buf_u8);
+            match self.path {
+                StreamingPath::I16Srgb => {
+                    self.produce_next_i16_srgb(
+                        &mut tmp[content_start..content_start + content_len],
+                    );
+                }
+                StreamingPath::I16Linear => {
+                    self.produce_next_i16_linear(
+                        &mut tmp[content_start..content_start + content_len],
+                    );
+                }
+                StreamingPath::F32 => {
+                    self.produce_next_f32();
+                    Self::encode_output_u8(
+                        &self.temp_output_f32[..content_len],
+                        &mut tmp[content_start..content_start + content_len],
+                        self.config.effective_output_transfer(),
+                        self.channels,
+                        self.alpha_is_last,
+                    );
+                }
+            }
+            self.padded_output_buf_u8 = tmp;
+            return Some(&self.padded_output_buf_u8[..total_row_len]);
+        }
+
+        // Phase 3: bottom padding
+        if self.pad_bottom_emitted < self.pad_bottom {
+            self.pad_bottom_emitted += 1;
+            return Some(&self.pad_full_row_u8[..total_row_len]);
+        }
+
+        None
+    }
+
+    /// Pull the next output row directly into a caller-provided u8 buffer.
+    /// Returns `true` if a row was produced, `false` if more input is needed.
+    ///
+    /// `dst` must be at least `output_row_len()` elements long.
+    /// Skips the internal `output_buf_u8` — writes directly to the caller's buffer.
+    pub fn next_output_row_into(&mut self, dst: &mut [u8]) -> bool {
+        if !self.has_padding {
+            return self.next_content_row_u8_into(dst);
+        }
+        let total_row_len = self.config.total_output_row_len();
+
+        // Phase 1: top padding
+        if self.pad_top_emitted < self.pad_top {
+            self.pad_top_emitted += 1;
+            dst[..total_row_len].copy_from_slice(&self.pad_full_row_u8[..total_row_len]);
+            return true;
+        }
+
+        // Phase 2: content rows with left/right padding
+        if self.output_rows_produced < self.config.out_height {
+            if !self.can_produce_next_output() {
+                return false;
+            }
+            let content_len = self.config.out_width as usize * self.channels;
+            let content_start = self.pad_left_elements;
+            // Fill left and right padding
+            dst[..content_start].copy_from_slice(&self.pad_full_row_u8[..content_start]);
+            let right_start = content_start + content_len;
+            dst[right_start..total_row_len]
+                .copy_from_slice(&self.pad_full_row_u8[right_start..total_row_len]);
+            // Produce content
+            match self.path {
+                StreamingPath::I16Srgb => {
+                    self.produce_next_i16_srgb(
+                        &mut dst[content_start..content_start + content_len],
+                    );
+                }
+                StreamingPath::I16Linear => {
+                    self.produce_next_i16_linear(
+                        &mut dst[content_start..content_start + content_len],
+                    );
+                }
+                StreamingPath::F32 => {
+                    self.produce_next_f32();
+                    Self::encode_output_u8(
+                        &self.temp_output_f32[..content_len],
+                        &mut dst[content_start..content_start + content_len],
+                        self.config.effective_output_transfer(),
+                        self.channels,
+                        self.alpha_is_last,
+                    );
+                }
+            }
+            return true;
+        }
+
+        // Phase 3: bottom padding
+        if self.pad_bottom_emitted < self.pad_bottom {
+            self.pad_bottom_emitted += 1;
+            dst[..total_row_len].copy_from_slice(&self.pad_full_row_u8[..total_row_len]);
+            return true;
+        }
+
+        false
+    }
+
+    /// Pull the next output row as f32. Returns `None` if more input is needed.
+    ///
+    /// When padding is set, includes padding pixels in the returned slice.
+    /// The returned slice borrows from the resizer's internal buffer.
+    pub fn next_output_row_f32(&mut self) -> Option<&[f32]> {
+        debug_assert_eq!(
+            self.path,
+            StreamingPath::F32,
+            "next_output_row_f32 requires f32 path"
+        );
+
+        if !self.has_padding {
+            if !self.can_produce_next_output() {
+                return None;
+            }
+            self.produce_next_f32();
+            let row_len = self.config.out_width as usize * self.channels;
+            return Some(&self.temp_output_f32[..row_len]);
+        }
+
+        let total_row_len = self.config.total_output_row_len();
+
+        // Phase 1: top padding
+        if self.pad_top_emitted < self.pad_top {
+            self.pad_top_emitted += 1;
+            return Some(&self.pad_full_row_f32[..total_row_len]);
+        }
+
+        // Phase 2: content rows
+        if self.output_rows_produced < self.config.out_height {
+            if !self.can_produce_next_output() {
+                return None;
+            }
+            self.produce_next_f32();
+            let content_len = self.config.out_width as usize * self.channels;
+            let content_start = self.pad_left_elements;
+            self.padded_output_buf_f32[content_start..content_start + content_len]
+                .copy_from_slice(&self.temp_output_f32[..content_len]);
+            return Some(&self.padded_output_buf_f32[..total_row_len]);
+        }
+
+        // Phase 3: bottom padding
+        if self.pad_bottom_emitted < self.pad_bottom {
+            self.pad_bottom_emitted += 1;
+            return Some(&self.pad_full_row_f32[..total_row_len]);
+        }
+
+        None
+    }
+
+    /// Pull the next output row as u16. Returns `None` if more input is needed.
+    ///
+    /// Uses the configured transfer function to convert from linear f32 to encoded u16.
+    pub fn next_output_row_u16(&mut self) -> Option<&[u16]> {
+        debug_assert_eq!(
+            self.path,
+            StreamingPath::F32,
+            "next_output_row_u16 requires f32 path"
+        );
+
+        if !self.has_padding {
+            if !self.can_produce_next_output() {
+                return None;
+            }
+            self.produce_next_f32();
+            let row_len = self.config.out_width as usize * self.channels;
+            Self::encode_output_u16(
+                &self.temp_output_f32[..row_len],
+                &mut self.output_buf_u16[..row_len],
+                self.config.effective_output_transfer(),
+                self.channels,
+                self.alpha_is_last,
+            );
+            return Some(&self.output_buf_u16[..row_len]);
+        }
+
+        let total_row_len = self.config.total_output_row_len();
+
+        // Phase 1: top padding
+        if self.pad_top_emitted < self.pad_top {
+            self.pad_top_emitted += 1;
+            return Some(&self.pad_full_row_u16[..total_row_len]);
+        }
+
+        // Phase 2: content rows
+        if self.output_rows_produced < self.config.out_height {
+            if !self.can_produce_next_output() {
+                return None;
+            }
+            self.produce_next_f32();
+            let content_len = self.config.out_width as usize * self.channels;
+            let content_start = self.pad_left_elements;
+            Self::encode_output_u16(
+                &self.temp_output_f32[..content_len],
+                &mut self.padded_output_buf_u16[content_start..content_start + content_len],
+                self.config.effective_output_transfer(),
+                self.channels,
+                self.alpha_is_last,
+            );
+            return Some(&self.padded_output_buf_u16[..total_row_len]);
+        }
+
+        // Phase 3: bottom padding
+        if self.pad_bottom_emitted < self.pad_bottom {
+            self.pad_bottom_emitted += 1;
+            return Some(&self.pad_full_row_u16[..total_row_len]);
+        }
+
+        None
+    }
+
+    /// Pull the next output row directly into a caller-provided u16 buffer.
+    /// Returns `true` if a row was produced, `false` if more input is needed.
+    ///
+    /// `dst` must be at least `output_row_len()` elements long.
+    pub fn next_output_row_u16_into(&mut self, dst: &mut [u16]) -> bool {
+        debug_assert_eq!(
+            self.path,
+            StreamingPath::F32,
+            "next_output_row_u16_into requires f32 path"
+        );
+
+        if !self.has_padding {
+            if !self.can_produce_next_output() {
+                return false;
+            }
+            self.produce_next_f32();
+            let row_len = self.config.out_width as usize * self.channels;
+            Self::encode_output_u16(
+                &self.temp_output_f32[..row_len],
+                &mut dst[..row_len],
+                self.config.effective_output_transfer(),
+                self.channels,
+                self.alpha_is_last,
+            );
+            return true;
+        }
+
+        let total_row_len = self.config.total_output_row_len();
+
+        // Phase 1: top padding
+        if self.pad_top_emitted < self.pad_top {
+            self.pad_top_emitted += 1;
+            dst[..total_row_len].copy_from_slice(&self.pad_full_row_u16[..total_row_len]);
+            return true;
+        }
+
+        // Phase 2: content rows
+        if self.output_rows_produced < self.config.out_height {
+            if !self.can_produce_next_output() {
+                return false;
+            }
+            let content_len = self.config.out_width as usize * self.channels;
+            let content_start = self.pad_left_elements;
+            // Fill padding
+            dst[..content_start].copy_from_slice(&self.pad_full_row_u16[..content_start]);
+            let right_start = content_start + content_len;
+            dst[right_start..total_row_len]
+                .copy_from_slice(&self.pad_full_row_u16[right_start..total_row_len]);
+            // Produce content
+            self.produce_next_f32();
+            Self::encode_output_u16(
+                &self.temp_output_f32[..content_len],
+                &mut dst[content_start..content_start + content_len],
+                self.config.effective_output_transfer(),
+                self.channels,
+                self.alpha_is_last,
+            );
+            return true;
+        }
+
+        // Phase 3: bottom padding
+        if self.pad_bottom_emitted < self.pad_bottom {
+            self.pad_bottom_emitted += 1;
+            dst[..total_row_len].copy_from_slice(&self.pad_full_row_u16[..total_row_len]);
+            return true;
+        }
+
+        false
+    }
+
+    // Non-padded content row helpers (factored out to avoid duplication)
+
+    fn next_content_row_u8(&mut self) -> Option<&[u8]> {
         if !self.can_produce_next_output() {
             return None;
         }
         let row_len = self.config.out_width as usize * self.channels;
         match self.path {
             StreamingPath::I16Srgb | StreamingPath::I16Linear => {
-                // i16 paths produce u8 directly — swap buffer out to avoid borrow conflict
                 let mut tmp = core::mem::take(&mut self.output_buf_u8);
                 match self.path {
                     StreamingPath::I16Srgb => self.produce_next_i16_srgb(&mut tmp[..row_len]),
@@ -984,12 +1578,7 @@ impl<B: Background> StreamingResize<B> {
         Some(&self.output_buf_u8[..row_len])
     }
 
-    /// Pull the next output row directly into a caller-provided u8 buffer.
-    /// Returns `true` if a row was produced, `false` if more input is needed.
-    ///
-    /// `dst` must be at least `output_row_len()` elements long.
-    /// Skips the internal `output_buf_u8` — writes directly to the caller's buffer.
-    pub fn next_output_row_into(&mut self, dst: &mut [u8]) -> bool {
+    fn next_content_row_u8_into(&mut self, dst: &mut [u8]) -> bool {
         if !self.can_produce_next_output() {
             return false;
         }
@@ -1008,73 +1597,6 @@ impl<B: Background> StreamingResize<B> {
                 );
             }
         }
-        true
-    }
-
-    /// Pull the next output row as f32. Returns `None` if more input is needed.
-    ///
-    /// Returns a reference to the H-filter output directly (no format conversion).
-    /// The returned slice borrows from the resizer's internal buffer.
-    pub fn next_output_row_f32(&mut self) -> Option<&[f32]> {
-        if !self.can_produce_next_output() {
-            return None;
-        }
-        debug_assert_eq!(
-            self.path,
-            StreamingPath::F32,
-            "next_output_row_f32 requires f32 path"
-        );
-        self.produce_next_f32();
-        let row_len = self.config.out_width as usize * self.channels;
-        Some(&self.temp_output_f32[..row_len])
-    }
-
-    /// Pull the next output row as u16. Returns `None` if more input is needed.
-    ///
-    /// Uses the sRGB transfer function to convert from linear f32 to encoded u16.
-    pub fn next_output_row_u16(&mut self) -> Option<&[u16]> {
-        if !self.can_produce_next_output() {
-            return None;
-        }
-        debug_assert_eq!(
-            self.path,
-            StreamingPath::F32,
-            "next_output_row_u16 requires f32 path"
-        );
-        self.produce_next_f32();
-        let row_len = self.config.out_width as usize * self.channels;
-        Self::encode_output_u16(
-            &self.temp_output_f32[..row_len],
-            &mut self.output_buf_u16[..row_len],
-            self.config.effective_output_transfer(),
-            self.channels,
-            self.alpha_is_last,
-        );
-        Some(&self.output_buf_u16[..row_len])
-    }
-
-    /// Pull the next output row directly into a caller-provided u16 buffer.
-    /// Returns `true` if a row was produced, `false` if more input is needed.
-    ///
-    /// `dst` must be at least `output_row_len()` elements long.
-    pub fn next_output_row_u16_into(&mut self, dst: &mut [u16]) -> bool {
-        if !self.can_produce_next_output() {
-            return false;
-        }
-        debug_assert_eq!(
-            self.path,
-            StreamingPath::F32,
-            "next_output_row_u16_into requires f32 path"
-        );
-        self.produce_next_f32();
-        let row_len = self.config.out_width as usize * self.channels;
-        Self::encode_output_u16(
-            &self.temp_output_f32[..row_len],
-            &mut dst[..row_len],
-            self.config.effective_output_transfer(),
-            self.channels,
-            self.alpha_is_last,
-        );
         true
     }
 
@@ -1169,7 +1691,8 @@ impl<B: Background> StreamingResize<B> {
         let tap_count = self.v_weights.tap_count(out_y as usize);
         let right = left + tap_count as i32 - 1;
 
-        let needed_max = right.min(self.config.in_height as i32 - 1).max(0) as u32;
+        let resize_in_h = self.config.resize_in_height();
+        let needed_max = right.min(resize_in_h as i32 - 1).max(0) as u32;
         needed_max < self.input_rows_received
     }
 
@@ -1182,7 +1705,8 @@ impl<B: Background> StreamingResize<B> {
         let left = self.v_weights.left[out_y as usize];
         let tap_count = self.v_weights.tap_count(out_y as usize);
         let weights = self.v_weights.weights(out_y as usize);
-        let in_row_len = self.config.in_width as usize * self.channels;
+        let resize_in_h = self.config.resize_in_height();
+        let in_row_len = self.config.resize_in_width() as usize * self.channels;
         let out_row_len = self.config.out_width as usize * self.channels;
 
         // Step 1: V-filter from f16 v_cache into temp_v_output (f32, in_width-wide)
@@ -1191,7 +1715,7 @@ impl<B: Background> StreamingResize<B> {
             self.cache_size,
             left,
             tap_count,
-            self.config.in_height,
+            resize_in_h,
             in_row_len,
             |rows| simd::filter_v_row_f16(rows, &mut self.temp_v_output[..in_row_len], weights),
         );
@@ -1231,7 +1755,8 @@ impl<B: Background> StreamingResize<B> {
         let left = i16_v_weights.left[out_y as usize];
         let tap_count = i16_v_weights.tap_count(out_y as usize);
         let weights = i16_v_weights.weights(out_y as usize);
-        let in_row_len = self.config.in_width as usize * self.channels;
+        let resize_in_h = self.config.resize_in_height();
+        let in_row_len = self.config.resize_in_width() as usize * self.channels;
         let out_row_len = self.config.out_width as usize * self.channels;
 
         // Step 1: V-filter from u8_v_cache into temp_v_output_u8
@@ -1240,7 +1765,7 @@ impl<B: Background> StreamingResize<B> {
             self.cache_size,
             left,
             tap_count,
-            self.config.in_height,
+            resize_in_h,
             in_row_len,
             |rows| {
                 simd::filter_v_row_u8_i16(rows, &mut self.temp_v_output_u8[..in_row_len], weights)
@@ -1273,7 +1798,8 @@ impl<B: Background> StreamingResize<B> {
         let left = i16_v_weights.left[out_y as usize];
         let tap_count = i16_v_weights.tap_count(out_y as usize);
         let weights = i16_v_weights.weights(out_y as usize);
-        let in_row_len = self.config.in_width as usize * self.channels;
+        let resize_in_h = self.config.resize_in_height();
+        let in_row_len = self.config.resize_in_width() as usize * self.channels;
         let out_row_len = self.config.out_width as usize * self.channels;
 
         // Step 1: V-filter from i16_v_cache into temp_v_output_i16
@@ -1282,7 +1808,7 @@ impl<B: Background> StreamingResize<B> {
             self.cache_size,
             left,
             tap_count,
-            self.config.in_height,
+            resize_in_h,
             in_row_len,
             |rows| simd::filter_v_row_i16(rows, &mut self.temp_v_output_i16[..in_row_len], weights),
         );
@@ -1326,7 +1852,7 @@ impl<B: Background> StreamingResize<B> {
         self.check_ring_buffer().at()?;
 
         let cache_slot = self.cache_write_idx % self.cache_size;
-        let pixel_len = self.config.in_width as usize * self.channels;
+        let pixel_len = self.config.resize_in_width() as usize * self.channels;
         simd::f32_to_f16_row(
             &self.temp_input_f32[..pixel_len],
             &mut self.v_cache[cache_slot][..pixel_len],
@@ -1343,7 +1869,7 @@ impl<B: Background> StreamingResize<B> {
         self.check_ring_buffer().at()?;
 
         let cache_slot = self.cache_write_idx % self.cache_size;
-        let pixel_len = self.config.in_width as usize * self.channels;
+        let pixel_len = self.config.resize_in_width() as usize * self.channels;
         self.i16_v_cache[cache_slot][..pixel_len]
             .copy_from_slice(&self.linearized_row_i16[..pixel_len]);
 
@@ -2511,5 +3037,272 @@ mod tests {
             total_rows += 1;
         }
         assert_eq!(total_rows, 10);
+    }
+
+    // =========================================================================
+    // Crop tests
+    // =========================================================================
+
+    #[test]
+    fn test_streaming_crop_basic() {
+        // 100×100 input, crop a 50×50 region at (25,25), resize to 25×25
+        let config = ResizeConfig::builder(100, 100, 25, 25)
+            .format(PixelDescriptor::RGBA8_SRGB)
+            .srgb()
+            .crop(25, 25, 50, 50)
+            .build();
+        let mut resizer = StreamingResize::new(&config);
+
+        // input_row_len should be full source width
+        assert_eq!(resizer.input_row_len(), 100 * 4);
+
+        let row = vec![200u8; 100 * 4];
+        let mut output_count = 0;
+        for _ in 0..100 {
+            resizer.push_row(&row).unwrap();
+            while resizer.next_output_row().is_some() {
+                output_count += 1;
+            }
+        }
+        resizer.finish();
+        while resizer.next_output_row().is_some() {
+            output_count += 1;
+        }
+
+        assert_eq!(output_count, 25);
+        assert!(resizer.is_complete());
+    }
+
+    #[test]
+    fn test_streaming_crop_constant_color() {
+        // Crop a 20×20 region from a 40×40 constant-color image, resize to 10×10
+        let config = ResizeConfig::builder(40, 40, 10, 10)
+            .format(PixelDescriptor::RGBA8_SRGB)
+            .srgb()
+            .crop(10, 10, 20, 20)
+            .build();
+        let mut resizer = StreamingResize::new(&config);
+
+        let mut row = vec![0u8; 40 * 4];
+        for pixel in row.chunks_exact_mut(4) {
+            pixel[0] = 100;
+            pixel[1] = 100;
+            pixel[2] = 100;
+            pixel[3] = 255;
+        }
+
+        let rows = push_drain_collect_u8(&mut resizer, &row, 40);
+        assert_eq!(rows.len(), 10);
+
+        // All pixels should be close to the input value
+        for out_row in &rows {
+            for pixel in out_row.chunks_exact(4) {
+                assert!(
+                    (pixel[0] as i16 - 100).unsigned_abs() <= 2,
+                    "crop constant color R off: {}",
+                    pixel[0]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_streaming_crop_no_resize() {
+        // Crop-only: 50×50 from 100×100, output same as crop size (1:1)
+        let config = ResizeConfig::builder(100, 100, 50, 50)
+            .format(PixelDescriptor::RGBA8_SRGB)
+            .srgb()
+            .crop(0, 0, 50, 50)
+            .build();
+        let mut resizer = StreamingResize::new(&config);
+
+        let row = vec![128u8; 100 * 4];
+        let rows = push_drain_collect_u8(&mut resizer, &row, 100);
+        assert_eq!(rows.len(), 50);
+    }
+
+    // =========================================================================
+    // Padding tests
+    // =========================================================================
+
+    #[test]
+    fn test_streaming_padding_basic() {
+        // 20×20 → 10×10 with 5px padding on all sides
+        // Total output: 20×20
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .format(PixelDescriptor::RGBA8_SRGB)
+            .srgb()
+            .padding_uniform(5)
+            .padding_color([0.0, 0.0, 0.0, 1.0]) // black padding
+            .build();
+        let mut resizer = StreamingResize::new(&config);
+
+        // output_row_len should be (5+10+5)*4 = 80
+        assert_eq!(resizer.output_row_len(), 20 * 4);
+        assert_eq!(resizer.total_output_height(), 20);
+
+        let mut row = vec![0u8; 20 * 4];
+        for pixel in row.chunks_exact_mut(4) {
+            pixel[0] = 255;
+            pixel[1] = 255;
+            pixel[2] = 255;
+            pixel[3] = 255;
+        }
+
+        let mut all_rows = Vec::new();
+        for _ in 0..20 {
+            resizer.push_row(&row).unwrap();
+            while let Some(out) = resizer.next_output_row() {
+                all_rows.push(out.to_vec());
+            }
+        }
+        resizer.finish();
+        while let Some(out) = resizer.next_output_row() {
+            all_rows.push(out.to_vec());
+        }
+
+        assert_eq!(all_rows.len(), 20);
+        assert!(resizer.is_complete());
+
+        // First 5 rows should be black padding
+        for row in &all_rows[..5] {
+            for pixel in row.chunks_exact(4) {
+                assert_eq!(pixel[0], 0, "top padding should be black");
+                assert_eq!(pixel[3], 255, "top padding alpha");
+            }
+        }
+
+        // Last 5 rows should be black padding
+        for row in &all_rows[15..] {
+            for pixel in row.chunks_exact(4) {
+                assert_eq!(pixel[0], 0, "bottom padding should be black");
+                assert_eq!(pixel[3], 255, "bottom padding alpha");
+            }
+        }
+
+        // Content rows: first 5 pixels should be black (left pad)
+        for row in &all_rows[5..15] {
+            // Left padding
+            for pixel in row[..20].chunks_exact(4) {
+                assert_eq!(pixel[0], 0, "left padding should be black");
+            }
+            // Right padding
+            for pixel in row[60..].chunks_exact(4) {
+                assert_eq!(pixel[0], 0, "right padding should be black");
+            }
+        }
+    }
+
+    #[test]
+    fn test_streaming_padding_no_resize() {
+        // Pad-only: 10×10 → 10×10 with 2px padding
+        let config = ResizeConfig::builder(10, 10, 10, 10)
+            .format(PixelDescriptor::RGBA8_SRGB)
+            .srgb()
+            .padding(2, 2, 2, 2)
+            .padding_color([1.0, 0.0, 0.0, 1.0]) // red padding
+            .build();
+        let mut resizer = StreamingResize::new(&config);
+
+        assert_eq!(resizer.total_output_height(), 14);
+        assert_eq!(resizer.output_row_len(), 14 * 4);
+
+        let row = vec![128u8; 10 * 4];
+        let rows = push_drain_collect_u8(&mut resizer, &row, 10);
+        assert_eq!(rows.len(), 14);
+
+        // Top padding rows should be red
+        for pixel in rows[0].chunks_exact(4) {
+            assert_eq!(pixel[0], 255, "red padding R");
+            assert_eq!(pixel[1], 0, "red padding G");
+            assert_eq!(pixel[2], 0, "red padding B");
+        }
+    }
+
+    #[test]
+    fn test_streaming_padding_top_available_immediately() {
+        // With top padding, output should be available before any input
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .format(PixelDescriptor::RGBA8_SRGB)
+            .srgb()
+            .padding(3, 0, 0, 0)
+            .build();
+        let resizer = StreamingResize::new(&config);
+
+        assert_eq!(resizer.initial_input_rows_needed(), 0);
+        assert_eq!(resizer.output_rows_available(), 3); // 3 top padding rows
+    }
+
+    // =========================================================================
+    // Crop + Padding combined tests
+    // =========================================================================
+
+    #[test]
+    fn test_streaming_crop_and_padding() {
+        // Crop 30×30 from 50×50 at (10,10), resize to 15×15, pad 5px
+        let config = ResizeConfig::builder(50, 50, 15, 15)
+            .format(PixelDescriptor::RGBA8_SRGB)
+            .srgb()
+            .crop(10, 10, 30, 30)
+            .padding_uniform(5)
+            .padding_color([0.0, 0.0, 0.0, 1.0])
+            .build();
+        let mut resizer = StreamingResize::new(&config);
+
+        assert_eq!(resizer.input_row_len(), 50 * 4);
+        assert_eq!(resizer.output_row_len(), 25 * 4); // 5+15+5
+        assert_eq!(resizer.total_output_height(), 25); // 5+15+5
+
+        let row = vec![128u8; 50 * 4];
+        let rows = push_drain_collect_u8(&mut resizer, &row, 50);
+        assert_eq!(rows.len(), 25);
+        assert!(resizer.is_complete());
+    }
+
+    #[test]
+    fn test_streaming_crop_validation() {
+        // Crop region exceeds input bounds — should panic on build
+        let config = ResizeConfig::builder(100, 100, 50, 50)
+            .format(PixelDescriptor::RGBA8_SRGB)
+            .crop(80, 0, 50, 50) // x+w=130 > 100
+            .build();
+        let result = config.validate();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_streaming_padding_f32_output() {
+        // Test padding with f32 output
+        let config = ResizeConfig::builder(10, 10, 5, 5)
+            .filter(Filter::Lanczos)
+            .format(PixelDescriptor::RGBAF32_LINEAR)
+            .padding(2, 2, 2, 2)
+            .padding_color([0.5, 0.5, 0.5, 1.0])
+            .build();
+        let mut resizer = StreamingResize::new(&config);
+
+        assert_eq!(resizer.output_row_len(), 9 * 4); // (2+5+2)*4
+
+        let row = vec![0.8f32; 10 * 4];
+        let mut all_rows = Vec::new();
+        for _ in 0..10 {
+            resizer.push_row_f32(&row).unwrap();
+            while let Some(out) = resizer.next_output_row_f32() {
+                all_rows.push(out.to_vec());
+            }
+        }
+        resizer.finish();
+        while let Some(out) = resizer.next_output_row_f32() {
+            all_rows.push(out.to_vec());
+        }
+
+        assert_eq!(all_rows.len(), 9); // 2+5+2
+
+        // Top padding row should have pad color
+        let first_row = &all_rows[0];
+        for pixel in first_row.chunks_exact(4) {
+            assert!((pixel[0] - 0.5).abs() < 0.01, "f32 padding R: {}", pixel[0]);
+            assert!((pixel[3] - 1.0).abs() < 0.01, "f32 padding A: {}", pixel[3]);
+        }
     }
 }

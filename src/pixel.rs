@@ -114,6 +114,113 @@ pub enum LobeRatio {
 }
 
 // =============================================================================
+// SourceRegion
+// =============================================================================
+
+/// Region of the source image to use for resizing.
+///
+/// When set on a [`ResizeConfig`], only the specified rectangle is read from the
+/// input. The streaming API still accepts full-width input rows; the resizer
+/// extracts the region internally. Rows outside the vertical range are skipped.
+///
+/// # Example
+///
+/// ```
+/// use zenresize::SourceRegion;
+///
+/// // Extract a 400×300 region starting at (100, 50)
+/// let region = SourceRegion { x: 100, y: 50, width: 400, height: 300 };
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceRegion {
+    /// Left edge in pixels.
+    pub x: u32,
+    /// Top edge in pixels.
+    pub y: u32,
+    /// Width of the region in pixels.
+    pub width: u32,
+    /// Height of the region in pixels.
+    pub height: u32,
+}
+
+// =============================================================================
+// Padding
+// =============================================================================
+
+/// Padding to add around the resized output.
+///
+/// The final output dimensions become:
+/// - width: `left + out_width + right`
+/// - height: `top + out_height + bottom`
+///
+/// Padding pixels are filled with [`color`](Self::color). Works with all pixel
+/// formats (u8, u16, f32) and all channel counts.
+///
+/// # Example
+///
+/// ```
+/// use zenresize::Padding;
+///
+/// // 10px black border on all sides
+/// let pad = Padding::uniform(10).with_color([0.0, 0.0, 0.0, 1.0]);
+///
+/// // Asymmetric letterboxing
+/// let pad = Padding { top: 40, bottom: 40, left: 0, right: 0, color: [0.0; 4] };
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct Padding {
+    /// Rows of padding above the content.
+    pub top: u32,
+    /// Rows of padding below the content.
+    pub bottom: u32,
+    /// Columns of padding left of the content.
+    pub left: u32,
+    /// Columns of padding right of the content.
+    pub right: u32,
+    /// Padding color per channel, 0.0–1.0 in the output's color space.
+    ///
+    /// For sRGB u8 output, 0.5 → 128. For linear f32, 0.5 → 0.5.
+    /// Only the first `channels` values are used.
+    pub color: [f32; 4],
+}
+
+impl Default for Padding {
+    fn default() -> Self {
+        Self {
+            top: 0,
+            bottom: 0,
+            left: 0,
+            right: 0,
+            color: [0.0; 4],
+        }
+    }
+}
+
+impl Padding {
+    /// Create uniform padding on all sides.
+    pub fn uniform(px: u32) -> Self {
+        Self {
+            top: px,
+            bottom: px,
+            left: px,
+            right: px,
+            color: [0.0; 4],
+        }
+    }
+
+    /// Set the padding color.
+    pub fn with_color(mut self, color: [f32; 4]) -> Self {
+        self.color = color;
+        self
+    }
+
+    /// Whether all padding values are zero.
+    pub fn is_empty(&self) -> bool {
+        self.top == 0 && self.bottom == 0 && self.left == 0 && self.right == 0
+    }
+}
+
+// =============================================================================
 // ResizeConfig
 // =============================================================================
 
@@ -171,6 +278,18 @@ pub struct ResizeConfig {
     pub in_stride: usize,
     /// Output row stride in elements (0 = tightly packed).
     pub out_stride: usize,
+    /// Source region to crop from input before resizing.
+    ///
+    /// When set, only the specified rectangle of the input is used.
+    /// The streaming API still accepts full-width rows and extracts the
+    /// region internally. Rows outside the vertical range are skipped.
+    pub source_region: Option<SourceRegion>,
+    /// Padding to add around the resized output.
+    ///
+    /// When set, the output is padded with the specified color on all sides.
+    /// The total output dimensions become `(left + out_width + right)` by
+    /// `(top + out_height + bottom)`.
+    pub padding: Option<Padding>,
 }
 
 impl ResizeConfig {
@@ -226,6 +345,41 @@ impl ResizeConfig {
         {
             return Err("narrow signal range is not supported; expand to full range first");
         }
+        // Validate source region
+        if let Some(ref r) = self.source_region {
+            if r.width == 0 || r.height == 0 {
+                return Err("source region dimensions must be positive");
+            }
+            if r.x
+                .checked_add(r.width)
+                .is_none_or(|end| end > self.in_width)
+            {
+                return Err("source region exceeds input width");
+            }
+            if r.y
+                .checked_add(r.height)
+                .is_none_or(|end| end > self.in_height)
+            {
+                return Err("source region exceeds input height");
+            }
+        }
+        // Validate padding
+        if let Some(ref p) = self.padding {
+            if p.left
+                .checked_add(self.out_width)
+                .and_then(|v| v.checked_add(p.right))
+                .is_none()
+            {
+                return Err("padded output width overflows u32");
+            }
+            if p.top
+                .checked_add(self.out_height)
+                .and_then(|v| v.checked_add(p.bottom))
+                .is_none()
+            {
+                return Err("padded output height overflows u32");
+            }
+        }
         Ok(())
     }
 
@@ -255,6 +409,41 @@ impl ResizeConfig {
     /// Pixel-packed output row length (no padding).
     pub fn output_row_len(&self) -> usize {
         self.out_width as usize * self.output.channels()
+    }
+
+    /// Effective input width for the resize kernel (crop width if set, else full width).
+    pub fn resize_in_width(&self) -> u32 {
+        self.source_region
+            .as_ref()
+            .map_or(self.in_width, |r| r.width)
+    }
+
+    /// Effective input height for the resize kernel (crop height if set, else full height).
+    pub fn resize_in_height(&self) -> u32 {
+        self.source_region
+            .as_ref()
+            .map_or(self.in_height, |r| r.height)
+    }
+
+    /// Total output width including padding.
+    pub fn total_output_width(&self) -> u32 {
+        let base = self.out_width;
+        self.padding
+            .as_ref()
+            .map_or(base, |p| p.left + base + p.right)
+    }
+
+    /// Total output height including padding.
+    pub fn total_output_height(&self) -> u32 {
+        let base = self.out_height;
+        self.padding
+            .as_ref()
+            .map_or(base, |p| p.top + base + p.bottom)
+    }
+
+    /// Row length for the total output including padding.
+    pub fn total_output_row_len(&self) -> usize {
+        self.total_output_width() as usize * self.output.channels()
     }
 
     /// Whether linear-light processing is needed.
@@ -372,6 +561,8 @@ pub struct ResizeConfigBuilder {
     linear: bool,
     in_stride: usize,
     out_stride: usize,
+    source_region: Option<SourceRegion>,
+    padding: Option<Padding>,
 }
 
 impl ResizeConfigBuilder {
@@ -391,6 +582,8 @@ impl ResizeConfigBuilder {
             linear: true,
             in_stride: 0,
             out_stride: 0,
+            source_region: None,
+            padding: None,
         }
     }
 
@@ -511,6 +704,74 @@ impl ResizeConfigBuilder {
         self
     }
 
+    /// Crop a region from the input before resizing.
+    ///
+    /// Only the specified rectangle of the input is used. The streaming API
+    /// still accepts full-width rows; the resizer extracts the region internally.
+    ///
+    /// The resize kernel maps this region to the output dimensions.
+    pub fn crop(mut self, x: u32, y: u32, width: u32, height: u32) -> Self {
+        self.source_region = Some(SourceRegion {
+            x,
+            y,
+            width,
+            height,
+        });
+        self
+    }
+
+    /// Set the source region (alternative to [`crop`](Self::crop)).
+    pub fn source_region(mut self, region: SourceRegion) -> Self {
+        self.source_region = Some(region);
+        self
+    }
+
+    /// Add padding around the resized output.
+    ///
+    /// The final output dimensions become `(left + out_width + right)` by
+    /// `(top + out_height + bottom)`. Padding is filled with transparent black
+    /// by default; use [`padding_color`](Self::padding_color) to change.
+    pub fn padding(mut self, top: u32, right: u32, bottom: u32, left: u32) -> Self {
+        let color = self.padding.as_ref().map_or([0.0; 4], |p| p.color);
+        self.padding = Some(Padding {
+            top,
+            bottom,
+            left,
+            right,
+            color,
+        });
+        self
+    }
+
+    /// Add uniform padding on all sides.
+    pub fn padding_uniform(self, px: u32) -> Self {
+        self.padding(px, px, px, px)
+    }
+
+    /// Set the padding color (0.0–1.0 per channel in the output's color space).
+    ///
+    /// Must be called after [`padding`](Self::padding) or [`padding_uniform`](Self::padding_uniform).
+    pub fn padding_color(mut self, color: [f32; 4]) -> Self {
+        if let Some(ref mut p) = self.padding {
+            p.color = color;
+        } else {
+            self.padding = Some(Padding {
+                top: 0,
+                bottom: 0,
+                left: 0,
+                right: 0,
+                color,
+            });
+        }
+        self
+    }
+
+    /// Set a [`Padding`] struct directly.
+    pub fn with_padding(mut self, padding: Padding) -> Self {
+        self.padding = Some(padding);
+        self
+    }
+
     /// Build the configuration.
     pub fn build(self) -> ResizeConfig {
         let output = self.output.unwrap_or(self.input);
@@ -529,6 +790,8 @@ impl ResizeConfigBuilder {
             linear: self.linear,
             in_stride: self.in_stride,
             out_stride: self.out_stride,
+            source_region: self.source_region,
+            padding: self.padding,
         }
     }
 }
