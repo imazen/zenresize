@@ -2346,9 +2346,7 @@ impl<B: Background> StreamingResize<B> {
             let mut tmp = core::mem::take(&mut self.output_buf_u8);
             match self.path {
                 StreamingPath::I16Srgb => self.produce_next_i16_srgb(&mut tmp[..total_row_len]),
-                StreamingPath::I16Linear => {
-                    self.produce_next_i16_linear(&mut tmp[..total_row_len])
-                }
+                StreamingPath::I16Linear => self.produce_next_i16_linear(&mut tmp[..total_row_len]),
                 StreamingPath::F32 => {
                     self.produce_next_f32();
                     Self::encode_output_u8(
@@ -2451,8 +2449,7 @@ impl<B: Background> StreamingResize<B> {
                 let (dx, dy) = self.orient.forward_map(sx, sy, src_w, src_h);
                 let src_off = sy as usize * src_stride + sx as usize * ch;
                 let dst_off = dy as usize * dst_stride + dx as usize * ch;
-                dst[dst_off..dst_off + ch]
-                    .copy_from_slice(&self.orient_buf[src_off..src_off + ch]);
+                dst[dst_off..dst_off + ch].copy_from_slice(&self.orient_buf[src_off..src_off + ch]);
             }
         }
 
@@ -3943,7 +3940,7 @@ mod tests {
         for pixel in input.chunks_exact_mut(4) {
             pixel[0] = 200; // R
             pixel[1] = 100; // G
-            pixel[2] = 50;  // B
+            pixel[2] = 50; // B
             pixel[3] = 128; // A = 50%
         }
 
@@ -3980,7 +3977,10 @@ mod tests {
 
         assert_eq!(rows_a.len(), rows_b.len());
         for (i, (a, b)) in rows_a.iter().zip(rows_b.iter()).enumerate() {
-            assert_eq!(a, b, "row {i} mismatch between with_background and next_output_row_over");
+            assert_eq!(
+                a, b,
+                "row {i} mismatch between with_background and next_output_row_over"
+            );
         }
     }
 
@@ -4040,7 +4040,10 @@ mod tests {
             let plain_pixels: Vec<&[u8]> = plain_row.chunks_exact(4).collect();
             let flip_pixels: Vec<&[u8]> = flip_row.chunks_exact(4).collect();
             let reversed: Vec<&[u8]> = plain_pixels.iter().rev().copied().collect();
-            assert_eq!(flip_pixels, reversed, "FlipH should reverse pixel order per row");
+            assert_eq!(
+                flip_pixels, reversed,
+                "FlipH should reverse pixel order per row"
+            );
         }
     }
 
@@ -4088,7 +4091,10 @@ mod tests {
         // Rows should be in reverse order relative to unoriented output
         for (i, flip_row) in flip_rows.iter().enumerate() {
             let plain_row = &plain_rows[plain_rows.len() - 1 - i];
-            assert_eq!(flip_row, plain_row, "FlipV row {i} should match reversed plain row");
+            assert_eq!(
+                flip_row, plain_row,
+                "FlipV row {i} should match reversed plain row"
+            );
         }
     }
 
@@ -4099,18 +4105,13 @@ mod tests {
             .format(PixelDescriptor::RGBA8_SRGB)
             .srgb()
             .build();
-        let mut resizer =
-            StreamingResize::new(&config).with_orientation(OrientOutput::Rotate90);
+        let mut resizer = StreamingResize::new(&config).with_orientation(OrientOutput::Rotate90);
 
         assert_eq!(resizer.output_row_len(), 2 * 4); // oriented width = 2
         assert_eq!(resizer.total_output_height(), 4); // oriented height = 4
 
-        let row0 = vec![
-            10, 0, 0, 255, 20, 0, 0, 255, 30, 0, 0, 255, 40, 0, 0, 255,
-        ];
-        let row1 = vec![
-            50, 0, 0, 255, 60, 0, 0, 255, 70, 0, 0, 255, 80, 0, 0, 255,
-        ];
+        let row0 = vec![10, 0, 0, 255, 20, 0, 0, 255, 30, 0, 0, 255, 40, 0, 0, 255];
+        let row1 = vec![50, 0, 0, 255, 60, 0, 0, 255, 70, 0, 0, 255, 80, 0, 0, 255];
 
         resizer.push_row(&row0).unwrap();
         resizer.push_row(&row1).unwrap();

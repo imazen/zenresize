@@ -97,6 +97,10 @@ harness = false
 name = "transfer_bench"
 harness = false
 
+[[bench]]
+name = "tiled_bench"
+harness = false
+
 [profile.test]
 opt-level = 2
 

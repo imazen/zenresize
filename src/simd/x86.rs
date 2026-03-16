@@ -1122,6 +1122,271 @@ pub(crate) fn filter_v_all_u8_i16_v3(
     }
 }
 
+/// Tiled batch vertical filter: u8 intermediate → u8 output via i16 weights.
+///
+/// Processes column tiles to keep `max_taps × tile_chunks × 16` bytes in L1 cache,
+/// improving reuse of shared input rows across consecutive output rows.
+///
+/// `tile_chunks` is the number of 16-byte chunks per tile. For best results,
+/// choose so that `max_taps × tile_chunks × 16 ≤ L1_SIZE / 2`.
+#[archmage::arcane]
+pub(crate) fn filter_v_all_u8_i16_tiled_v3(
+    _token: X64V3Token,
+    intermediate: &[u8],
+    output: &mut [u8],
+    h_row_len: usize,
+    in_h: usize,
+    out_h: usize,
+    weights: &I16WeightTable,
+    tile_chunks: usize,
+) {
+    let half = _mm256_set1_epi32(1 << (I16_PRECISION - 1));
+    let chunks16 = h_row_len / 16;
+    let in_h_i32 = in_h as i32;
+
+    // Pre-chunk all intermediate rows for direct indexing.
+    let mut int_row_chunks: Vec<&[[u8; 16]]> = Vec::with_capacity(in_h);
+    for y in 0..in_h {
+        let row = &intermediate[y * h_row_len..y * h_row_len + h_row_len];
+        int_row_chunks.push(row.as_chunks::<16>().0);
+    }
+
+    let max_taps = weights.max_taps;
+    let mut row_indices = vec![0usize; max_taps];
+    let mut paired_wts_a = vec![_mm256_setzero_si256(); max_taps.div_ceil(2)];
+    let mut paired_wts_b = vec![_mm256_setzero_si256(); max_taps.div_ceil(2)];
+    let empty_chunks: &[[u8; 16]] = &[];
+    let mut tap_rows = vec![empty_chunks; max_taps];
+
+    // Process column tiles.
+    for tile_ci in (0..chunks16).step_by(tile_chunks) {
+        let tile_end = (tile_ci + tile_chunks).min(chunks16);
+
+        let mut out_y = 0;
+        while out_y < out_h {
+            let left = weights.left[out_y];
+            let tap_count = weights.tap_count(out_y);
+            let w_a = weights.weights(out_y);
+
+            let batch2 = out_y + 1 < out_h
+                && weights.left[out_y + 1] == left
+                && weights.tap_count(out_y + 1) == tap_count;
+
+            let pairs = tap_count / 2;
+            let odd = !tap_count.is_multiple_of(2);
+
+            for t in 0..tap_count {
+                row_indices[t] = (left + t as i32).clamp(0, in_h_i32 - 1) as usize;
+            }
+
+            for p in 0..pairs {
+                let w0 = w_a[p * 2] as i32;
+                let w1 = w_a[p * 2 + 1] as i32;
+                paired_wts_a[p] = _mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
+            }
+            let odd_wt_a = if odd {
+                _mm256_set1_epi32(w_a[tap_count - 1] as i32 & 0xFFFF)
+            } else {
+                _mm256_setzero_si256()
+            };
+
+            for (t, &ri) in row_indices[..tap_count].iter().enumerate() {
+                tap_rows[t] = &int_row_chunks[ri][..chunks16];
+            }
+
+            if batch2 {
+                let w_b = weights.weights(out_y + 1);
+                for p in 0..pairs {
+                    let w0 = w_b[p * 2] as i32;
+                    let w1 = w_b[p * 2 + 1] as i32;
+                    paired_wts_b[p] = _mm256_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
+                }
+                let odd_wt_b = if odd {
+                    _mm256_set1_epi32(w_b[tap_count - 1] as i32 & 0xFFFF)
+                } else {
+                    _mm256_setzero_si256()
+                };
+
+                let out_base_a = out_y * h_row_len;
+                // Split output into two non-overlapping mutable row slices.
+                let (row_a, rest) = output[out_base_a..].split_at_mut(h_row_len);
+                let row_b = &mut rest[..h_row_len];
+                let (chunks_a, _) = row_a.as_chunks_mut::<16>();
+                let (chunks_b, _) = row_b.as_chunks_mut::<16>();
+
+                for ci in tile_ci..tile_end {
+                    let mut acc_a_lo = _mm256_setzero_si256();
+                    let mut acc_a_hi = _mm256_setzero_si256();
+                    let mut acc_b_lo = _mm256_setzero_si256();
+                    let mut acc_b_hi = _mm256_setzero_si256();
+
+                    for p in 0..pairs {
+                        let src0 = _mm_loadu_si128(idx(tap_rows[p * 2], ci));
+                        let src1 = _mm_loadu_si128(idx(tap_rows[p * 2 + 1], ci));
+
+                        let il_lo = _mm_unpacklo_epi8(src0, src1);
+                        let il_hi = _mm_unpackhi_epi8(src0, src1);
+                        let ext_lo = _mm256_cvtepu8_epi16(il_lo);
+                        let ext_hi = _mm256_cvtepu8_epi16(il_hi);
+
+                        acc_a_lo = _mm256_add_epi32(
+                            acc_a_lo,
+                            _mm256_madd_epi16(ext_lo, paired_wts_a[p]),
+                        );
+                        acc_a_hi = _mm256_add_epi32(
+                            acc_a_hi,
+                            _mm256_madd_epi16(ext_hi, paired_wts_a[p]),
+                        );
+                        acc_b_lo = _mm256_add_epi32(
+                            acc_b_lo,
+                            _mm256_madd_epi16(ext_lo, paired_wts_b[p]),
+                        );
+                        acc_b_hi = _mm256_add_epi32(
+                            acc_b_hi,
+                            _mm256_madd_epi16(ext_hi, paired_wts_b[p]),
+                        );
+                    }
+
+                    if odd {
+                        let src = _mm_loadu_si128(idx(tap_rows[tap_count - 1], ci));
+                        let zero_src = _mm_setzero_si128();
+                        let il_lo = _mm_unpacklo_epi8(src, zero_src);
+                        let il_hi = _mm_unpackhi_epi8(src, zero_src);
+                        let ext_lo = _mm256_cvtepu8_epi16(il_lo);
+                        let ext_hi = _mm256_cvtepu8_epi16(il_hi);
+
+                        acc_a_lo =
+                            _mm256_add_epi32(acc_a_lo, _mm256_madd_epi16(ext_lo, odd_wt_a));
+                        acc_a_hi =
+                            _mm256_add_epi32(acc_a_hi, _mm256_madd_epi16(ext_hi, odd_wt_a));
+                        acc_b_lo =
+                            _mm256_add_epi32(acc_b_lo, _mm256_madd_epi16(ext_lo, odd_wt_b));
+                        acc_b_hi =
+                            _mm256_add_epi32(acc_b_hi, _mm256_madd_epi16(ext_hi, odd_wt_b));
+                    }
+
+                    // Pack and store row A.
+                    let ra_lo = _mm256_srai_epi32::<{ I16_PRECISION }>(
+                        _mm256_add_epi32(acc_a_lo, half),
+                    );
+                    let ra_hi = _mm256_srai_epi32::<{ I16_PRECISION }>(
+                        _mm256_add_epi32(acc_a_hi, half),
+                    );
+                    let a_ll = _mm256_castsi256_si128(ra_lo);
+                    let a_lh = _mm256_extracti128_si256::<1>(ra_lo);
+                    let a_hl = _mm256_castsi256_si128(ra_hi);
+                    let a_hh = _mm256_extracti128_si256::<1>(ra_hi);
+                    _mm_storeu_si128(
+                        idx_mut(chunks_a, ci),
+                        _mm_packus_epi16(
+                            _mm_packs_epi32(a_ll, a_lh),
+                            _mm_packs_epi32(a_hl, a_hh),
+                        ),
+                    );
+
+                    // Pack and store row B.
+                    let rb_lo = _mm256_srai_epi32::<{ I16_PRECISION }>(
+                        _mm256_add_epi32(acc_b_lo, half),
+                    );
+                    let rb_hi = _mm256_srai_epi32::<{ I16_PRECISION }>(
+                        _mm256_add_epi32(acc_b_hi, half),
+                    );
+                    let b_ll = _mm256_castsi256_si128(rb_lo);
+                    let b_lh = _mm256_extracti128_si256::<1>(rb_lo);
+                    let b_hl = _mm256_castsi256_si128(rb_hi);
+                    let b_hh = _mm256_extracti128_si256::<1>(rb_hi);
+                    _mm_storeu_si128(
+                        idx_mut(chunks_b, ci),
+                        _mm_packus_epi16(
+                            _mm_packs_epi32(b_ll, b_lh),
+                            _mm_packs_epi32(b_hl, b_hh),
+                        ),
+                    );
+                }
+
+                out_y += 2;
+            } else {
+                let out_base = out_y * h_row_len;
+                let out_row = &mut output[out_base..out_base + h_row_len];
+                let (out_chunks, _) = out_row.as_chunks_mut::<16>();
+
+                for ci in tile_ci..tile_end {
+                    let mut acc_lo = _mm256_setzero_si256();
+                    let mut acc_hi = _mm256_setzero_si256();
+
+                    for (pw, ri_pair) in
+                        paired_wts_a[..pairs].iter().zip(tap_rows.chunks_exact(2))
+                    {
+                        let src0 = _mm_loadu_si128(idx(ri_pair[0], ci));
+                        let src1 = _mm_loadu_si128(idx(ri_pair[1], ci));
+
+                        let il_lo = _mm_unpacklo_epi8(src0, src1);
+                        let il_hi = _mm_unpackhi_epi8(src0, src1);
+                        let ext_lo = _mm256_cvtepu8_epi16(il_lo);
+                        let ext_hi = _mm256_cvtepu8_epi16(il_hi);
+
+                        acc_lo = _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, *pw));
+                        acc_hi = _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, *pw));
+                    }
+
+                    if odd {
+                        let src = _mm_loadu_si128(idx(tap_rows[tap_count - 1], ci));
+                        let zero_src = _mm_setzero_si128();
+                        let il_lo = _mm_unpacklo_epi8(src, zero_src);
+                        let il_hi = _mm_unpackhi_epi8(src, zero_src);
+                        let ext_lo = _mm256_cvtepu8_epi16(il_lo);
+                        let ext_hi = _mm256_cvtepu8_epi16(il_hi);
+                        acc_lo =
+                            _mm256_add_epi32(acc_lo, _mm256_madd_epi16(ext_lo, odd_wt_a));
+                        acc_hi =
+                            _mm256_add_epi32(acc_hi, _mm256_madd_epi16(ext_hi, odd_wt_a));
+                    }
+
+                    let rounded_lo = _mm256_add_epi32(acc_lo, half);
+                    let rounded_hi = _mm256_add_epi32(acc_hi, half);
+                    let shifted_lo = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded_lo);
+                    let shifted_hi = _mm256_srai_epi32::<{ I16_PRECISION }>(rounded_hi);
+
+                    let lo_lo = _mm256_castsi256_si128(shifted_lo);
+                    let lo_hi = _mm256_extracti128_si256::<1>(shifted_lo);
+                    let hi_lo = _mm256_castsi256_si128(shifted_hi);
+                    let hi_hi = _mm256_extracti128_si256::<1>(shifted_hi);
+
+                    let pack01 = _mm_packs_epi32(lo_lo, lo_hi);
+                    let pack23 = _mm_packs_epi32(hi_lo, hi_hi);
+                    _mm_storeu_si128(
+                        idx_mut(out_chunks, ci),
+                        _mm_packus_epi16(pack01, pack23),
+                    );
+                }
+
+                out_y += 1;
+            }
+        }
+    }
+
+    // Scalar tail for remaining bytes not covered by 16-byte chunks.
+    let tail_start = chunks16 * 16;
+    if tail_start < h_row_len {
+        let in_h_i32_s = in_h as i32 - 1;
+        for out_y in 0..out_h {
+            let left = weights.left[out_y];
+            let tap_count = weights.tap_count(out_y);
+            let w = weights.weights(out_y);
+            let out_start = out_y * h_row_len;
+            for x in tail_start..h_row_len {
+                let mut acc: i32 = 0;
+                for (t, &weight) in w[..tap_count].iter().enumerate() {
+                    let in_y = (left + t as i32).clamp(0, in_h_i32_s) as usize;
+                    acc += intermediate[in_y * h_row_len + x] as i32 * weight as i32;
+                }
+                output[out_start + x] =
+                    ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 255) as u8;
+            }
+        }
+    }
+}
+
 /// Convert sRGB u8 → linear f32 using LUT.
 #[archmage::arcane]
 pub(crate) fn srgb_u8_to_linear_f32_v3(

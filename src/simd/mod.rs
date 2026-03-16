@@ -107,7 +107,7 @@ pub(crate) fn filter_h_u8_i16_4rows(
 /// Batch vertical filter: process all output rows from the intermediate buffer.
 ///
 /// Avoids per-row dispatch overhead and row pointer construction.
-pub(crate) fn filter_v_all_u8_i16(
+pub fn filter_v_all_u8_i16(
     intermediate: &[u8],
     output: &mut [u8],
     h_row_len: usize,
@@ -122,6 +122,29 @@ pub(crate) fn filter_v_all_u8_i16(
         in_h,
         out_h,
         weights
+    ))
+}
+
+/// Tiled batch V-filter: u8 intermediate → u8 output with column tiling.
+///
+/// `tile_chunks` is the number of 16-byte chunks per tile.
+pub fn filter_v_all_u8_i16_tiled(
+    intermediate: &[u8],
+    output: &mut [u8],
+    h_row_len: usize,
+    in_h: usize,
+    out_h: usize,
+    weights: &crate::weights::I16WeightTable,
+    tile_chunks: usize,
+) {
+    archmage::incant!(filter_v_all_u8_i16_tiled(
+        intermediate,
+        output,
+        h_row_len,
+        in_h,
+        out_h,
+        weights,
+        tile_chunks
     ))
 }
 

@@ -39,7 +39,7 @@ pub(crate) mod color;
 pub mod composite;
 #[cfg(feature = "layout")]
 pub(crate) mod execute;
-pub(crate) mod filter;
+pub mod filter;
 #[cfg(feature = "layout")]
 pub mod layout;
 pub(crate) mod pixel;
@@ -47,7 +47,7 @@ pub mod plane;
 pub(crate) mod resize;
 pub(crate) mod streaming;
 pub(crate) mod transfer;
-pub(crate) mod weights;
+pub mod weights;
 #[allow(dead_code)] // WIP: generic resize pipeline types
 pub(crate) mod working;
 
@@ -55,7 +55,8 @@ pub(crate) mod working;
 #[allow(clippy::excessive_precision)]
 pub mod fastmath;
 mod proven;
-mod simd;
+#[doc(hidden)]
+pub mod simd;
 
 // Re-exports from zenpixels
 pub use zenpixels::{AlphaMode, ChannelLayout, ChannelType, PixelDescriptor, TransferFunction};

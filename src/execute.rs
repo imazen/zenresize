@@ -1921,7 +1921,10 @@ mod tests {
         let config = config_from_plan(src_w, src_h, &plan, format, Filter::Lanczos);
 
         // Source region should match trim
-        let region = config.source_region.as_ref().expect("should have source region");
+        let region = config
+            .source_region
+            .as_ref()
+            .expect("should have source region");
         assert_eq!(region.x, 20);
         assert_eq!(region.y, 10);
         assert_eq!(region.width, 60);
@@ -2120,11 +2123,7 @@ mod tests {
         for y in 7..22 {
             for x in 0..5 {
                 let px = &output_rows[y][x * ch..(x + 1) * ch];
-                assert_eq!(
-                    px,
-                    &[255, 255, 255, 255],
-                    "left pad row {y}, col {x}"
-                );
+                assert_eq!(px, &[255, 255, 255, 255], "left pad row {y}, col {x}");
             }
         }
 
@@ -2132,11 +2131,7 @@ mod tests {
         for y in 7..22 {
             for x in 25..30 {
                 let px = &output_rows[y][x * ch..(x + 1) * ch];
-                assert_eq!(
-                    px,
-                    &[255, 255, 255, 255],
-                    "right pad row {y}, col {x}"
-                );
+                assert_eq!(px, &[255, 255, 255, 255], "right pad row {y}, col {x}");
             }
         }
     }

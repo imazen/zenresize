@@ -202,6 +202,72 @@ pub(crate) fn filter_v_all_u8_i16_scalar(
     }
 }
 
+/// Tiled batch vertical filter for all output rows, scalar fallback.
+///
+/// Processes column tiles of width `tile_width` to improve L1 cache reuse
+/// across consecutive output rows that share overlapping input row windows.
+pub(crate) fn filter_v_all_u8_i16_tiled_scalar(
+    _token: ScalarToken,
+    intermediate: &[u8],
+    output: &mut [u8],
+    h_row_len: usize,
+    in_h: usize,
+    out_h: usize,
+    weights: &crate::weights::I16WeightTable,
+    tile_width: usize,
+) {
+    let in_h_i32 = in_h as i32 - 1;
+
+    for tile_start in (0..h_row_len).step_by(tile_width) {
+        let tile_end = (tile_start + tile_width).min(h_row_len);
+
+        let mut out_y = 0;
+        while out_y < out_h {
+            let left = weights.left[out_y];
+            let tap_count = weights.tap_count(out_y);
+            let w_a = weights.weights(out_y);
+
+            let batch2 = out_y + 1 < out_h
+                && weights.left[out_y + 1] == left
+                && weights.tap_count(out_y + 1) == tap_count;
+
+            if batch2 {
+                let w_b = weights.weights(out_y + 1);
+                let out_start_a = out_y * h_row_len;
+                let out_start_b = (out_y + 1) * h_row_len;
+
+                for x in tile_start..tile_end {
+                    let mut acc_a: i32 = 0;
+                    let mut acc_b: i32 = 0;
+                    for t in 0..tap_count {
+                        let in_y = (left + t as i32).clamp(0, in_h_i32) as usize;
+                        let v = intermediate[in_y * h_row_len + x] as i32;
+                        acc_a += v * w_a[t] as i32;
+                        acc_b += v * w_b[t] as i32;
+                    }
+                    output[out_start_a + x] =
+                        ((acc_a + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 255) as u8;
+                    output[out_start_b + x] =
+                        ((acc_b + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 255) as u8;
+                }
+                out_y += 2;
+            } else {
+                let out_start = out_y * h_row_len;
+                for x in tile_start..tile_end {
+                    let mut acc: i32 = 0;
+                    for (t, &weight) in w_a[..tap_count].iter().enumerate() {
+                        let in_y = (left + t as i32).clamp(0, in_h_i32) as usize;
+                        acc += intermediate[in_y * h_row_len + x] as i32 * weight as i32;
+                    }
+                    output[out_start + x] =
+                        ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 255) as u8;
+                }
+                out_y += 1;
+            }
+        }
+    }
+}
+
 // ============================================================================
 // Integer i16→i16 path (linear-light i12 values 0-4095)
 // ============================================================================
@@ -288,6 +354,72 @@ pub(crate) fn filter_v_all_i16_i16_scalar(
                     ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095) as i16;
             }
             out_y += 1;
+        }
+    }
+}
+
+/// Tiled batch vertical filter for all output rows (i16→i16), scalar fallback.
+pub(crate) fn filter_v_all_i16_i16_tiled_scalar(
+    _token: ScalarToken,
+    intermediate: &[i16],
+    output: &mut [i16],
+    h_row_len: usize,
+    in_h: usize,
+    out_h: usize,
+    weights: &crate::weights::I16WeightTable,
+    tile_width: usize,
+) {
+    let in_h_i32 = in_h as i32 - 1;
+
+    for tile_start in (0..h_row_len).step_by(tile_width) {
+        let tile_end = (tile_start + tile_width).min(h_row_len);
+
+        let mut out_y = 0;
+        while out_y < out_h {
+            let left = weights.left[out_y];
+            let tap_count = weights.tap_count(out_y);
+            let w_a = weights.weights(out_y);
+
+            let batch2 = out_y + 1 < out_h
+                && weights.left[out_y + 1] == left
+                && weights.tap_count(out_y + 1) == tap_count;
+
+            if batch2 {
+                let w_b = weights.weights(out_y + 1);
+                let out_start_a = out_y * h_row_len;
+                let out_start_b = (out_y + 1) * h_row_len;
+
+                for x in tile_start..tile_end {
+                    let mut acc_a: i32 = 0;
+                    let mut acc_b: i32 = 0;
+                    for t in 0..tap_count {
+                        let in_y = (left + t as i32).clamp(0, in_h_i32) as usize;
+                        let v = intermediate[in_y * h_row_len + x] as i32;
+                        acc_a += v * w_a[t] as i32;
+                        acc_b += v * w_b[t] as i32;
+                    }
+                    output[out_start_a + x] =
+                        ((acc_a + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095)
+                            as i16;
+                    output[out_start_b + x] =
+                        ((acc_b + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095)
+                            as i16;
+                }
+                out_y += 2;
+            } else {
+                let out_start = out_y * h_row_len;
+                for x in tile_start..tile_end {
+                    let mut acc: i32 = 0;
+                    for (t, &weight) in w_a[..tap_count].iter().enumerate() {
+                        let in_y = (left + t as i32).clamp(0, in_h_i32) as usize;
+                        acc += intermediate[in_y * h_row_len + x] as i32 * weight as i32;
+                    }
+                    output[out_start + x] =
+                        ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095)
+                            as i16;
+                }
+                out_y += 1;
+            }
         }
     }
 }
