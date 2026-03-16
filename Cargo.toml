@@ -101,6 +101,10 @@ harness = false
 name = "tiled_bench"
 harness = false
 
+[[bench]]
+name = "cachegrind_vfilter"
+harness = false
+
 [profile.test]
 opt-level = 2
 
