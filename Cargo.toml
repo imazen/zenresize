@@ -105,6 +105,10 @@ harness = false
 name = "cachegrind_vfilter"
 harness = false
 
+[[bench]]
+name = "fullframe_vs_streaming"
+harness = false
+
 [profile.test]
 opt-level = 2
 
