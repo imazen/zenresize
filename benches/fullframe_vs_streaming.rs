@@ -179,9 +179,12 @@ fn compare_quality(
     let linearize = input_tf == zenresize::TransferFunction::Srgb
         && output_tf == zenresize::TransferFunction::Srgb;
 
-    let ff_path = if is_u8 && channels == 4 && !linearize && !needs_premul {
+    let actual_linearize = config.needs_linearization();
+    // Path selection mirrors resize.rs: path 0 = sRGB i16 (4ch, no linearize),
+    // path 1 = linear i16 (4ch, linearize, no premul), path 2 = f32.
+    let ff_path = if is_u8 && channels == 4 && !actual_linearize {
         "sRGB-i16"
-    } else if is_u8 && channels == 4 && linearize && !needs_premul {
+    } else if is_u8 && channels == 4 && actual_linearize && !needs_premul {
         "linear-i16"
     } else if is_u8 {
         "f32(u8)"
