@@ -1577,6 +1577,114 @@ mod imgref_impl {
 
 pub use imgref_impl::{resize_3ch, resize_4ch, resize_gray8};
 
+// =============================================================================
+// H-first streaming resize (experimental)
+// =============================================================================
+
+/// H-first streaming resize for sRGB u8 4ch.
+///
+/// Unlike `StreamingResize` (V-first), this applies the H-filter to each input
+/// row on arrival, storing the narrowed result in a ring buffer. The V-filter
+/// then operates on `out_width`-wide rows instead of `in_width`-wide rows.
+///
+/// For heavy downscale (large width reduction), this is significantly faster
+/// because the V-filter processes 1/N the data (where N = in_width / out_width).
+///
+/// This is a proof-of-concept for benchmarking. It only supports:
+/// - u8 RGBA/RGBX 4ch, sRGB, no linearization, no compositing, no crop, no padding.
+pub fn resize_hfirst_streaming(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
+    let channels = config.channels();
+    assert_eq!(channels, 4, "H-first streaming only supports 4ch");
+
+    let filter = InterpolationDetails::create(config.filter);
+    let h_weights = I16WeightTable::new(config.in_width, config.out_width, &filter);
+    let v_weights = I16WeightTable::new(config.in_height, config.out_height, &filter);
+
+    let in_w = config.in_width as usize;
+    let in_h = config.in_height as usize;
+    let out_w = config.out_width as usize;
+    let out_h = config.out_height as usize;
+    let in_row_len = in_w * channels;
+    let out_row_len = out_w * channels;
+
+    // Ring buffer: stores H-filtered rows, each out_row_len wide.
+    let cache_size = v_weights.max_taps + 2;
+    let mut ring: Vec<Vec<u8>> = (0..cache_size).map(|_| vec![0u8; out_row_len]).collect();
+
+    let mut output = vec![0u8; out_row_len * out_h];
+    let mut input_rows_pushed = 0u32;
+    let mut output_rows_produced = 0u32;
+
+    // Temp buffer for rows with SIMD padding
+    let h_padding = h_weights.groups4 * 16;
+    let padded_len = in_row_len + h_padding;
+
+    for y in 0..in_h {
+        // H-filter this input row → ring buffer slot
+        let slot = y % cache_size;
+        let in_row = &input[y * in_row_len..y * in_row_len + padded_len.min(input.len() - y * in_row_len)];
+        simd::filter_h_u8_i16(in_row, &mut ring[slot], &h_weights, channels);
+        input_rows_pushed += 1;
+
+        // Produce output rows when possible
+        loop {
+            if output_rows_produced >= out_h as u32 {
+                break;
+            }
+            let out_y = output_rows_produced as usize;
+            let left = v_weights.left[out_y];
+            let tap_count = v_weights.tap_count(out_y);
+            let weights = v_weights.weights(out_y);
+
+            // Check if all needed input rows are available
+            let last_needed = (left + tap_count as i32 - 1).clamp(0, in_h as i32 - 1) as u32;
+            if last_needed >= input_rows_pushed {
+                break;
+            }
+
+            // Gather row references from ring buffer
+            let mut row_refs: [&[u8]; 128] = [&[]; 128];
+            for t in 0..tap_count {
+                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+                row_refs[t] = &ring[in_y % cache_size];
+            }
+
+            // V-filter directly to output (no temp buffer needed!)
+            let out_start = out_y * out_row_len;
+            simd::filter_v_row_u8_i16(
+                &row_refs[..tap_count],
+                &mut output[out_start..out_start + out_row_len],
+                weights,
+            );
+            output_rows_produced += 1;
+        }
+    }
+
+    // Produce remaining output rows (edge clamping)
+    while (output_rows_produced as usize) < out_h {
+        let out_y = output_rows_produced as usize;
+        let left = v_weights.left[out_y];
+        let tap_count = v_weights.tap_count(out_y);
+        let weights = v_weights.weights(out_y);
+
+        let mut row_refs: [&[u8]; 128] = [&[]; 128];
+        for t in 0..tap_count {
+            let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+            row_refs[t] = &ring[in_y % cache_size];
+        }
+
+        let out_start = out_y * out_row_len;
+        simd::filter_v_row_u8_i16(
+            &row_refs[..tap_count],
+            &mut output[out_start..out_start + out_row_len],
+            weights,
+        );
+        output_rows_produced += 1;
+    }
+
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

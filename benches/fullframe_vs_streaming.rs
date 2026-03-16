@@ -94,6 +94,10 @@ fn streaming_resize(config: &zenresize::ResizeConfig, input: &[u8]) -> Vec<u8> {
     output
 }
 
+fn hfirst_streaming_resize(config: &zenresize::ResizeConfig, input: &[u8]) -> Vec<u8> {
+    zenresize::resize_hfirst_streaming(config, input)
+}
+
 fn streaming_resize_batch(config: &zenresize::ResizeConfig, input: &[u8], batch: usize) -> Vec<u8> {
     let in_w = config.in_width as usize;
     let channels = config.input.channels();
@@ -347,24 +351,28 @@ fn main() {
     println!("║ PERFORMANCE: Fullframe vs Streaming (paired interleaved)                      ║");
     println!("╠════════════════════════════════════════════════════════════════════════════════╣");
     println!(
-        "║ {:<24} {:>10} {:>10} {:>10} {:>8} {:>8} ║",
-        "Scenario", "Fullframe", "Stream1", "StreamB8", "S1/FF", "SB/FF"
+        "║ {:<24} {:>10} {:>10} {:>10} {:>10} {:>7} {:>7} ║",
+        "Scenario", "Fullframe", "VFirst", "HFirst", "Best", "VF/FF", "HF/FF"
     );
-    println!("╠════════════════════════════════════════════════════════════════════════════════╣");
+    println!("╠══════════════════════════════════════════════════════════════════════════════════════╣");
 
     for s in &all {
+        let is_4ch = s.config.input.channels() == 4;
+
         // Warmup
         for _ in 0..3 {
             std::hint::black_box(fullframe_resize(&s.config, &s.input));
             std::hint::black_box(streaming_resize(&s.config, &s.input));
-            std::hint::black_box(streaming_resize_batch(&s.config, &s.input, 8));
+            if is_4ch {
+                std::hint::black_box(hfirst_streaming_resize(&s.config, &s.input));
+            }
         }
 
         let iters = if s.in_w * s.in_h > 2_000_000 { 20 } else { 40 };
 
         let mut ff_times = Vec::with_capacity(iters);
-        let mut s1_times = Vec::with_capacity(iters);
-        let mut sb_times = Vec::with_capacity(iters);
+        let mut vf_times = Vec::with_capacity(iters);
+        let mut hf_times = Vec::with_capacity(iters);
 
         // Interleaved measurement
         for _ in 0..iters {
@@ -374,44 +382,71 @@ fn main() {
 
             let t1 = Instant::now();
             std::hint::black_box(streaming_resize(&s.config, &s.input));
-            s1_times.push(t1.elapsed().as_secs_f64() * 1e6);
+            vf_times.push(t1.elapsed().as_secs_f64() * 1e6);
 
-            let t2 = Instant::now();
-            std::hint::black_box(streaming_resize_batch(&s.config, &s.input, 8));
-            sb_times.push(t2.elapsed().as_secs_f64() * 1e6);
+            if is_4ch {
+                let t2 = Instant::now();
+                std::hint::black_box(hfirst_streaming_resize(&s.config, &s.input));
+                hf_times.push(t2.elapsed().as_secs_f64() * 1e6);
+            }
         }
 
         trim_outliers(&mut ff_times);
-        trim_outliers(&mut s1_times);
-        trim_outliers(&mut sb_times);
+        trim_outliers(&mut vf_times);
+        if is_4ch {
+            trim_outliers(&mut hf_times);
+        }
 
         let ff_mean = mean(&ff_times);
-        let s1_mean = mean(&s1_times);
-        let sb_mean = mean(&sb_times);
+        let vf_mean = mean(&vf_times);
+        let hf_mean = if is_4ch { mean(&hf_times) } else { f64::NAN };
 
         let ff_ci = ci95(&ff_times);
-        let s1_ci = ci95(&s1_times);
-        let sb_ci = ci95(&sb_times);
+        let vf_ci = ci95(&vf_times);
+        let hf_ci = if is_4ch { ci95(&hf_times) } else { 0.0 };
 
-        let s1_ratio = s1_mean / ff_mean;
-        let sb_ratio = sb_mean / ff_mean;
+        let vf_ratio = vf_mean / ff_mean;
+        let hf_ratio = if is_4ch { hf_mean / ff_mean } else { f64::NAN };
 
         let fmt_time = |us: f64, ci: f64| -> String {
-            if us > 1000.0 {
+            if us.is_nan() {
+                "n/a".to_string()
+            } else if us > 1000.0 {
                 format!("{:.2}±{:.1}ms", us / 1000.0, ci / 1000.0)
             } else {
                 format!("{:.0}±{:.0}µs", us, ci)
             }
         };
 
+        let best = if is_4ch {
+            if ff_mean < vf_mean && ff_mean < hf_mean {
+                "FF"
+            } else if hf_mean < vf_mean {
+                "HF"
+            } else {
+                "VF"
+            }
+        } else if ff_mean < vf_mean {
+            "FF"
+        } else {
+            "VF"
+        };
+
+        let hf_ratio_str = if is_4ch {
+            format!("{:.2}x", hf_ratio)
+        } else {
+            "n/a".to_string()
+        };
+
         println!(
-            "║ {:<24} {:>10} {:>10} {:>10} {:>8.2}x {:>7.2}x ║",
+            "║ {:<24} {:>10} {:>10} {:>10} {:>10} {:>7.2}x {:>7} ║",
             s.label,
             fmt_time(ff_mean, ff_ci),
-            fmt_time(s1_mean, s1_ci),
-            fmt_time(sb_mean, sb_ci),
-            s1_ratio,
-            sb_ratio,
+            fmt_time(vf_mean, vf_ci),
+            fmt_time(hf_mean, hf_ci),
+            best,
+            vf_ratio,
+            hf_ratio_str,
         );
     }
     println!("╚════════════════════════════════════════════════════════════════════════════════╝");
