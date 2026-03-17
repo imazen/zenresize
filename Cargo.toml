@@ -124,6 +124,10 @@ harness = false
 name = "composite_bench"
 harness = false
 
+[[bench]]
+name = "composite_e2e"
+harness = false
+
 [profile.test]
 opt-level = 2
 
