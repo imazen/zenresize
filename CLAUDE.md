@@ -70,6 +70,14 @@ The streaming pipeline is V-first (V-filter on `in_width`-wide rows, then H-filt
 
 Implementation: `StreamingResize` should auto-select H-first for i16 paths. The prototype lives in `resize_hfirst_streaming()` on the worktree-tiled-v-filter branch. Needs: proper streaming API (push/pull), batch support, compositing integration.
 
+### Fullframe as streaming wrapper
+`Resizer` should delegate to `StreamingResize` internally: push all input rows, drain all output rows. This eliminates the duplicate fullframe pipeline, massive intermediate buffer (32MB → 300KB for 4K), and ensures accuracy parity (max diff 1 vs 25 with old u8 intermediate). H-first streaming is already faster than old fullframe for all i16 4ch scenarios. The `resize_into` method writes output rows directly to the caller's buffer.
+
+### Paired output row batching in streaming V-filter
+The fullframe batch V-filter (`filter_v_all_*`) detects consecutive output rows that share the same input window (same `left` and `tap_count` — common in upscale where multiple output rows map to the same taps). It loads input chunks once and accumulates into two output rows with different weights, halving memory traffic. This gave 17-22% speedup for 2× Lanczos3 upscale (commit 346ae77).
+
+When streaming wraps fullframe, the per-output-row V-filter loses this. Fix: in the streaming produce_next, check if `out_y+1` shares the same window. If so, V-filter both rows into a 2-row buffer and serve them on consecutive `next_output_row()` calls. This recovers the upscale advantage. The batch-all-rows overhead saving (~5%) is less important — streaming's per-row overhead is already minimal.
+
 ### Compositing in H-first streaming
 Current compositing only works in the f32 path (V-first). For H-first, compositing could happen after the V-filter produces the final output row. Need to investigate:
 - Can we composite on i16/u8 output directly (integer composite)?
