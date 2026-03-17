@@ -335,6 +335,8 @@ pub struct StreamingResize<B: Background = NoBackground> {
     background: B,
     /// Row buffer for non-solid backgrounds. Empty for NoBackground and SolidBackground.
     composite_bg_row: Vec<f32>,
+    /// Blend mode for compositing (default: SrcOver).
+    blend_mode: composite::BlendMode,
 
     // === Crop state (zero-cost when not cropping) ===
     /// Current source row index (0-based, tracks full source image rows pushed).
@@ -442,6 +444,21 @@ impl<B: Background> StreamingResize<B> {
             self.orient_buf = vec![0u8; ow as usize * oh as usize * self.channels];
         }
         self.orient = orient;
+        self
+    }
+
+    /// Set the blend mode for compositing.
+    ///
+    /// Default is [`BlendMode::SrcOver`] (Porter-Duff source-over).
+    /// Only meaningful when a background is set via [`with_background`](Self::with_background).
+    ///
+    /// Panics if rows have already been pushed.
+    pub fn with_blend_mode(mut self, mode: composite::BlendMode) -> Self {
+        assert_eq!(
+            self.input_rows_received, 0,
+            "with_blend_mode must be called before pushing rows"
+        );
+        self.blend_mode = mode;
         self
     }
 
@@ -716,6 +733,7 @@ impl<B: Background> StreamingResize<B> {
                     paired_row_ready: false,
                     background,
                     composite_bg_row,
+                    blend_mode: composite::BlendMode::SrcOver,
                     source_row_index: 0,
                     crop_x_offset,
                     crop_y_start,
@@ -789,6 +807,7 @@ impl<B: Background> StreamingResize<B> {
                     paired_row_ready: false,
                     background,
                     composite_bg_row,
+                    blend_mode: composite::BlendMode::SrcOver,
                     source_row_index: 0,
                     crop_x_offset,
                     crop_y_start,
@@ -856,6 +875,7 @@ impl<B: Background> StreamingResize<B> {
                     paired_row_ready: false,
                     background,
                     composite_bg_row,
+                    blend_mode: composite::BlendMode::SrcOver,
                     source_row_index: 0,
                     crop_x_offset,
                     crop_y_start,
@@ -2247,6 +2267,7 @@ impl<B: Background> StreamingResize<B> {
             &mut self.composite_bg_row,
             out_y,
             self.channels as u8,
+            self.blend_mode,
         );
 
         if self.needs_premul {

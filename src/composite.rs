@@ -1,9 +1,12 @@
-//! Porter-Duff source-over compositing for blending resized images onto backgrounds.
+//! Compositing for blending resized images onto backgrounds.
 //!
 //! Compositing happens in premultiplied linear f32 space, between the vertical
 //! filter output and unpremultiply. The [`Background`] trait is user-extensible.
 //!
-//! The formula for premultiplied source-over:
+//! Blend math is provided by [`zenblend`] — this module handles *where*
+//! background pixels come from, while zenblend handles *how* they combine.
+//!
+//! The default blend mode is Porter-Duff source-over:
 //! ```text
 //! out[i] = fg[i] + bg[i] * (1.0 - fg_alpha)
 //! ```
@@ -11,6 +14,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::{vec, vec::Vec};
 
+pub use zenblend::BlendMode;
 use zenpixels::PixelDescriptor;
 
 /// Error type for compositing configuration.
@@ -267,7 +271,7 @@ impl Background for StreamedBackground {
 }
 
 // =============================================================================
-// Composite kernels (scalar, autovectorizes reasonably)
+// Composite kernels — delegate to zenblend for SIMD-accelerated blend math
 // =============================================================================
 
 /// Source-over composite: premultiplied foreground over premultiplied background.
@@ -282,13 +286,7 @@ pub fn composite_over_premul(src: &mut [f32], bg: &[f32], channels: u8) {
     if channels != 4 {
         return; // Gray/Rgb are opaque — no blending needed
     }
-    for (s, b) in src.chunks_exact_mut(4).zip(bg.chunks_exact(4)) {
-        let inv_a = 1.0 - s[3];
-        s[0] += b[0] * inv_a;
-        s[1] += b[1] * inv_a;
-        s[2] += b[2] * inv_a;
-        s[3] += b[3] * inv_a;
-    }
+    zenblend::blend_row(src, bg, BlendMode::SrcOver);
 }
 
 /// Source-over composite with a solid premultiplied background pixel.
@@ -296,13 +294,7 @@ pub fn composite_over_premul(src: &mut [f32], bg: &[f32], channels: u8) {
 /// No row buffer needed — pixel values live in registers.
 #[inline]
 pub fn composite_over_solid_premul(src: &mut [f32], pixel: &[f32; 4]) {
-    for s in src.chunks_exact_mut(4) {
-        let inv_a = 1.0 - s[3];
-        s[0] += pixel[0] * inv_a;
-        s[1] += pixel[1] * inv_a;
-        s[2] += pixel[2] * inv_a;
-        s[3] += pixel[3] * inv_a;
-    }
+    zenblend::blend_row_solid(src, pixel, BlendMode::SrcOver);
 }
 
 /// Source-over composite with a solid opaque premultiplied background pixel.
@@ -310,13 +302,7 @@ pub fn composite_over_solid_premul(src: &mut [f32], pixel: &[f32; 4]) {
 /// Output alpha is always 1.0 (opaque bg + any fg → opaque output).
 #[inline]
 pub fn composite_over_solid_opaque_premul(src: &mut [f32], pixel: &[f32; 4]) {
-    for s in src.chunks_exact_mut(4) {
-        let inv_a = 1.0 - s[3];
-        s[0] += pixel[0] * inv_a;
-        s[1] += pixel[1] * inv_a;
-        s[2] += pixel[2] * inv_a;
-        s[3] = 1.0; // bg opaque + any fg → opaque output
-    }
+    zenblend::blend_row_solid_opaque(src, pixel, BlendMode::SrcOver);
 }
 
 /// Unpremultiply alpha on a premultiplied linear f32 row (4ch RGBA, in-place).
@@ -330,7 +316,7 @@ pub fn unpremultiply_f32_row(row: &mut [f32]) {
 
 /// Three-tier composite dispatch used by both [`Resizer`] and [`StreamingResize`].
 ///
-/// Applies source-over compositing in-place on `src` (premultiplied linear f32).
+/// Applies the given blend mode in-place on `src` (premultiplied linear f32).
 /// `bg_row_buf` is only used for non-solid backgrounds.
 #[inline]
 pub(crate) fn composite_dispatch<B: Background>(
@@ -339,20 +325,24 @@ pub(crate) fn composite_dispatch<B: Background>(
     bg_row_buf: &mut [f32],
     out_y: u32,
     channels: u8,
+    mode: BlendMode,
 ) {
     if bg.is_transparent() {
         return;
     }
     if let Some(pixel) = bg.solid_pixel() {
-        if bg.is_opaque() {
-            composite_over_solid_opaque_premul(src, pixel);
+        if bg.is_opaque() && mode == BlendMode::SrcOver {
+            zenblend::blend_row_solid_opaque(src, pixel, mode);
         } else {
-            composite_over_solid_premul(src, pixel);
+            zenblend::blend_row_solid(src, pixel, mode);
         }
     } else {
+        if channels != 4 {
+            return; // Gray/Rgb are opaque — no blending needed
+        }
         let row_len = src.len();
         bg.fill_row(&mut bg_row_buf[..row_len], out_y, channels);
-        composite_over_premul(src, &bg_row_buf[..row_len], channels);
+        zenblend::blend_row(src, &bg_row_buf[..row_len], mode);
     }
 }
 
@@ -513,7 +503,7 @@ mod tests {
         let mut src = [0.5, 0.3, 0.1, 0.7];
         let original = src;
         let mut buf = vec![0.0f32; 4];
-        composite_dispatch(&mut src, &mut bg, &mut buf, 0, 4);
+        composite_dispatch(&mut src, &mut bg, &mut buf, 0, 4, BlendMode::SrcOver);
         assert_eq!(src, original);
     }
 
@@ -522,7 +512,7 @@ mod tests {
         let mut bg = SolidBackground::white(PixelDescriptor::RGBA8_SRGB);
         let mut src = [0.0, 0.0, 0.0, 0.0]; // transparent fg
         let mut buf = Vec::new(); // not used for solid
-        composite_dispatch(&mut src, &mut bg, &mut buf, 0, 4);
+        composite_dispatch(&mut src, &mut bg, &mut buf, 0, 4, BlendMode::SrcOver);
         // Transparent fg over white → white
         assert!((src[0] - 1.0).abs() < 1e-6);
         assert!((src[3] - 1.0).abs() < 1e-6);
@@ -535,7 +525,7 @@ mod tests {
         let mut bg = SliceBackground::new(&data, row_len);
         let mut src = [0.0, 0.0, 0.0, 0.0]; // transparent fg
         let mut buf = vec![0.0f32; row_len];
-        composite_dispatch(&mut src, &mut bg, &mut buf, 0, 4);
+        composite_dispatch(&mut src, &mut bg, &mut buf, 0, 4, BlendMode::SrcOver);
         // Transparent fg → output = bg
         assert_eq!(src, [0.0, 0.5, 0.0, 1.0]);
     }

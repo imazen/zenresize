@@ -1822,6 +1822,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "zenblend"
+version = "0.1.0"
+dependencies = [
+ "archmage",
+ "libm",
+ "magetypes",
+ "safe_unaligned_simd",
+ "wide",
+]
+
+[[package]]
 name = "zenlayout"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1859,6 +1870,7 @@ dependencies = [
  "whereat",
  "wide",
  "zenbench",
+ "zenblend",
  "zenlayout",
  "zenpixels",
 ]

@@ -80,9 +80,9 @@ pub use resize::Resizer;
 pub use streaming::{OrientOutput, StreamingError, StreamingResize, WorkingFormat};
 
 pub use composite::{
-    Background, CompositeError, NoBackground, SliceBackground, SolidBackground, StreamedBackground,
-    composite_over_premul, composite_over_solid_opaque_premul, composite_over_solid_premul,
-    unpremultiply_f32_row,
+    Background, BlendMode, CompositeError, NoBackground, SliceBackground, SolidBackground,
+    StreamedBackground, composite_over_premul, composite_over_solid_opaque_premul,
+    composite_over_solid_premul, unpremultiply_f32_row,
 };
 
 pub use resize::{
