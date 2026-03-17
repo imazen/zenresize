@@ -114,6 +114,10 @@ harness = false
 name = "ff_vs_stream_zen"
 harness = false
 
+[[bench]]
+name = "competitors_zen"
+harness = false
+
 [profile.test]
 opt-level = 2
 
