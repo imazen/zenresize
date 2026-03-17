@@ -147,6 +147,15 @@ impl<B: Background> Resizer<B> {
         self.stream.into_background()
     }
 
+    /// Set the blend mode for compositing.
+    ///
+    /// Default is [`BlendMode::SrcOver`](crate::BlendMode::SrcOver).
+    /// Only meaningful when a background is set via [`with_background`](Self::with_background).
+    pub fn with_blend_mode(mut self, mode: crate::composite::BlendMode) -> Self {
+        self.stream = self.stream.with_blend_mode(mode);
+        self
+    }
+
     /// Resize a u8 image, allocating and returning the output.
     ///
     /// # Panics
