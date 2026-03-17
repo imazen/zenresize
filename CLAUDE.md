@@ -98,6 +98,17 @@ Current parity tests use tiny images (30×30→15×15) that don't expose the i16
 - Upscale 512→1024
 - Document the expected max diff per path combination
 
+### AVX-512 kernel expansion
+Only `filter_v_row_f32` has an AVX-512 kernel (commit e04e888). Need x86v4 variants for:
+- `filter_h_u8_to_i16` (H-filter for sRGB i16 path)
+- `filter_v_row_i16` (V-filter for i16 paths)
+- `filter_h_i16_i16` (H-filter for linear i16 path)
+- `filter_v_row_f16` / `filter_h_row_f32_to_f16` (f32 path)
+AVX-512 gives 512-bit registers (32 i16 per register) — potentially 2× throughput over AVX2 for i16 kernels. Use archmage `X64V4Token`.
+
+### Integration test coverage for fullframe vs streaming parity
+Current parity tests use tiny images (30×30→15×15). Need tests at 1024+ for sRGB and linear. With the i16 clamping fix, max diff is now 1 — tests should enforce this.
+
 ## Investigation Notes
 
 ### i16 accuracy gap between fullframe (H-first) and streaming (V-first)
