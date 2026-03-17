@@ -97,12 +97,14 @@ Current parity tests use tiny images (30×30→15×15) that don't expose the i16
 - linear-i16 path: 6-43 (downscale), 49-52 (heavy downscale/upscale)
 - f32 path: 1 (near-identical)
 
-**Root cause:** Intermediate clamping at different pipeline stages. Both paths do 2 quantization steps (H-filter round+clamp, V-filter round+clamp), but clamping after H (fullframe) vs after V (streaming) discards different Lanczos overshoot information. Negative-lobe ringing causes intermediate values outside [0, 4095] (linear) or [0, 255] (sRGB); clamping these at different structural positions yields divergent final results. The error grows with tap count (more negative lobes at high downscale ratios) and is worst at image edges where clamped boundary pixels amplify the asymmetry.
+**Root cause:** Intermediate clamping after the first filter step. Lanczos ringing pushes intermediates outside [0, 4095] (linear) or [0, 255] (sRGB). Clamping these destroys overshoot information the second filter step needs to cancel ringing. H-first and V-first clamp at different structural positions, yielding divergent results. The f32 path doesn't clamp intermediates, so it's unaffected (max diff 1).
 
-**Not an overflow issue**: weights sum to 16384, max absolute accumulation is ~80M (well within i32). The f32 path doesn't clamp intermediates, so it doesn't have this problem.
-
-**Implication for H-first streaming**: H-first will match fullframe output (same filter order), not V-first. The quality difference is inherent to filter order with integer clamping, not a bug to fix. Both are valid — neither is "wrong" — but they're not identical.
+**Fix options (in order of increasing correctness):**
+1. **Don't clamp intermediates** — remove `.clamp(0, 4095)` / `.clamp(0, 255)` after the first filter step. Store full i16 range. Ringing values like [-200, 4300] (i12) or [-50, 300] (u8) fit in i16. Only clamp at final output. Reduces diff from 43-52 to ±1-2 (rounding only). Cheapest change. For sRGB path: intermediate changes from u8 to i16 (doubles memory); AVX2 kernel changes `packus_epi16` (unsigned sat) to `packs_epi32` (signed i16 sat). For linear path: just remove the `.clamp(0, 4095)`.
+2. **i32 intermediate, single rounding** — accumulate first filter step into i32, store in ring buffer as i32. Second filter reads i32, accumulates in i64 or i32, rounds once at output. H-first and V-first become **bit-identical** (integer arithmetic is associative, single rounding point). Ring buffer cost: 4K Lanczos3 goes from 225KB (u8) to 900KB (i32). Still tiny vs fullframe's 31MB.
+3. **f32 everywhere** — already implemented, max diff 1. But slower than i16 for 4ch.
 
 ## Known Bugs
 
-(none currently — the i16 accuracy gap is a known limitation, not a bug)
+### Intermediate clamping reduces i16 path accuracy
+The i16 filter kernels clamp intermediate values to [0, 4095] (linear) or [0, 255] (sRGB) after each filter step. This destroys Lanczos overshoot/undershoot information, causing up to 52 LSB difference between H-first and V-first filter order. Fix: remove intermediate clamping (option 1 above). See investigation notes.
