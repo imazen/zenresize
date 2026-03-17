@@ -311,6 +311,13 @@ pub struct StreamingResize<B: Background = NoBackground> {
     /// End-of-input marker. Returns error on future pushes.
     finished: bool,
 
+    /// Paired-row buffer for i16 paths: when consecutive output rows share the
+    /// same V-filter window, both are V-filtered in one pass (L1-hot input data).
+    /// The second row is buffered here and served on the next next_output_row() call.
+    paired_row_buf: Vec<u8>,
+    /// Whether `paired_row_buf` contains a ready output row.
+    paired_row_ready: bool,
+
     /// Background for compositing.
     background: B,
     /// Row buffer for non-solid backgrounds. Empty for NoBackground and SolidBackground.
@@ -656,6 +663,8 @@ impl<B: Background> StreamingResize<B> {
                     input_rows_received: 0,
                     output_rows_produced: 0,
                     finished: false,
+                    paired_row_buf: vec![0u8; out_row_len],
+                    paired_row_ready: false,
                     background,
                     composite_bg_row,
                     source_row_index: 0,
@@ -729,6 +738,8 @@ impl<B: Background> StreamingResize<B> {
                     input_rows_received: 0,
                     output_rows_produced: 0,
                     finished: false,
+                    paired_row_buf: vec![0u8; out_row_len],
+                    paired_row_ready: false,
                     background,
                     composite_bg_row,
                     source_row_index: 0,
@@ -795,6 +806,8 @@ impl<B: Background> StreamingResize<B> {
                     input_rows_received: 0,
                     output_rows_produced: 0,
                     finished: false,
+                    paired_row_buf: vec![0u8; out_row_len],
+                    paired_row_ready: false,
                     background,
                     composite_bg_row,
                     source_row_index: 0,
@@ -2133,18 +2146,37 @@ impl<B: Background> StreamingResize<B> {
 
     /// Produce one output row via the I16Srgb path: i16 V-filter → i16 H-filter → u8 output.
     /// Uses i16 ring buffer and unclamped i16 filters to preserve Lanczos ringing accuracy.
+    ///
+    /// When the next output row shares the same V-filter window (common in upscale),
+    /// both rows are V-filtered back-to-back while input data is L1-hot, and the
+    /// second row is buffered for the next `next_output_row()` call.
     fn produce_next_i16_srgb(&mut self, dst: &mut [u8]) {
-        let out_y = self.output_rows_produced;
+        let out_y = self.output_rows_produced as usize;
+        let out_h = self.config.out_height as usize;
         let i16_v_weights = self.i16_v_weights.as_ref().unwrap();
 
-        let left = i16_v_weights.left[out_y as usize];
-        let tap_count = i16_v_weights.tap_count(out_y as usize);
-        let weights = i16_v_weights.weights(out_y as usize);
+        // Check if buffered second row from a previous paired call is ready
+        if self.paired_row_ready {
+            let out_row_len = self.config.out_width as usize * self.channels;
+            dst[..out_row_len].copy_from_slice(&self.paired_row_buf[..out_row_len]);
+            self.paired_row_ready = false;
+            self.output_rows_produced += 1;
+            return;
+        }
+
+        let left = i16_v_weights.left[out_y];
+        let tap_count = i16_v_weights.tap_count(out_y);
+        let weights_a = i16_v_weights.weights(out_y);
         let resize_in_h = self.config.resize_in_height();
         let in_row_len = self.config.resize_in_width() as usize * self.channels;
         let out_row_len = self.config.out_width as usize * self.channels;
 
-        // Step 1: V-filter from i16_v_cache into temp_v_output_i16 (unclamped)
+        // Check if next output row shares the same V-filter window (paired-row optimization)
+        let can_pair = out_y + 1 < out_h
+            && i16_v_weights.left[out_y + 1] == left
+            && i16_v_weights.tap_count(out_y + 1) == tap_count;
+
+        // Step 1: V-filter row A from i16_v_cache (unclamped)
         with_v_rows(
             &self.i16_v_cache,
             self.cache_size,
@@ -2153,11 +2185,11 @@ impl<B: Background> StreamingResize<B> {
             resize_in_h,
             in_row_len,
             |rows| {
-                simd::filter_v_row_i16(rows, &mut self.temp_v_output_i16[..in_row_len], weights)
+                simd::filter_v_row_i16(rows, &mut self.temp_v_output_i16[..in_row_len], weights_a);
             },
         );
 
-        // Step 2: H-filter i16 → i16 (unclamped)
+        // Step 2: H-filter row A: i16 → i16 (unclamped)
         let i16_h_weights = self.i16_h_weights.as_ref().unwrap();
         simd::filter_h_i16_i16(
             &self.temp_v_output_i16,
@@ -2166,36 +2198,85 @@ impl<B: Background> StreamingResize<B> {
             self.channels,
         );
 
-        // Step 3: clamp i16 → u8 [0,255]
+        // Step 3: clamp row A → u8 [0,255]
         for (&v, o) in self.temp_h_output_i16[..out_row_len]
             .iter()
             .zip(dst[..out_row_len].iter_mut())
         {
             *o = v.clamp(0, 255) as u8;
         }
-
-        // Step 4: unpremultiply if needed
         if self.needs_premul {
             simd::unpremultiply_u8_row(&mut dst[..out_row_len]);
         }
-
         self.output_rows_produced += 1;
+
+        // Paired row B: V-filter with same rows (L1-hot), different weights
+        if can_pair {
+            let weights_b = i16_v_weights.weights(out_y + 1);
+            with_v_rows(
+                &self.i16_v_cache,
+                self.cache_size,
+                left,
+                tap_count,
+                resize_in_h,
+                in_row_len,
+                |rows| {
+                    simd::filter_v_row_i16(
+                        rows,
+                        &mut self.temp_v_output_i16[..in_row_len],
+                        weights_b,
+                    );
+                },
+            );
+
+            simd::filter_h_i16_i16(
+                &self.temp_v_output_i16,
+                &mut self.temp_h_output_i16[..out_row_len],
+                i16_h_weights,
+                self.channels,
+            );
+
+            for (&v, o) in self.temp_h_output_i16[..out_row_len]
+                .iter()
+                .zip(self.paired_row_buf[..out_row_len].iter_mut())
+            {
+                *o = v.clamp(0, 255) as u8;
+            }
+            if self.needs_premul {
+                simd::unpremultiply_u8_row(&mut self.paired_row_buf[..out_row_len]);
+            }
+            self.paired_row_ready = true;
+        }
     }
 
     /// Produce one output row via the I16Linear path: i16 V-filter → i16 H-filter → sRGB u8.
-    /// Result written to `dst`. Increments `output_rows_produced`.
+    /// With paired-row optimization for upscale (same V-filter window → L1-hot second pass).
     fn produce_next_i16_linear(&mut self, dst: &mut [u8]) {
-        let out_y = self.output_rows_produced;
+        let out_y = self.output_rows_produced as usize;
+        let out_h = self.config.out_height as usize;
         let i16_v_weights = self.i16_v_weights.as_ref().unwrap();
 
-        let left = i16_v_weights.left[out_y as usize];
-        let tap_count = i16_v_weights.tap_count(out_y as usize);
-        let weights = i16_v_weights.weights(out_y as usize);
+        // Check if buffered second row from a previous paired call is ready
+        if self.paired_row_ready {
+            let out_row_len = self.config.out_width as usize * self.channels;
+            dst[..out_row_len].copy_from_slice(&self.paired_row_buf[..out_row_len]);
+            self.paired_row_ready = false;
+            self.output_rows_produced += 1;
+            return;
+        }
+
+        let left = i16_v_weights.left[out_y];
+        let tap_count = i16_v_weights.tap_count(out_y);
+        let weights_a = i16_v_weights.weights(out_y);
         let resize_in_h = self.config.resize_in_height();
         let in_row_len = self.config.resize_in_width() as usize * self.channels;
         let out_row_len = self.config.out_width as usize * self.channels;
 
-        // Step 1: V-filter from i16_v_cache into temp_v_output_i16
+        let can_pair = out_y + 1 < out_h
+            && i16_v_weights.left[out_y + 1] == left
+            && i16_v_weights.tap_count(out_y + 1) == tap_count;
+
+        // Step 1: V-filter row A
         with_v_rows(
             &self.i16_v_cache,
             self.cache_size,
@@ -2203,10 +2284,16 @@ impl<B: Background> StreamingResize<B> {
             tap_count,
             resize_in_h,
             in_row_len,
-            |rows| simd::filter_v_row_i16(rows, &mut self.temp_v_output_i16[..in_row_len], weights),
+            |rows| {
+                simd::filter_v_row_i16(
+                    rows,
+                    &mut self.temp_v_output_i16[..in_row_len],
+                    weights_a,
+                );
+            },
         );
 
-        // Step 2: H-filter i16 → i16 (via i16 weights)
+        // Step 2: H-filter row A
         let i16_h_weights = self.i16_h_weights.as_ref().unwrap();
         simd::filter_h_i16_i16(
             &self.temp_v_output_i16,
@@ -2215,13 +2302,45 @@ impl<B: Background> StreamingResize<B> {
             self.channels,
         );
 
-        // Step 3: linear i12 → sRGB u8 (LUT)
+        // Step 3: linear i12 → sRGB u8
         color::linear_i12_to_srgb_u8_row(
             &self.temp_h_output_i16[..out_row_len],
             &mut dst[..out_row_len],
         );
-
         self.output_rows_produced += 1;
+
+        // Paired row B: V-filter with same rows (L1-hot), different weights
+        if can_pair {
+            let weights_b = i16_v_weights.weights(out_y + 1);
+            with_v_rows(
+                &self.i16_v_cache,
+                self.cache_size,
+                left,
+                tap_count,
+                resize_in_h,
+                in_row_len,
+                |rows| {
+                    simd::filter_v_row_i16(
+                        rows,
+                        &mut self.temp_v_output_i16[..in_row_len],
+                        weights_b,
+                    );
+                },
+            );
+
+            simd::filter_h_i16_i16(
+                &self.temp_v_output_i16,
+                &mut self.temp_h_output_i16[..out_row_len],
+                i16_h_weights,
+                self.channels,
+            );
+
+            color::linear_i12_to_srgb_u8_row(
+                &self.temp_h_output_i16[..out_row_len],
+                &mut self.paired_row_buf[..out_row_len],
+            );
+            self.paired_row_ready = true;
+        }
     }
 
     /// Check ring buffer overflow before any cache write.

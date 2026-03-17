@@ -462,15 +462,36 @@ impl<B: Background> Resizer<B> {
         let in_stride = config.effective_in_stride();
         let in_row_len = config.input_row_len();
         let out_row_len = config.output_row_len();
-        let layout = config.input;
-        let channels = layout.channels();
-        let needs_premul = layout.alpha == Some(AlphaMode::Straight);
+        let channels = config.input.channels();
         let in_h = config.in_height as usize;
-        let out_w = config.out_width as usize;
         let out_h = config.out_height as usize;
-        let h_row_len = out_w * channels;
 
-        match self.path {
+        // Delegate to streaming pipeline — unified path for all formats.
+        {
+            use crate::streaming::StreamingResize;
+            let mut stream = StreamingResize::new(config);
+            let mut out_y = 0usize;
+            for y in 0..in_h {
+                stream
+                    .push_row(&input[y * in_stride..y * in_stride + in_row_len])
+                    .expect("push_row failed in fullframe delegation");
+                while let Some(row) = stream.next_output_row() {
+                    let start = out_y * out_row_len;
+                    output[start..start + out_row_len].copy_from_slice(row);
+                    out_y += 1;
+                }
+            }
+            let remaining = stream.finish();
+            for _ in 0..remaining {
+                let row = stream.next_output_row().expect("finish promised remaining rows");
+                let start = out_y * out_row_len;
+                output[start..start + out_row_len].copy_from_slice(row);
+                out_y += 1;
+            }
+            debug_assert_eq!(out_y, out_h);
+        }
+
+        /* Old fullframe match arms deleted — see git history. Formerly:
             0 => {
                 // Path 0: sRGB i16 — uses i16 intermediate to preserve
                 // Lanczos ringing without clamping at [0,255].
@@ -697,6 +718,8 @@ impl<B: Background> Resizer<B> {
                 }
             }
         }
+
+        */ // end old match arms
 
         // Post-resize sharpening (unsharp mask).
         if config.post_sharpen > 0.0 {
