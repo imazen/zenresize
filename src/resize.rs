@@ -1685,6 +1685,128 @@ pub fn resize_hfirst_streaming(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
     output
 }
 
+/// H-first streaming resize for the f32 path (any channel count).
+///
+/// Decodes each input row to f32, H-filters to f16, stores in ring buffer.
+/// V-filter reads f16 ring → f32 output, then encodes back to u8.
+///
+/// For heavy downscale, this processes 1/N the data in the V-filter compared
+/// to V-first streaming, where N = in_width / out_width.
+pub fn resize_hfirst_streaming_f32(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
+    let channels = config.channels();
+    let filter = InterpolationDetails::create(config.filter);
+    let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
+    let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
+
+    let in_w = config.in_width as usize;
+    let in_h = config.in_height as usize;
+    let out_w = config.out_width as usize;
+    let out_h = config.out_height as usize;
+    let in_row_len = in_w * channels;
+    let out_row_len = out_w * channels;
+    let input_tf = config.effective_input_transfer();
+    let output_tf = config.effective_output_transfer();
+    let has_alpha = config.input.has_alpha();
+    let needs_premul = config.needs_premultiply();
+
+    // Ring buffer: stores H-filtered f16 rows, each out_row_len wide.
+    let cache_size = v_weights.max_taps + 2;
+    let mut ring: Vec<Vec<u16>> = (0..cache_size).map(|_| vec![0u16; out_row_len]).collect();
+
+    // Temp buffers
+    let mut temp_f32 = vec![0.0f32; in_row_len + h_weights.max_taps * channels];
+    let mut temp_output = vec![0.0f32; out_row_len];
+    let mut output = vec![0u8; out_row_len * out_h];
+
+    let mut input_rows_pushed = 0u32;
+    let mut output_rows_produced = 0u32;
+
+    for y in 0..in_h {
+        // Decode input row to f32
+        let in_row = &input[y * in_row_len..(y + 1) * in_row_len];
+        decode_u8_row(in_row, &mut temp_f32[..in_row_len], input_tf, channels, has_alpha);
+        if needs_premul {
+            simd::premultiply_alpha_row(&mut temp_f32[..in_row_len]);
+        }
+
+        // H-filter f32 → f16 into ring buffer slot
+        let slot = y % cache_size;
+        simd::filter_h_row_f32_to_f16(&temp_f32, &mut ring[slot], &h_weights, channels);
+        input_rows_pushed += 1;
+
+        // Produce output rows
+        loop {
+            if output_rows_produced >= out_h as u32 {
+                break;
+            }
+            let out_y = output_rows_produced as usize;
+            let left = v_weights.left[out_y];
+            let tap_count = v_weights.tap_count(out_y);
+            let weights = v_weights.weights(out_y);
+
+            let last_needed = (left + tap_count as i32 - 1).clamp(0, in_h as i32 - 1) as u32;
+            if last_needed >= input_rows_pushed {
+                break;
+            }
+
+            // Gather row references from ring buffer
+            let mut row_refs: [&[u16]; 128] = [&[]; 128];
+            for t in 0..tap_count {
+                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+                row_refs[t] = &ring[in_y % cache_size];
+            }
+
+            // V-filter f16 → f32
+            simd::filter_v_row_f16(&row_refs[..tap_count], &mut temp_output, weights);
+
+            if needs_premul {
+                simd::unpremultiply_alpha_row(&mut temp_output);
+            }
+
+            // Encode f32 → u8
+            let out_start = out_y * out_row_len;
+            encode_u8_row(
+                &temp_output,
+                &mut output[out_start..out_start + out_row_len],
+                output_tf,
+                channels,
+                has_alpha,
+            );
+            output_rows_produced += 1;
+        }
+    }
+
+    // Remaining output rows
+    while (output_rows_produced as usize) < out_h {
+        let out_y = output_rows_produced as usize;
+        let left = v_weights.left[out_y];
+        let tap_count = v_weights.tap_count(out_y);
+        let weights = v_weights.weights(out_y);
+
+        let mut row_refs: [&[u16]; 128] = [&[]; 128];
+        for t in 0..tap_count {
+            let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+            row_refs[t] = &ring[in_y % cache_size];
+        }
+
+        simd::filter_v_row_f16(&row_refs[..tap_count], &mut temp_output, weights);
+        if needs_premul {
+            simd::unpremultiply_alpha_row(&mut temp_output);
+        }
+        let out_start = out_y * out_row_len;
+        encode_u8_row(
+            &temp_output,
+            &mut output[out_start..out_start + out_row_len],
+            output_tf,
+            channels,
+            has_alpha,
+        );
+        output_rows_produced += 1;
+    }
+
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -95,7 +95,14 @@ fn streaming_resize(config: &zenresize::ResizeConfig, input: &[u8]) -> Vec<u8> {
 }
 
 fn hfirst_streaming_resize(config: &zenresize::ResizeConfig, input: &[u8]) -> Vec<u8> {
-    zenresize::resize_hfirst_streaming(config, input)
+    let ch = config.input.channels();
+    if ch == 4 {
+        // Use i16 path for 4ch sRGB
+        zenresize::resize_hfirst_streaming(config, input)
+    } else {
+        // Use f32 path for 3ch / other
+        zenresize::resize_hfirst_streaming_f32(config, input)
+    }
 }
 
 fn streaming_resize_batch(config: &zenresize::ResizeConfig, input: &[u8], batch: usize) -> Vec<u8> {
@@ -357,13 +364,13 @@ fn main() {
     println!("╠══════════════════════════════════════════════════════════════════════════════════════╣");
 
     for s in &all {
-        let is_4ch = s.config.input.channels() == 4;
+        let has_hfirst = true; // now available for all channel counts
 
         // Warmup
         for _ in 0..3 {
             std::hint::black_box(fullframe_resize(&s.config, &s.input));
             std::hint::black_box(streaming_resize(&s.config, &s.input));
-            if is_4ch {
+            if has_hfirst {
                 std::hint::black_box(hfirst_streaming_resize(&s.config, &s.input));
             }
         }
@@ -384,7 +391,7 @@ fn main() {
             std::hint::black_box(streaming_resize(&s.config, &s.input));
             vf_times.push(t1.elapsed().as_secs_f64() * 1e6);
 
-            if is_4ch {
+            if has_hfirst {
                 let t2 = Instant::now();
                 std::hint::black_box(hfirst_streaming_resize(&s.config, &s.input));
                 hf_times.push(t2.elapsed().as_secs_f64() * 1e6);
@@ -393,20 +400,20 @@ fn main() {
 
         trim_outliers(&mut ff_times);
         trim_outliers(&mut vf_times);
-        if is_4ch {
+        if has_hfirst {
             trim_outliers(&mut hf_times);
         }
 
         let ff_mean = mean(&ff_times);
         let vf_mean = mean(&vf_times);
-        let hf_mean = if is_4ch { mean(&hf_times) } else { f64::NAN };
+        let hf_mean = if has_hfirst { mean(&hf_times) } else { f64::NAN };
 
         let ff_ci = ci95(&ff_times);
         let vf_ci = ci95(&vf_times);
-        let hf_ci = if is_4ch { ci95(&hf_times) } else { 0.0 };
+        let hf_ci = if has_hfirst { ci95(&hf_times) } else { 0.0 };
 
         let vf_ratio = vf_mean / ff_mean;
-        let hf_ratio = if is_4ch { hf_mean / ff_mean } else { f64::NAN };
+        let hf_ratio = if has_hfirst { hf_mean / ff_mean } else { f64::NAN };
 
         let fmt_time = |us: f64, ci: f64| -> String {
             if us.is_nan() {
@@ -418,7 +425,7 @@ fn main() {
             }
         };
 
-        let best = if is_4ch {
+        let best = if has_hfirst {
             if ff_mean < vf_mean && ff_mean < hf_mean {
                 "FF"
             } else if hf_mean < vf_mean {
@@ -432,7 +439,7 @@ fn main() {
             "VF"
         };
 
-        let hf_ratio_str = if is_4ch {
+        let hf_ratio_str = if has_hfirst {
             format!("{:.2}x", hf_ratio)
         } else {
             "n/a".to_string()
