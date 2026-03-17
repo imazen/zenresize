@@ -25,6 +25,7 @@ use zenpixels::{AlphaMode, ChannelLayout, ChannelType, PixelDescriptor};
 /// This wrapper maps resize-output row `y` → canvas row `y + y_offset` and extracts
 /// the sub-region starting at `x_offset` columns. Used internally by
 /// [`execute_layout_with_background`] when the background covers the full canvas.
+#[derive(Clone)]
 struct OffsetBackground<B: Background> {
     inner: B,
     x_offset: i32,
@@ -404,7 +405,7 @@ pub fn execute_secondary(
 ///
 /// Returns [`CompositeError::PremultipliedInput`] if `desc` uses premultiplied alpha.
 #[allow(clippy::too_many_arguments)]
-pub fn execute_layout_with_background<B: Background>(
+pub fn execute_layout_with_background<B: Background + Clone>(
     decoder_output: &[u8],
     decoder_width: u32,
     decoder_height: u32,
@@ -649,7 +650,7 @@ pub fn execute_layout_with_background<B: Background>(
 /// # Errors
 ///
 /// Returns [`CompositeError::PremultipliedInput`] if `desc` uses premultiplied alpha.
-pub fn execute_with_background<B: Background>(
+pub fn execute_with_background<B: Background + Clone>(
     source_pixels: &[u8],
     ideal: &IdealLayout,
     desc: PixelDescriptor,
@@ -689,7 +690,7 @@ pub fn execute_with_background<B: Background>(
 ///
 /// Returns [`CompositeError::PremultipliedInput`] if `desc` uses premultiplied alpha.
 #[allow(clippy::too_many_arguments)]
-pub fn execute_secondary_with_background<B: Background>(
+pub fn execute_secondary_with_background<B: Background + Clone>(
     source_pixels: &[u8],
     primary_ideal: &IdealLayout,
     primary_source: crate::layout::Size,
@@ -1921,7 +1922,10 @@ mod tests {
         let config = config_from_plan(src_w, src_h, &plan, format, Filter::Lanczos);
 
         // Source region should match trim
-        let region = config.source_region.as_ref().expect("should have source region");
+        let region = config
+            .source_region
+            .as_ref()
+            .expect("should have source region");
         assert_eq!(region.x, 20);
         assert_eq!(region.y, 10);
         assert_eq!(region.width, 60);
@@ -2120,11 +2124,7 @@ mod tests {
         for y in 7..22 {
             for x in 0..5 {
                 let px = &output_rows[y][x * ch..(x + 1) * ch];
-                assert_eq!(
-                    px,
-                    &[255, 255, 255, 255],
-                    "left pad row {y}, col {x}"
-                );
+                assert_eq!(px, &[255, 255, 255, 255], "left pad row {y}, col {x}");
             }
         }
 
@@ -2132,11 +2132,7 @@ mod tests {
         for y in 7..22 {
             for x in 25..30 {
                 let px = &output_rows[y][x * ch..(x + 1) * ch];
-                assert_eq!(
-                    px,
-                    &[255, 255, 255, 255],
-                    "right pad row {y}, col {x}"
-                );
+                assert_eq!(px, &[255, 255, 255, 255], "right pad row {y}, col {x}");
             }
         }
     }

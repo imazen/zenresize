@@ -45,6 +45,7 @@ colorutils-rs = "0.7"
 pic-scale = { version = "0.6", default-features = false, features = ["colorspaces"] }
 pic-scale-safe = "0.1"
 fast_image_resize = "6"
+zenbench = { path = "/home/lilith/work/zen/zenbench" }
 resize = "0.8"
 rgb = "0.8"
 palette = "0.7"
@@ -95,6 +96,22 @@ harness = false
 
 [[bench]]
 name = "transfer_bench"
+harness = false
+
+[[bench]]
+name = "tiled_bench"
+harness = false
+
+[[bench]]
+name = "cachegrind_vfilter"
+harness = false
+
+[[bench]]
+name = "fullframe_vs_streaming"
+harness = false
+
+[[bench]]
+name = "ff_vs_stream_zen"
 harness = false
 
 [profile.test]

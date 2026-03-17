@@ -85,7 +85,10 @@ pub use composite::{
     unpremultiply_f32_row,
 };
 
-pub use resize::{resize_3ch, resize_4ch, resize_gray8};
+pub use resize::{
+    resize_3ch, resize_4ch, resize_gray8, resize_hfirst_streaming,
+    resize_hfirst_streaming_f32,
+};
 
 pub use transfer::{Bt709, Hlg, NoTransfer, Pq, Srgb, TransferCurve};
 

@@ -184,11 +184,11 @@ fn with_v_rows<T: Copy, R>(
 enum StreamingPath {
     /// f32 path: sRGB u8 → linear f32 → filter → sRGB u8 (or f32 I/O)
     F32,
-    /// sRGB gamma i16 path: u8 → i16 V-filter → i16 H-filter → u8
-    /// No linearization. 4ch only.
+    /// sRGB gamma i16 H-first path: u8 → H-filter to i16 → ring buffer → V-filter → u8
+    /// No linearization. 4ch only. Ring buffer is out_width wide.
     I16Srgb,
-    /// Linear i12 i16 path: sRGB u8 → i12 → i16 V-filter → i16 H-filter → sRGB u8
-    /// 4ch, no premul (Rgbx or RgbaPremul).
+    /// Linear i12 i16 H-first path: sRGB u8 → i12 → H-filter to i16 → ring buffer → V-filter → sRGB u8
+    /// 4ch, no premul (Rgbx or RgbaPremul). Ring buffer is out_width wide.
     I16Linear,
 }
 
@@ -310,6 +310,13 @@ pub struct StreamingResize<B: Background = NoBackground> {
     output_rows_produced: u32,
     /// End-of-input marker. Returns error on future pushes.
     finished: bool,
+
+    /// Paired-row buffer for i16 paths: when consecutive output rows share the
+    /// same V-filter window, both are V-filtered in one pass (L1-hot input data).
+    /// The second row is buffered here and served on the next next_output_row() call.
+    paired_row_buf: Vec<u8>,
+    /// Whether `paired_row_buf` contains a ready output row.
+    paired_row_ready: bool,
 
     /// Background for compositing.
     background: B,
@@ -500,16 +507,17 @@ impl<B: Background> StreamingResize<B> {
         // exact match — any other transfer (BT.709, PQ, HLG) goes to f32.
         let input_tf = config.effective_input_transfer();
         let output_tf = config.effective_output_transfer();
-        let is_u8_format = config.input.channel_type() == ChannelType::U8;
+        let is_u8_io = config.input.channel_type() == ChannelType::U8
+            && config.output.channel_type() == ChannelType::U8;
         let path = if !active_composite
-            && is_u8_format
+            && is_u8_io
             && input_tf == TransferFunction::Linear
             && output_tf == TransferFunction::Linear
             && channels == 4
         {
             StreamingPath::I16Srgb
         } else if !active_composite
-            && is_u8_format
+            && is_u8_io
             && input_tf == TransferFunction::Srgb
             && output_tf == TransferFunction::Srgb
             && channels == 4
@@ -656,6 +664,8 @@ impl<B: Background> StreamingResize<B> {
                     input_rows_received: 0,
                     output_rows_produced: 0,
                     finished: false,
+                    paired_row_buf: vec![0u8; out_row_len],
+                    paired_row_ready: false,
                     background,
                     composite_bg_row,
                     source_row_index: 0,
@@ -689,11 +699,10 @@ impl<B: Background> StreamingResize<B> {
                 let i16_h_weights = I16WeightTable::new(resize_in_w, config.out_width, &filter);
                 let i16_v_weights = I16WeightTable::new(resize_in_h, config.out_height, &filter);
 
-                // V-filter output needs H-filter SIMD padding (zeroed)
+                // H-first: ring buffer stores H-filtered rows at out_width (not in_width)
                 let h_padding_bytes = i16_h_weights.groups4 * 16;
-                let v_out_len = in_row_len + h_padding_bytes;
-
-                let u8_v_cache = (0..cache_size).map(|_| vec![0u8; in_row_len]).collect();
+                let i16_v_cache =
+                    (0..cache_size).map(|_| vec![0i16; out_row_len]).collect();
 
                 Self {
                     config,
@@ -713,15 +722,23 @@ impl<B: Background> StreamingResize<B> {
                     output_buf_u16: Vec::new(),
                     i16_h_weights: Some(i16_h_weights),
                     i16_v_weights: Some(i16_v_weights),
-                    u8_v_cache,
-                    i16_v_cache: Vec::new(),
-                    temp_v_output_u8: vec![0u8; v_out_len],
-                    temp_v_output_i16: Vec::new(),
-                    temp_h_output_i16: Vec::new(),
+                    u8_v_cache: Vec::new(),
+                    i16_v_cache,
+                    // H-first: premul scratch and H-filter input buffer
+                    temp_v_output_u8: if needs_premul {
+                        vec![0u8; in_row_len + h_padding_bytes]
+                    } else {
+                        Vec::new()
+                    },
+                    // V-filter output buffer (out_width wide, for produce_next)
+                    temp_v_output_i16: vec![0i16; out_row_len],
+                    temp_h_output_i16: Vec::new(), // not used in H-first
                     linearized_row_i16: Vec::new(),
                     input_rows_received: 0,
                     output_rows_produced: 0,
                     finished: false,
+                    paired_row_buf: vec![0u8; out_row_len],
+                    paired_row_ready: false,
                     background,
                     composite_bg_row,
                     source_row_index: 0,
@@ -755,11 +772,10 @@ impl<B: Background> StreamingResize<B> {
                 let i16_h_weights = I16WeightTable::new(resize_in_w, config.out_width, &filter);
                 let i16_v_weights = I16WeightTable::new(resize_in_h, config.out_height, &filter);
 
-                // H-filter SIMD padding for i16 data (in i16 elements)
+                // H-first: ring buffer stores H-filtered rows at out_width
                 let h_padding_i16 = i16_h_weights.groups4 * 16;
-                let v_out_i16_len = in_row_len + h_padding_i16;
-
-                let i16_v_cache = (0..cache_size).map(|_| vec![0i16; in_row_len]).collect();
+                let i16_v_cache =
+                    (0..cache_size).map(|_| vec![0i16; out_row_len]).collect();
 
                 Self {
                     config,
@@ -782,12 +798,14 @@ impl<B: Background> StreamingResize<B> {
                     u8_v_cache: Vec::new(),
                     i16_v_cache,
                     temp_v_output_u8: Vec::new(),
-                    temp_v_output_i16: vec![0i16; v_out_i16_len],
-                    temp_h_output_i16: vec![0i16; out_row_len],
+                    temp_v_output_i16: vec![0i16; out_row_len],
+                    temp_h_output_i16: Vec::new(), // not used in H-first
                     linearized_row_i16: vec![0i16; in_row_len + h_padding_i16],
                     input_rows_received: 0,
                     output_rows_produced: 0,
                     finished: false,
+                    paired_row_buf: vec![0u8; out_row_len],
+                    paired_row_ready: false,
                     background,
                     composite_bg_row,
                     source_row_index: 0,
@@ -850,6 +868,11 @@ impl<B: Background> StreamingResize<B> {
         &mut self.background
     }
 
+    /// Consume the streaming resizer and return the background.
+    pub fn into_background(self) -> B {
+        self.background
+    }
+
     /// Query the internal working format.
     ///
     /// Callers can use this to produce input data in the optimal format,
@@ -862,6 +885,25 @@ impl<B: Background> StreamingResize<B> {
             StreamingPath::I16Srgb => WorkingFormat::I16Srgb,
             StreamingPath::I16Linear => WorkingFormat::I16Linear,
         }
+    }
+
+    /// Reset the streaming resizer for reuse with a new image of the same dimensions.
+    ///
+    /// Clears all internal state (ring buffer indices, output counters, orientation
+    /// buffers) while preserving weight tables and allocated buffers. This avoids
+    /// the cost of recomputing weight tables (~1ms for 4K Lanczos3).
+    pub fn reset(&mut self) {
+        self.cache_write_idx = 0;
+        self.input_rows_received = 0;
+        self.output_rows_produced = 0;
+        self.finished = false;
+        self.paired_row_ready = false;
+        self.source_row_index = 0;
+        self.orient_rows_emitted = 0;
+        self.orient_ready = false;
+        self.orient_captured = 0;
+        self.pad_top_emitted = 0;
+        self.pad_bottom_emitted = 0;
     }
 
     /// How many input rows must be pushed before the first output row.
@@ -995,29 +1037,58 @@ impl<B: Background> StreamingResize<B> {
 
         match self.path {
             StreamingPath::I16Srgb => {
-                // u8 → optional premul → cache u8 directly (no linearization)
+                // H-first: u8 → optional premul → H-filter to i16 → ring buffer
                 self.check_ring_buffer().at()?;
                 let cache_slot = self.cache_write_idx % self.cache_size;
-                if self.needs_premul {
+                let i16_h_weights = self.i16_h_weights.as_ref().unwrap();
+                let out_row_len = self.config.out_width as usize * self.channels;
+
+                let src = if self.needs_premul {
                     simd::premultiply_u8_row(
                         pixel_data,
-                        &mut self.u8_v_cache[cache_slot][..pixel_len],
+                        &mut self.temp_v_output_u8[..pixel_len],
                     );
+                    &self.temp_v_output_u8[..]
                 } else {
-                    self.u8_v_cache[cache_slot][..pixel_len].copy_from_slice(pixel_data);
-                }
+                    pixel_data
+                };
+
+                // H-filter u8 → i16 (unclamped, preserves ringing)
+                simd::filter_h_u8_to_i16(
+                    src,
+                    &mut self.i16_v_cache[cache_slot][..out_row_len],
+                    i16_h_weights,
+                    self.channels,
+                );
                 self.cache_write_idx += 1;
                 self.input_rows_received += 1;
                 self.eagerly_capture_orient_rows();
                 return Ok(());
             }
             StreamingPath::I16Linear => {
-                // sRGB u8 → linear i12 (LUT)
+                // H-first: sRGB u8 → linear i12 (LUT) → H-filter i16 → ring buffer
                 color::srgb_u8_to_linear_i12_row(
                     pixel_data,
                     &mut self.linearized_row_i16[..pixel_len],
                 );
-                return self.push_row_internal_i16().at();
+                // Zero SIMD padding
+                for v in &mut self.linearized_row_i16[pixel_len..] {
+                    *v = 0;
+                }
+                self.check_ring_buffer().at()?;
+                let cache_slot = self.cache_write_idx % self.cache_size;
+                let i16_h_weights = self.i16_h_weights.as_ref().unwrap();
+                let out_row_len = self.config.out_width as usize * self.channels;
+                simd::filter_h_i16_i16(
+                    &self.linearized_row_i16,
+                    &mut self.i16_v_cache[cache_slot][..out_row_len],
+                    i16_h_weights,
+                    self.channels,
+                );
+                self.cache_write_idx += 1;
+                self.input_rows_received += 1;
+                self.eagerly_capture_orient_rows();
+                return Ok(());
             }
             StreamingPath::F32 => {}
         }
@@ -1339,23 +1410,43 @@ impl<B: Background> StreamingResize<B> {
 
         match self.path {
             StreamingPath::I16Srgb => {
-                // i16 → u8 cache (values are u8-range zero-extended)
+                // H-first: H-filter i16 input → ring buffer (out_width wide)
                 self.check_ring_buffer().at()?;
                 let cache_slot = self.cache_write_idx % self.cache_size;
-                for (s, d) in row[..pixel_len]
-                    .iter()
-                    .zip(self.u8_v_cache[cache_slot][..pixel_len].iter_mut())
-                {
-                    *d = (*s).clamp(0, 255) as u8;
-                }
+                let i16_h_weights = self.i16_h_weights.as_ref().unwrap();
+                let out_row_len = self.config.out_width as usize * self.channels;
+                // Copy to linearized_row for SIMD padding, then H-filter
+                self.linearized_row_i16.resize(pixel_len + i16_h_weights.groups4 * 16, 0);
+                self.linearized_row_i16[..pixel_len].copy_from_slice(&row[..pixel_len]);
+                for v in &mut self.linearized_row_i16[pixel_len..] { *v = 0; }
+                simd::filter_h_i16_i16(
+                    &self.linearized_row_i16,
+                    &mut self.i16_v_cache[cache_slot][..out_row_len],
+                    i16_h_weights,
+                    self.channels,
+                );
                 self.cache_write_idx += 1;
                 self.input_rows_received += 1;
                 Ok(())
             }
             StreamingPath::I16Linear => {
-                // Copy directly into the linearized_row_i16 buffer, then push
+                // H-first: H-filter i16 input → ring buffer (out_width wide)
                 self.linearized_row_i16[..pixel_len].copy_from_slice(&row[..pixel_len]);
-                self.push_row_internal_i16().at()
+                for v in &mut self.linearized_row_i16[pixel_len..] { *v = 0; }
+                self.check_ring_buffer().at()?;
+                let cache_slot = self.cache_write_idx % self.cache_size;
+                let i16_h_weights = self.i16_h_weights.as_ref().unwrap();
+                let out_row_len = self.config.out_width as usize * self.channels;
+                simd::filter_h_i16_i16(
+                    &self.linearized_row_i16,
+                    &mut self.i16_v_cache[cache_slot][..out_row_len],
+                    i16_h_weights,
+                    self.channels,
+                );
+                self.cache_write_idx += 1;
+                self.input_rows_received += 1;
+                self.eagerly_capture_orient_rows();
+                Ok(())
             }
             StreamingPath::F32 => unreachable!("guarded by debug_assert"),
         }
@@ -2115,89 +2206,171 @@ impl<B: Background> StreamingResize<B> {
         }
     }
 
-    /// Produce one output row via the I16Srgb path: u8 V-filter → u8 H-filter → u8 output.
-    /// Result written to `output_buf_u8`. Increments `output_rows_produced`.
+    /// Produce one output row via the I16Srgb H-first path.
+    /// Ring buffer already contains H-filtered i16 rows (out_width wide).
+    /// V-filter directly produces the output — no H-filter step needed.
+    ///
+    /// Paired-row optimization: when consecutive output rows share the same
+    /// V-filter window, both are V-filtered back-to-back (L1-hot data).
     fn produce_next_i16_srgb(&mut self, dst: &mut [u8]) {
-        let out_y = self.output_rows_produced;
+        let out_y = self.output_rows_produced as usize;
+        let out_h = self.config.out_height as usize;
         let i16_v_weights = self.i16_v_weights.as_ref().unwrap();
 
-        let left = i16_v_weights.left[out_y as usize];
-        let tap_count = i16_v_weights.tap_count(out_y as usize);
-        let weights = i16_v_weights.weights(out_y as usize);
-        let resize_in_h = self.config.resize_in_height();
-        let in_row_len = self.config.resize_in_width() as usize * self.channels;
-        let out_row_len = self.config.out_width as usize * self.channels;
-
-        // Step 1: V-filter from u8_v_cache into temp_v_output_u8
-        with_v_rows(
-            &self.u8_v_cache,
-            self.cache_size,
-            left,
-            tap_count,
-            resize_in_h,
-            in_row_len,
-            |rows| {
-                simd::filter_v_row_u8_i16(rows, &mut self.temp_v_output_u8[..in_row_len], weights)
-            },
-        );
-
-        // Step 2: H-filter u8 → u8 (via i16 weights)
-        let i16_h_weights = self.i16_h_weights.as_ref().unwrap();
-        simd::filter_h_u8_i16(
-            &self.temp_v_output_u8,
-            &mut dst[..out_row_len],
-            i16_h_weights,
-            self.channels,
-        );
-
-        // Step 3: unpremultiply if needed (in-place on u8 output)
-        if self.needs_premul {
-            simd::unpremultiply_u8_row(&mut dst[..out_row_len]);
+        if self.paired_row_ready {
+            let out_row_len = self.config.out_width as usize * self.channels;
+            dst[..out_row_len].copy_from_slice(&self.paired_row_buf[..out_row_len]);
+            self.paired_row_ready = false;
+            self.output_rows_produced += 1;
+            return;
         }
 
-        self.output_rows_produced += 1;
-    }
-
-    /// Produce one output row via the I16Linear path: i16 V-filter → i16 H-filter → sRGB u8.
-    /// Result written to `dst`. Increments `output_rows_produced`.
-    fn produce_next_i16_linear(&mut self, dst: &mut [u8]) {
-        let out_y = self.output_rows_produced;
-        let i16_v_weights = self.i16_v_weights.as_ref().unwrap();
-
-        let left = i16_v_weights.left[out_y as usize];
-        let tap_count = i16_v_weights.tap_count(out_y as usize);
-        let weights = i16_v_weights.weights(out_y as usize);
+        let left = i16_v_weights.left[out_y];
+        let tap_count = i16_v_weights.tap_count(out_y);
+        let weights_a = i16_v_weights.weights(out_y);
         let resize_in_h = self.config.resize_in_height();
-        let in_row_len = self.config.resize_in_width() as usize * self.channels;
         let out_row_len = self.config.out_width as usize * self.channels;
 
-        // Step 1: V-filter from i16_v_cache into temp_v_output_i16
+        let can_pair = out_y + 1 < out_h
+            && i16_v_weights.left[out_y + 1] == left
+            && i16_v_weights.tap_count(out_y + 1) == tap_count;
+
+        // V-filter row A from ring buffer (out_width wide) → temp i16
         with_v_rows(
             &self.i16_v_cache,
             self.cache_size,
             left,
             tap_count,
             resize_in_h,
-            in_row_len,
-            |rows| simd::filter_v_row_i16(rows, &mut self.temp_v_output_i16[..in_row_len], weights),
+            out_row_len,
+            |rows| {
+                simd::filter_v_row_i16(
+                    rows,
+                    &mut self.temp_v_output_i16[..out_row_len],
+                    weights_a,
+                );
+            },
         );
 
-        // Step 2: H-filter i16 → i16 (via i16 weights)
-        let i16_h_weights = self.i16_h_weights.as_ref().unwrap();
-        simd::filter_h_i16_i16(
-            &self.temp_v_output_i16,
-            &mut self.temp_h_output_i16[..out_row_len],
-            i16_h_weights,
-            self.channels,
+        // Clamp i16 → u8 [0,255]
+        for (&v, o) in self.temp_v_output_i16[..out_row_len]
+            .iter()
+            .zip(dst[..out_row_len].iter_mut())
+        {
+            *o = v.clamp(0, 255) as u8;
+        }
+        if self.needs_premul {
+            simd::unpremultiply_u8_row(&mut dst[..out_row_len]);
+        }
+        self.output_rows_produced += 1;
+
+        // Paired row B: same V-filter rows (L1-hot), different weights
+        if can_pair {
+            let weights_b = i16_v_weights.weights(out_y + 1);
+            with_v_rows(
+                &self.i16_v_cache,
+                self.cache_size,
+                left,
+                tap_count,
+                resize_in_h,
+                out_row_len,
+                |rows| {
+                    simd::filter_v_row_i16(
+                        rows,
+                        &mut self.temp_v_output_i16[..out_row_len],
+                        weights_b,
+                    );
+                },
+            );
+
+            for (&v, o) in self.temp_v_output_i16[..out_row_len]
+                .iter()
+                .zip(self.paired_row_buf[..out_row_len].iter_mut())
+            {
+                *o = v.clamp(0, 255) as u8;
+            }
+            if self.needs_premul {
+                simd::unpremultiply_u8_row(&mut self.paired_row_buf[..out_row_len]);
+            }
+            self.paired_row_ready = true;
+        }
+    }
+
+    /// Produce one output row via the I16Linear H-first path.
+    /// Ring buffer contains H-filtered linear i16 rows (out_width wide).
+    /// V-filter directly produces output — no H-filter step needed.
+    fn produce_next_i16_linear(&mut self, dst: &mut [u8]) {
+        let out_y = self.output_rows_produced as usize;
+        let out_h = self.config.out_height as usize;
+        let i16_v_weights = self.i16_v_weights.as_ref().unwrap();
+
+        if self.paired_row_ready {
+            let out_row_len = self.config.out_width as usize * self.channels;
+            dst[..out_row_len].copy_from_slice(&self.paired_row_buf[..out_row_len]);
+            self.paired_row_ready = false;
+            self.output_rows_produced += 1;
+            return;
+        }
+
+        let left = i16_v_weights.left[out_y];
+        let tap_count = i16_v_weights.tap_count(out_y);
+        let weights_a = i16_v_weights.weights(out_y);
+        let resize_in_h = self.config.resize_in_height();
+        let out_row_len = self.config.out_width as usize * self.channels;
+
+        let can_pair = out_y + 1 < out_h
+            && i16_v_weights.left[out_y + 1] == left
+            && i16_v_weights.tap_count(out_y + 1) == tap_count;
+
+        // V-filter row A from ring buffer (out_width wide) → temp i16
+        with_v_rows(
+            &self.i16_v_cache,
+            self.cache_size,
+            left,
+            tap_count,
+            resize_in_h,
+            out_row_len,
+            |rows| {
+                simd::filter_v_row_i16(
+                    rows,
+                    &mut self.temp_v_output_i16[..out_row_len],
+                    weights_a,
+                );
+            },
         );
 
-        // Step 3: linear i12 → sRGB u8 (LUT)
+        // Linear i12 → sRGB u8 (LUT clamps to [0,4095])
         color::linear_i12_to_srgb_u8_row(
-            &self.temp_h_output_i16[..out_row_len],
+            &self.temp_v_output_i16[..out_row_len],
             &mut dst[..out_row_len],
         );
-
         self.output_rows_produced += 1;
+
+        // Paired row B
+        if can_pair {
+            let weights_b = i16_v_weights.weights(out_y + 1);
+            with_v_rows(
+                &self.i16_v_cache,
+                self.cache_size,
+                left,
+                tap_count,
+                resize_in_h,
+                out_row_len,
+                |rows| {
+                    simd::filter_v_row_i16(
+                        rows,
+                        &mut self.temp_v_output_i16[..out_row_len],
+                        weights_b,
+                    );
+                },
+            );
+
+            color::linear_i12_to_srgb_u8_row(
+                &self.temp_v_output_i16[..out_row_len],
+                &mut self.paired_row_buf[..out_row_len],
+            );
+            self.paired_row_ready = true;
+        }
     }
 
     /// Check ring buffer overflow before any cache write.
@@ -2346,9 +2519,7 @@ impl<B: Background> StreamingResize<B> {
             let mut tmp = core::mem::take(&mut self.output_buf_u8);
             match self.path {
                 StreamingPath::I16Srgb => self.produce_next_i16_srgb(&mut tmp[..total_row_len]),
-                StreamingPath::I16Linear => {
-                    self.produce_next_i16_linear(&mut tmp[..total_row_len])
-                }
+                StreamingPath::I16Linear => self.produce_next_i16_linear(&mut tmp[..total_row_len]),
                 StreamingPath::F32 => {
                     self.produce_next_f32();
                     Self::encode_output_u8(
@@ -2451,8 +2622,7 @@ impl<B: Background> StreamingResize<B> {
                 let (dx, dy) = self.orient.forward_map(sx, sy, src_w, src_h);
                 let src_off = sy as usize * src_stride + sx as usize * ch;
                 let dst_off = dy as usize * dst_stride + dx as usize * ch;
-                dst[dst_off..dst_off + ch]
-                    .copy_from_slice(&self.orient_buf[src_off..src_off + ch]);
+                dst[dst_off..dst_off + ch].copy_from_slice(&self.orient_buf[src_off..src_off + ch]);
             }
         }
 
@@ -3943,7 +4113,7 @@ mod tests {
         for pixel in input.chunks_exact_mut(4) {
             pixel[0] = 200; // R
             pixel[1] = 100; // G
-            pixel[2] = 50;  // B
+            pixel[2] = 50; // B
             pixel[3] = 128; // A = 50%
         }
 
@@ -3980,7 +4150,10 @@ mod tests {
 
         assert_eq!(rows_a.len(), rows_b.len());
         for (i, (a, b)) in rows_a.iter().zip(rows_b.iter()).enumerate() {
-            assert_eq!(a, b, "row {i} mismatch between with_background and next_output_row_over");
+            assert_eq!(
+                a, b,
+                "row {i} mismatch between with_background and next_output_row_over"
+            );
         }
     }
 
@@ -4040,7 +4213,10 @@ mod tests {
             let plain_pixels: Vec<&[u8]> = plain_row.chunks_exact(4).collect();
             let flip_pixels: Vec<&[u8]> = flip_row.chunks_exact(4).collect();
             let reversed: Vec<&[u8]> = plain_pixels.iter().rev().copied().collect();
-            assert_eq!(flip_pixels, reversed, "FlipH should reverse pixel order per row");
+            assert_eq!(
+                flip_pixels, reversed,
+                "FlipH should reverse pixel order per row"
+            );
         }
     }
 
@@ -4088,7 +4264,10 @@ mod tests {
         // Rows should be in reverse order relative to unoriented output
         for (i, flip_row) in flip_rows.iter().enumerate() {
             let plain_row = &plain_rows[plain_rows.len() - 1 - i];
-            assert_eq!(flip_row, plain_row, "FlipV row {i} should match reversed plain row");
+            assert_eq!(
+                flip_row, plain_row,
+                "FlipV row {i} should match reversed plain row"
+            );
         }
     }
 
@@ -4099,18 +4278,13 @@ mod tests {
             .format(PixelDescriptor::RGBA8_SRGB)
             .srgb()
             .build();
-        let mut resizer =
-            StreamingResize::new(&config).with_orientation(OrientOutput::Rotate90);
+        let mut resizer = StreamingResize::new(&config).with_orientation(OrientOutput::Rotate90);
 
         assert_eq!(resizer.output_row_len(), 2 * 4); // oriented width = 2
         assert_eq!(resizer.total_output_height(), 4); // oriented height = 4
 
-        let row0 = vec![
-            10, 0, 0, 255, 20, 0, 0, 255, 30, 0, 0, 255, 40, 0, 0, 255,
-        ];
-        let row1 = vec![
-            50, 0, 0, 255, 60, 0, 0, 255, 70, 0, 0, 255, 80, 0, 0, 255,
-        ];
+        let row0 = vec![10, 0, 0, 255, 20, 0, 0, 255, 30, 0, 0, 255, 40, 0, 0, 255];
+        let row1 = vec![50, 0, 0, 255, 60, 0, 0, 255, 70, 0, 0, 255, 80, 0, 0, 255];
 
         resizer.push_row(&row0).unwrap();
         resizer.push_row(&row1).unwrap();
