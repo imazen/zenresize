@@ -21,7 +21,9 @@ use archmage::X64V4Token;
 // Safe unaligned SIMD load/store — takes references instead of raw pointers.
 // Explicit imports because names overlap with core::arch intrinsics.
 #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-use safe_unaligned_simd::x86_64::_mm256_storeu_si256;
+use safe_unaligned_simd::x86_64::{
+    _mm256_storeu_si256, _mm512_loadu_si512, _mm512_storeu_si512,
+};
 #[cfg(target_arch = "x86_64")]
 use safe_unaligned_simd::x86_64::{
     _mm_loadu_ps, _mm_loadu_si32, _mm_loadu_si64, _mm_loadu_si128, _mm_storeu_ps, _mm_storeu_si64,
@@ -2980,6 +2982,15 @@ macro_rules! paste_v3 {
     (filter_v_row_i16_v4) => {
         filter_v_row_i16_v3
     };
+    (filter_h_u8_to_i16_v4) => {
+        filter_h_u8_to_i16_v3
+    };
+    (filter_h_u8_to_i16_4rows_v4) => {
+        filter_h_u8_to_i16_4rows_v3
+    };
+    (filter_v_all_u8_i16_tiled_v4) => {
+        filter_v_all_u8_i16_tiled_v3
+    };
     (f32_to_f16_row_v4) => {
         f32_to_f16_row_v3
     };
@@ -3038,7 +3049,9 @@ v4_delegate_v3! {
     fn filter_h_i16_i16_v4(input: &[i16], output: &mut [i16], weights: &I16WeightTable, channels: usize);
     fn filter_v_all_i16_i16_v4(intermediate: &[i16], output: &mut [i16], h_row_len: usize, in_h: usize, out_h: usize, weights: &I16WeightTable);
     fn filter_v_row_u8_i16_v4(rows: &[&[u8]], output: &mut [u8], weights: &[i16]);
-    fn filter_v_row_i16_v4(rows: &[&[i16]], output: &mut [i16], weights: &[i16]);
+    fn filter_h_u8_to_i16_v4(input: &[u8], output: &mut [i16], weights: &I16WeightTable, channels: usize);
+    fn filter_h_u8_to_i16_4rows_v4(in0: &[u8], in1: &[u8], in2: &[u8], in3: &[u8], out0: &mut [i16], out1: &mut [i16], out2: &mut [i16], out3: &mut [i16], weights: &I16WeightTable);
+    fn filter_v_all_u8_i16_tiled_v4(intermediate: &[u8], output: &mut [u8], h_row_len: usize, in_h: usize, out_h: usize, weights: &I16WeightTable, tile_chunks: usize);
     fn f32_to_f16_row_v4(input: &[f32], output: &mut [u16]);
     fn f16_to_f32_row_v4(input: &[u16], output: &mut [f32]);
     fn filter_h_row_f32_to_f16_v4(input: &[f32], output: &mut [u16], weights: &F32WeightTable, channels: usize);
@@ -3273,5 +3286,108 @@ pub(crate) fn filter_v_all_u8_i16_v4(
             }
             out_y += 1;
         }
+    }
+}
+
+/// Streaming V-filter: i16 rows → i16 output via i16 weights, AVX-512.
+///
+/// Processes 32 i16 values per inner-loop iteration (vs 8 for AVX2).
+/// Uses 512-bit `vpmaddwd` for paired tap accumulation.
+#[cfg(feature = "avx512")]
+#[archmage::arcane]
+pub(crate) fn filter_v_row_i16_v4(
+    _token: X64V4Token,
+    rows: &[&[i16]],
+    output: &mut [i16],
+    weights: &[i16],
+) {
+    let width = output.len();
+    let tap_count = rows.len();
+    debug_assert_eq!(tap_count, weights.len());
+
+    // Fall back to AVX2 for extreme upscale (>128 taps exceeds stack arrays).
+    const MAX_TAPS: usize = 128;
+    if tap_count > MAX_TAPS {
+        filter_v_row_i16_v3(_token.v3(), rows, output, weights);
+        return;
+    }
+
+    let half = _mm512_set1_epi32(1 << (I16_PRECISION - 1));
+    let chunks32 = width / 32;
+
+    // Pre-chunk row slices for direct indexing.
+    let effective_taps = tap_count;
+    let empty_chunks: &[[i16; 32]] = &[];
+    let mut row_chunks = [empty_chunks; MAX_TAPS];
+    for (t, slot) in row_chunks.iter_mut().enumerate().take(effective_taps) {
+        *slot = rows[t].as_chunks::<32>().0;
+    }
+    let row_chunks = &row_chunks[..effective_taps];
+
+    // Pre-compute paired weights.
+    let pairs = tap_count / 2;
+    let odd = !tap_count.is_multiple_of(2);
+
+    let zero_zmm = _mm512_setzero_si512();
+    let mut paired_wts = [zero_zmm; MAX_TAPS / 2];
+    for p in 0..pairs {
+        let w0 = weights[p * 2] as i32;
+        let w1 = weights[p * 2 + 1] as i32;
+        paired_wts[p] = _mm512_set1_epi32((w1 << 16) | (w0 & 0xFFFF));
+    }
+    let paired_wts = &paired_wts[..pairs];
+    let odd_weight = if odd {
+        _mm512_set1_epi32(weights[tap_count - 1] as i32 & 0xFFFF)
+    } else {
+        _mm512_setzero_si512()
+    };
+
+    let (out_chunks, out_tail) = output.as_chunks_mut::<32>();
+
+    for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
+        let mut acc_lo = _mm512_setzero_si512();
+        let mut acc_hi = _mm512_setzero_si512();
+
+        for (pw, row_pair) in paired_wts.iter().zip(row_chunks.chunks_exact(2)) {
+            let src0 = _mm512_loadu_si512(idx(row_pair[0], ci));
+            let src1 = _mm512_loadu_si512(idx(row_pair[1], ci));
+
+            let il_lo = _mm512_unpacklo_epi16(src0, src1);
+            let il_hi = _mm512_unpackhi_epi16(src0, src1);
+
+            acc_lo = _mm512_add_epi32(acc_lo, _mm512_madd_epi16(il_lo, *pw));
+            acc_hi = _mm512_add_epi32(acc_hi, _mm512_madd_epi16(il_hi, *pw));
+        }
+
+        if odd {
+            let src = _mm512_loadu_si512(idx(row_chunks[tap_count - 1], ci));
+            let il_lo = _mm512_unpacklo_epi16(src, zero_zmm);
+            let il_hi = _mm512_unpackhi_epi16(src, zero_zmm);
+            acc_lo = _mm512_add_epi32(acc_lo, _mm512_madd_epi16(il_lo, odd_weight));
+            acc_hi = _mm512_add_epi32(acc_hi, _mm512_madd_epi16(il_hi, odd_weight));
+        }
+
+        let shifted_lo = _mm512_srai_epi32::<{ I16_PRECISION as u32 }>(_mm512_add_epi32(acc_lo, half));
+        let shifted_hi = _mm512_srai_epi32::<{ I16_PRECISION as u32 }>(_mm512_add_epi32(acc_hi, half));
+
+        // Pack i32→i16: _mm512_packs_epi32 operates per 128-bit lane.
+        // acc_lo has positions [0-3, 8-11, 16-19, 24-27] (low halves).
+        // acc_hi has positions [4-7, 12-15, 20-23, 28-31] (high halves).
+        // packs_epi32(lo, hi) per lane gives [lo[0..3], hi[0..3]] = [0..7] per lane.
+        // Result is already sequential: lanes 0-3 = positions 0..31.
+        let packed = _mm512_packs_epi32(shifted_lo, shifted_hi);
+
+        _mm512_storeu_si512(out_chunk, packed);
+    }
+
+    // Scalar tail
+    let tail_start = chunks32 * 32;
+    for (x, out_val) in out_tail.iter_mut().enumerate() {
+        let mut acc: i32 = 0;
+        for (row, &weight) in rows.iter().zip(weights.iter()) {
+            acc += row[tail_start + x] as i32 * weight as i32;
+        }
+        let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+        *out_val = rounded as i16;
     }
 }

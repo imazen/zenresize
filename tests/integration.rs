@@ -33,6 +33,20 @@ fn gradient_image(w: u32, h: u32) -> Vec<u8> {
     buf
 }
 
+/// Generate a gradient test image (RGB u8, 3 channels).
+fn gradient_image_3ch(w: u32, h: u32) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(w as usize * h as usize * 3);
+    for y in 0..h {
+        for x in 0..w {
+            let r = ((x as f32 / w as f32) * 255.0) as u8;
+            let g = ((y as f32 / h as f32) * 255.0) as u8;
+            let b = (((x + y) as f32 / (w + h) as f32) * 255.0) as u8;
+            buf.extend_from_slice(&[r, g, b]);
+        }
+    }
+    buf
+}
+
 /// Helper: run streaming resize with interleaved push/drain, collect u8 output.
 fn streaming_collect(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
     let in_w = config.in_width as usize;
@@ -72,8 +86,6 @@ fn streaming_matches_fullframe_downscale() {
     // Streaming
     let stream_output = streaming_collect(&config, &input);
 
-    // Streaming uses f32 weights, fullframe uses i16 for sRGB+4ch.
-    // Different numeric precision gives ±1-2 per channel.
     let max_diff: u8 = full_output
         .iter()
         .zip(stream_output.iter())
@@ -81,8 +93,8 @@ fn streaming_matches_fullframe_downscale() {
         .max()
         .unwrap_or(0);
     assert!(
-        max_diff <= 2,
-        "streaming vs full-frame max diff {} exceeds tolerance 2",
+        max_diff <= 1,
+        "streaming vs full-frame max diff {} exceeds tolerance 1",
         max_diff
     );
 }
@@ -95,7 +107,6 @@ fn streaming_matches_fullframe_upscale() {
     let full_output = Resizer::new(&config).resize(&input);
     let stream_output = streaming_collect(&config, &input);
 
-    // Streaming uses f32 weights, fullframe uses i16 for sRGB+4ch.
     let max_diff: u8 = full_output
         .iter()
         .zip(stream_output.iter())
@@ -103,8 +114,8 @@ fn streaming_matches_fullframe_upscale() {
         .max()
         .unwrap_or(0);
     assert!(
-        max_diff <= 2,
-        "streaming vs full-frame max diff {} exceeds tolerance 2",
+        max_diff <= 1,
+        "streaming vs full-frame max diff {} exceeds tolerance 1",
         max_diff
     );
 }
@@ -117,8 +128,6 @@ fn streaming_matches_fullframe_linear() {
     let full_output = Resizer::new(&config).resize(&input);
     let stream_output = streaming_collect(&config, &input);
 
-    // Full-frame uses i16 linear path; streaming uses f32 here (Rgba+linear needs premul).
-    // Allow ±2 for quantization differences.
     let max_diff: u8 = full_output
         .iter()
         .zip(stream_output.iter())
@@ -126,10 +135,147 @@ fn streaming_matches_fullframe_linear() {
         .max()
         .unwrap_or(0);
     assert!(
-        max_diff <= 2,
-        "streaming vs full-frame linear max diff {} exceeds tolerance 2",
+        max_diff <= 1,
+        "streaming vs full-frame linear max diff {} exceeds tolerance 1",
         max_diff
     );
+}
+
+// =============================================================================
+// Streaming vs full-frame parity at realistic sizes
+// =============================================================================
+
+#[test]
+fn streaming_matches_fullframe_srgb_1024() {
+    let config = ResizeConfig::builder(1024, 1024, 512, 512)
+        .filter(Filter::Lanczos)
+        .format(PixelDescriptor::RGBA8_SRGB)
+        .srgb()
+        .build();
+    let input = gradient_image(1024, 1024);
+    let full_output = Resizer::new(&config).resize(&input);
+    let stream_output = streaming_collect(&config, &input);
+    let max_diff: u8 = full_output
+        .iter()
+        .zip(stream_output.iter())
+        .map(|(&a, &b)| (a as i16 - b as i16).unsigned_abs() as u8)
+        .max()
+        .unwrap_or(0);
+    assert!(max_diff <= 1, "max diff {} exceeds 1", max_diff);
+}
+
+#[test]
+fn streaming_matches_fullframe_linear_1024() {
+    let config = ResizeConfig::builder(1024, 1024, 512, 512)
+        .filter(Filter::Lanczos)
+        .format(PixelDescriptor::RGBX8_SRGB)
+        .linear()
+        .build();
+    let input = gradient_image(1024, 1024);
+    let full_output = Resizer::new(&config).resize(&input);
+    let stream_output = streaming_collect(&config, &input);
+    let max_diff: u8 = full_output
+        .iter()
+        .zip(stream_output.iter())
+        .map(|(&a, &b)| (a as i16 - b as i16).unsigned_abs() as u8)
+        .max()
+        .unwrap_or(0);
+    assert!(max_diff <= 1, "max diff {} exceeds 1", max_diff);
+}
+
+#[test]
+fn streaming_matches_fullframe_srgb_upscale() {
+    let config = ResizeConfig::builder(512, 512, 1024, 1024)
+        .filter(Filter::Lanczos)
+        .format(PixelDescriptor::RGBA8_SRGB)
+        .srgb()
+        .build();
+    let input = gradient_image(512, 512);
+    let full_output = Resizer::new(&config).resize(&input);
+    let stream_output = streaming_collect(&config, &input);
+    let max_diff: u8 = full_output
+        .iter()
+        .zip(stream_output.iter())
+        .map(|(&a, &b)| (a as i16 - b as i16).unsigned_abs() as u8)
+        .max()
+        .unwrap_or(0);
+    assert!(max_diff <= 1, "max diff {} exceeds 1", max_diff);
+}
+
+#[test]
+fn streaming_matches_fullframe_linear_upscale() {
+    let config = ResizeConfig::builder(512, 512, 1024, 1024)
+        .filter(Filter::Lanczos)
+        .format(PixelDescriptor::RGBX8_SRGB)
+        .linear()
+        .build();
+    let input = gradient_image(512, 512);
+    let full_output = Resizer::new(&config).resize(&input);
+    let stream_output = streaming_collect(&config, &input);
+    let max_diff: u8 = full_output
+        .iter()
+        .zip(stream_output.iter())
+        .map(|(&a, &b)| (a as i16 - b as i16).unsigned_abs() as u8)
+        .max()
+        .unwrap_or(0);
+    assert!(max_diff <= 1, "max diff {} exceeds 1", max_diff);
+}
+
+#[test]
+fn streaming_matches_fullframe_srgb_10x() {
+    let config = ResizeConfig::builder(2000, 1500, 200, 150)
+        .filter(Filter::Lanczos)
+        .format(PixelDescriptor::RGBA8_SRGB)
+        .srgb()
+        .build();
+    let input = gradient_image(2000, 1500);
+    let full_output = Resizer::new(&config).resize(&input);
+    let stream_output = streaming_collect(&config, &input);
+    let max_diff: u8 = full_output
+        .iter()
+        .zip(stream_output.iter())
+        .map(|(&a, &b)| (a as i16 - b as i16).unsigned_abs() as u8)
+        .max()
+        .unwrap_or(0);
+    assert!(max_diff <= 1, "max diff {} exceeds 1", max_diff);
+}
+
+#[test]
+fn streaming_matches_fullframe_linear_10x() {
+    let config = ResizeConfig::builder(2000, 1500, 200, 150)
+        .filter(Filter::Lanczos)
+        .format(PixelDescriptor::RGBX8_SRGB)
+        .linear()
+        .build();
+    let input = gradient_image(2000, 1500);
+    let full_output = Resizer::new(&config).resize(&input);
+    let stream_output = streaming_collect(&config, &input);
+    let max_diff: u8 = full_output
+        .iter()
+        .zip(stream_output.iter())
+        .map(|(&a, &b)| (a as i16 - b as i16).unsigned_abs() as u8)
+        .max()
+        .unwrap_or(0);
+    assert!(max_diff <= 1, "max diff {} exceeds 1", max_diff);
+}
+
+#[test]
+fn streaming_matches_fullframe_f32_1024() {
+    let config = ResizeConfig::builder(1024, 1024, 512, 512)
+        .filter(Filter::Lanczos)
+        .format(PixelDescriptor::RGB8_SRGB)
+        .linear()
+        .build();
+    let input = gradient_image_3ch(1024, 1024);
+    let full_output = Resizer::new(&config).resize(&input);
+    let stream_output = streaming_collect(&config, &input);
+    let max_diff: u8 = full_output
+        .iter()
+        .zip(stream_output.iter())
+        .map(|(&a, &b)| (a as i16 - b as i16).unsigned_abs() as u8)
+        .max()
+        .unwrap_or(0);
+    assert!(max_diff <= 1, "max diff {} exceeds 1", max_diff);
 }
 
 // =============================================================================
@@ -477,7 +623,7 @@ fn interleaved_push_drain_produces_correct_output() {
     let output = streaming_collect(&config, &input);
     assert_eq!(output.len(), 10 * 10 * 4);
 
-    // Compare with fullframe (allow ±2 for i16 vs f32 difference)
+    // Compare with fullframe
     let fullframe = Resizer::new(&config).resize(&input);
     let max_diff: u8 = fullframe
         .iter()
@@ -486,8 +632,8 @@ fn interleaved_push_drain_produces_correct_output() {
         .max()
         .unwrap_or(0);
     assert!(
-        max_diff <= 2,
-        "interleaved push/drain vs fullframe max diff {} exceeds tolerance 2",
+        max_diff <= 1,
+        "interleaved push/drain vs fullframe max diff {} exceeds tolerance 1",
         max_diff
     );
 }
