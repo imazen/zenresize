@@ -58,60 +58,21 @@ Located in `src/simd/`:
 
 ## TODO
 
-### H-first streaming for i16 paths
-The streaming pipeline is V-first (V-filter on `in_width`-wide rows, then H-filter). For the i16 paths (sRGB, linear), H-first is 1.5-3.7× faster than both fullframe and V-first streaming because the V-filter operates on `out_width`-wide rows after H-filtering narrows them. The f32 path should stay V-first — the per-row decode+premul+f16-encode overhead cancels the V-filter savings.
-
-**Benchmark results (worktree-tiled-v-filter branch):**
-- sRGB 4ch 4K 2×: HF 12.6ms vs FF 16.3ms vs VF 14.8ms (HF wins 0.78×)
-- linear 4ch 4K 2×: HF 12.7ms vs FF 28.6ms vs VF 25.7ms (HF wins 0.44×)
-- linear 4ch 4K 10×: HF 10.3ms vs FF 21.8ms vs VF 27.0ms (HF wins 0.47×)
-- alpha 4ch 4K 2×: HF 12.7ms vs FF 47.1ms vs VF 43.4ms (HF wins 0.27×)
-- f32 3ch 4K 10×: VF 24.0ms vs FF 63.7ms vs HF 62.4ms (VF still best for f32)
-
-Implementation: `StreamingResize` should auto-select H-first for i16 paths. The prototype lives in `resize_hfirst_streaming()` on the worktree-tiled-v-filter branch. Needs: proper streaming API (push/pull), batch support, compositing integration.
-
-### Fullframe as streaming wrapper [DONE on worktree-tiled-v-filter]
-`Resizer` now delegates to a cached `StreamingResize` internally. Weight tables computed once, reused via `stream.reset()`. Eliminated ~500 lines of dead fullframe code. 308 tests pass. Needs merge to main.
-
-### Paired output row batching in streaming V-filter [DONE on worktree-tiled-v-filter]
-Both i16 paths detect consecutive output rows sharing the same V-filter window and V-filter both back-to-back (L1-hot data). Second row buffered for next `next_output_row()`. Needs merge to main.
-
-### Streaming compositing without extra buffering
-The i16 H-first paths don't support compositing (force f32 path fallback). To enable: after V-filter produces i16 output row, convert i16→f32 in temp buffer, composite in f32 (source-over), convert f32→u8. All per-row, no image-sized buffer. The temp buffers already exist in StreamingResize.
-
-### Compositing in H-first streaming
-Current compositing only works in the f32 path (V-first). For H-first, compositing could happen after the V-filter produces the final output row. Need to investigate:
-- Can we composite on i16/u8 output directly (integer composite)?
-- Or convert the V-filter output to f32, composite, convert back?
-- Consider making compositing a separate post-processing step that's composable with any pipeline order.
-
 ### Compositing composability
-The current compositing is deeply wired into the streaming pipeline (`composite_dispatch` called between V-filter and unpremul). Consider:
-- Extract compositing into a standalone row processor trait/fn
-- Let callers compose: resize → composite → encode, or resize → encode (no composite)
-- Support compositing on u8 rows directly (integer source-over) for the i16 paths
-- This would also allow compositing with fullframe output without forcing f32 path
+Compositing forces f32 path (correct — needs linear premul f32 math). Consider:
+- Extract compositing into a standalone row processor for callers to compose
+- Per-row i16→f32→composite→u8 in i16 paths (avoids full f32 pipeline)
 
-### Integration test coverage for fullframe vs streaming parity
-Current parity tests use tiny images (30×30→15×15) that don't expose the i16 accuracy gap. Need tests at:
-- 1024→512 and 4000→400 for both sRGB and linear paths
-- Upscale 512→1024
-- Document the expected max diff per path combination
-
-### AVX-512 kernel expansion
-Only `filter_v_row_f32` has an AVX-512 kernel (commit e04e888). Need x86v4 variants for:
-- `filter_h_u8_to_i16` (H-filter for sRGB i16 path)
-- `filter_v_row_i16` (V-filter for i16 paths)
-- `filter_h_i16_i16` (H-filter for linear i16 path)
-- `filter_v_row_f16` / `filter_h_row_f32_to_f16` (f32 path)
-AVX-512 gives 512-bit registers (32 i16 per register) — potentially 2× throughput over AVX2 for i16 kernels. Use archmage `X64V4Token`.
-
-### Integration test coverage for fullframe vs streaming parity
-Current parity tests use tiny images (30×30→15×15). Need tests at 1024+ for sRGB and linear. With the i16 clamping fix, max diff is now 1 — tests should enforce this.
+### Native AVX-512 for remaining hot-path kernels
+`filter_v_row_i16` has a native AVX-512 kernel (32 i16/iter). Still delegating to AVX2:
+- `filter_h_u8_to_i16` — H-filter for sRGB i16 path
+- `filter_h_i16_i16` — H-filter for linear i16 path
+- `filter_v_row_f16` / `filter_h_row_f32_to_f16` — f32 path
 
 ## Investigation Notes
 
-### i16 accuracy gap between fullframe (H-first) and streaming (V-first)
+### i16 accuracy gap [FIXED]
+Intermediate clamping removed from all i16 kernels. Max diff 52→1.
 **Measured max diff (u8 output):**
 - sRGB-i16 path: 2-6 (downscale), 25 (upscale)
 - linear-i16 path: 6-43 (downscale), 49-52 (heavy downscale/upscale)
@@ -126,5 +87,4 @@ Current parity tests use tiny images (30×30→15×15). Need tests at 1024+ for 
 
 ## Known Bugs
 
-### Intermediate clamping reduces i16 path accuracy
-The i16 filter kernels clamp intermediate values to [0, 4095] (linear) or [0, 255] (sRGB) after each filter step. This destroys Lanczos overshoot/undershoot information, causing up to 52 LSB difference between H-first and V-first filter order. Fix: remove intermediate clamping (option 1 above). See investigation notes.
+(none currently)
