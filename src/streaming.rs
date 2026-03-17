@@ -48,6 +48,19 @@ use crate::weights::{F32WeightTable, I16WeightTable};
 use whereat::{At, ResultAtExt, at};
 use zenpixels::{AlphaMode, ChannelType, TransferFunction};
 
+/// Estimate the maximum filter tap count for a given dimension and filter.
+///
+/// Used to decide whether the i16 integer pipeline would accumulate
+/// unacceptable rounding error (falling back to f32 when taps are too many).
+fn estimate_max_taps(in_size: u32, out_size: u32, filter: &InterpolationDetails) -> usize {
+    let scale = out_size as f64 / in_size as f64;
+    let downscale_factor = scale.min(1.0);
+    // filter.window already incorporates blur
+    let effective_window = filter.window / downscale_factor;
+    // +2 margin for rounding and edge trimming variation
+    (2.0 * effective_window).ceil() as usize + 2
+}
+
 /// Post-resize orientation transform.
 ///
 /// Applied after resize completes. For streaming, this means the resizer
@@ -526,6 +539,41 @@ impl<B: Background> StreamingResize<B> {
             StreamingPath::I16Linear
         } else {
             StreamingPath::F32
+        };
+
+        // i16 precision guard: fall back to f32 when filter tap count is high
+        // enough that integer rounding error accumulates beyond acceptable levels.
+        //
+        // The i16 pipeline rounds to i16 after the H-filter, then the V-filter
+        // accumulates these rounded values. With many taps (heavy downscale),
+        // the double-rounding error grows. For I16Linear, the sRGB delinearization
+        // curve amplifies small linear errors into large u8 errors in darks.
+        //
+        // Thresholds chosen from measured max diff vs f32 reference:
+        //   I16Srgb: ≤7 u8 at ≤2x, acceptable up to ~8x downscale
+        //   I16Linear: up to 43 u8 at 2x, use only for ≤2x downscale
+        let path = match path {
+            StreamingPath::I16Linear => {
+                let h_taps = estimate_max_taps(resize_in_w, config.out_width, &filter);
+                let v_taps = estimate_max_taps(resize_in_h, config.out_height, &filter);
+                // 14 taps ≈ Lanczos3 at 2.3x downscale
+                if h_taps.max(v_taps) > 14 {
+                    StreamingPath::F32
+                } else {
+                    StreamingPath::I16Linear
+                }
+            }
+            StreamingPath::I16Srgb => {
+                let h_taps = estimate_max_taps(resize_in_w, config.out_width, &filter);
+                let v_taps = estimate_max_taps(resize_in_h, config.out_height, &filter);
+                // 50 taps ≈ Lanczos3 at 8x downscale
+                if h_taps.max(v_taps) > 50 {
+                    StreamingPath::F32
+                } else {
+                    StreamingPath::I16Srgb
+                }
+            }
+            StreamingPath::F32 => StreamingPath::F32,
         };
 
         let extra_slack = if batch_hint > 0 {
@@ -3283,6 +3331,54 @@ mod tests {
         let config = ResizeConfig::builder(20, 20, 10, 10)
             .format(PixelDescriptor::RGBA8_SRGB)
             .linear()
+            .build();
+        let resizer = StreamingResize::new(&config);
+        assert_eq!(resizer.path, StreamingPath::F32);
+    }
+
+    #[test]
+    fn test_i16_linear_fallback_heavy_downscale() {
+        // 4x downscale → max_taps ~25, exceeds I16Linear threshold → F32
+        let config = ResizeConfig::builder(400, 400, 100, 100)
+            .filter(Filter::Lanczos)
+            .format(PixelDescriptor::RGBX8_SRGB)
+            .linear()
+            .build();
+        let resizer = StreamingResize::new(&config);
+        assert_eq!(resizer.path, StreamingPath::F32);
+    }
+
+    #[test]
+    fn test_i16_linear_kept_mild_downscale() {
+        // 2x downscale → max_taps ~13, within I16Linear threshold → I16Linear
+        let config = ResizeConfig::builder(200, 200, 100, 100)
+            .filter(Filter::Lanczos)
+            .format(PixelDescriptor::RGBX8_SRGB)
+            .linear()
+            .build();
+        let resizer = StreamingResize::new(&config);
+        assert_eq!(resizer.path, StreamingPath::I16Linear);
+    }
+
+    #[test]
+    fn test_i16_srgb_kept_moderate_downscale() {
+        // 4x downscale → max_taps ~25, within I16Srgb threshold → I16Srgb
+        let config = ResizeConfig::builder(400, 400, 100, 100)
+            .filter(Filter::Lanczos)
+            .format(PixelDescriptor::RGBA8_SRGB)
+            .srgb()
+            .build();
+        let resizer = StreamingResize::new(&config);
+        assert_eq!(resizer.path, StreamingPath::I16Srgb);
+    }
+
+    #[test]
+    fn test_i16_srgb_fallback_extreme_downscale() {
+        // 10x downscale → max_taps ~63, exceeds I16Srgb threshold → F32
+        let config = ResizeConfig::builder(1000, 1000, 100, 100)
+            .filter(Filter::Lanczos)
+            .format(PixelDescriptor::RGBA8_SRGB)
+            .srgb()
             .build();
         let resizer = StreamingResize::new(&config);
         assert_eq!(resizer.path, StreamingPath::F32);
