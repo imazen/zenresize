@@ -60,6 +60,33 @@ pub(crate) fn filter_h_u8_i16_wasm128(
 }
 
 #[archmage::arcane]
+pub(crate) fn filter_h_u8_to_i16_wasm128(
+    _token: Wasm128Token,
+    input: &[u8],
+    output: &mut [i16],
+    weights: &I16WeightTable,
+    channels: usize,
+) {
+    super::wide_kernels::filter_h_u8_to_i16(input, output, weights, channels)
+}
+
+#[archmage::arcane]
+pub(crate) fn filter_h_u8_to_i16_4rows_wasm128(
+    _token: Wasm128Token,
+    in0: &[u8],
+    in1: &[u8],
+    in2: &[u8],
+    in3: &[u8],
+    out0: &mut [i16],
+    out1: &mut [i16],
+    out2: &mut [i16],
+    out3: &mut [i16],
+    weights: &I16WeightTable,
+) {
+    super::wide_kernels::filter_h_u8_to_i16_4rows(in0, in1, in2, in3, out0, out1, out2, out3, weights)
+}
+
+#[archmage::arcane]
 pub(crate) fn filter_h_u8_i16_4rows_wasm128(
     _token: Wasm128Token,
     in0: &[u8],

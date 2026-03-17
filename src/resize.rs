@@ -340,11 +340,12 @@ impl<B: Background> Resizer<B> {
         // Compositing forces f32 path — paths 0 and 1 use batch vertical passes
         // that can't inject per-row compositing.
         if !force_f32 && !linearize && channels == 4 {
-            // Path 0: sRGB i16 fast path
+            // Path 0: sRGB i16 fast path — uses i16 intermediate to avoid
+            // clamping Lanczos ringing at [0,255] between H and V passes.
             let h_weights = I16WeightTable::new(config.in_width, config.out_width, &filter);
             let v_weights = I16WeightTable::new(config.in_height, config.out_height, &filter);
-            let intermediate = vec![0u8; h_row_len * in_h];
             let h_padding = h_weights.groups4 * 16;
+            let out_h = config.out_height as usize;
             let premul_buf = if needs_premul {
                 vec![0u8; in_row_len + h_padding]
             } else {
@@ -356,12 +357,12 @@ impl<B: Background> Resizer<B> {
                 v_weights_i16: Some(v_weights),
                 h_weights_f32: None,
                 v_weights_f32: None,
-                intermediate_u8: intermediate,
+                intermediate_u8: Vec::new(),
 
                 intermediate_f16: Vec::new(),
-                intermediate_i16: Vec::new(),
+                intermediate_i16: vec![0i16; h_row_len * in_h],
                 linearized_row: Vec::new(),
-                v_output_i16: Vec::new(),
+                v_output_i16: vec![0i16; h_row_len * out_h],
                 premul_buf,
                 temp_row_f32: Vec::new(),
                 temp_output_f32: Vec::new(),
@@ -471,10 +472,11 @@ impl<B: Background> Resizer<B> {
 
         match self.path {
             0 => {
-                // Path 0: sRGB i16 fast path (no compositing possible here)
+                // Path 0: sRGB i16 — uses i16 intermediate to preserve
+                // Lanczos ringing without clamping at [0,255].
                 let h_weights = self.h_weights_i16.as_ref().unwrap();
                 let v_weights = self.v_weights_i16.as_ref().unwrap();
-                let intermediate = &mut self.intermediate_u8;
+                let intermediate = &mut self.intermediate_i16;
 
                 if channels == 4 && !needs_premul {
                     let h_padding = h_weights.groups4 * 16;
@@ -498,7 +500,9 @@ impl<B: Background> Resizer<B> {
                         let (o2, o3_and_rest) = rest.split_at_mut(h_row_len);
                         let o3 = &mut o3_and_rest[..h_row_len];
 
-                        simd::filter_h_u8_i16_4rows(r0, r1, r2, r3, o0, o1, o2, o3, h_weights);
+                        simd::filter_h_u8_to_i16_4rows(
+                            r0, r1, r2, r3, o0, o1, o2, o3, h_weights,
+                        );
                     }
 
                     for i in 0..remainder {
@@ -508,7 +512,7 @@ impl<B: Background> Resizer<B> {
                         let in_row = &input[in_start..in_end];
                         let out_start = y * h_row_len;
 
-                        simd::filter_h_u8_i16(
+                        simd::filter_h_u8_to_i16(
                             in_row,
                             &mut intermediate[out_start..out_start + h_row_len],
                             h_weights,
@@ -528,7 +532,7 @@ impl<B: Background> Resizer<B> {
                             in_row
                         };
 
-                        simd::filter_h_u8_i16(
+                        simd::filter_h_u8_to_i16(
                             src,
                             &mut intermediate[out_start..out_start + h_row_len],
                             h_weights,
@@ -537,8 +541,27 @@ impl<B: Background> Resizer<B> {
                     }
                 }
 
-                // V pass
-                simd::filter_v_all_u8_i16(intermediate, output, h_row_len, in_h, out_h, v_weights);
+                // V pass: i16 intermediate → i16 output (unclamped)
+                simd::filter_v_all_i16_i16(
+                    intermediate,
+                    &mut self.v_output_i16,
+                    h_row_len,
+                    in_h,
+                    out_h,
+                    v_weights,
+                );
+
+                // Final: clamp i16 → u8 [0,255]
+                for out_y in 0..out_h {
+                    let v_start = out_y * h_row_len;
+                    let out_start = out_y * out_row_len;
+                    for (v, o) in self.v_output_i16[v_start..v_start + h_row_len]
+                        .iter()
+                        .zip(output[out_start..out_start + out_row_len].iter_mut())
+                    {
+                        *o = (*v).clamp(0, 255) as u8;
+                    }
+                }
 
                 if needs_premul {
                     for out_y in 0..out_h {

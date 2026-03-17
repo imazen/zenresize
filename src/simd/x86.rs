@@ -866,6 +866,374 @@ fn filter_h_u8_generic(
     }
 }
 
+// =============================================================================
+// Integer convolution kernels: u8 input → i16 output (unclamped)
+//
+// Identical SIMD computation to filter_h_u8_i16 but output stores i16 values
+// instead of clamping to [0,255] u8. This preserves Lanczos ringing in the
+// intermediate buffer for higher quality when a V-filter follows.
+// =============================================================================
+
+/// Integer horizontal convolution: u8 input → i16 output via i32 accumulator.
+///
+/// Same madd_epi16 computation as `filter_h_u8_i16_v3`. Only the output pack
+/// step differs: packs_epi32 → i16 store instead of packs_epi32 → packus_epi16 → u8.
+#[archmage::arcane]
+pub(crate) fn filter_h_u8_to_i16_v3(
+    _token: X64V3Token,
+    input: &[u8],
+    output: &mut [i16],
+    weights: &I16WeightTable,
+    channels: usize,
+) {
+    match channels {
+        4 => filter_h_u8_to_i16_4ch(_token, input, output, weights),
+        _ => filter_h_u8_to_i16_generic(_token, input, output, weights, channels),
+    }
+}
+
+/// Integer horizontal filter for 4-channel (RGBA) u8 → i16 output.
+///
+/// Same 256-bit madd_epi16 accumulation as `filter_h_u8_4ch`. Output step:
+/// packs_epi32 produces 4 i16 values → storeu_si64 writes 8 bytes (4 i16).
+#[archmage::rite]
+fn filter_h_u8_to_i16_4ch(
+    _token: X64V3Token,
+    input: &[u8],
+    output: &mut [i16],
+    weights: &I16WeightTable,
+) {
+    let out_width = weights.len();
+    let groups4 = weights.groups4;
+    let in_pixels = input.len() / 4;
+
+    // Need at least 4 pixels for the 16-byte loads
+    if in_pixels < 4 {
+        filter_h_u8_to_i16_generic(_token, input, output, weights, 4);
+        return;
+    }
+
+    // Check if the input slice has enough padding for all SIMD reads.
+    let max_left = weights.left.iter().map(|&l| l as usize).max().unwrap_or(0);
+    let has_full_padding = max_left + groups4 * 4 + 3 < in_pixels;
+
+    if !has_full_padding {
+        filter_h_u8_to_i16_4ch_with_edge_fallback(_token, input, output, weights);
+        return;
+    }
+
+    let ymm_shuffle = _mm256_set_epi8(
+        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0, 15, 14, 7, 6, 13, 12, 5, 4, 11, 10,
+        3, 2, 9, 8, 1, 0,
+    );
+
+    let half = _mm_set1_epi32(1 << (I16_PRECISION - 1));
+    let zero = _mm_setzero_si128();
+
+    let ew_all = weights.expanded_4ch_all();
+    let (ew_chunks, _) = ew_all.as_chunks::<16>();
+
+    let (out_pixels, _) = output.as_chunks_mut::<4>();
+
+    for out_x in 0..out_width {
+        let left = weights.left[out_x] as usize;
+        let byte_start = left * 4;
+
+        let input_window = sub(input, byte_start..byte_start + groups4 * 16);
+        let (in_chunks, _) = input_window.as_chunks::<16>();
+        let ew_base = out_x * groups4;
+        let ew_window = sub(ew_chunks, ew_base..ew_base + groups4);
+
+        let mut acc = _mm256_setzero_si256();
+
+        for (chunk, ew) in in_chunks.iter().zip(ew_window.iter()) {
+            let pixels = _mm_loadu_si128(chunk);
+            let ext = _mm256_cvtepu8_epi16(pixels);
+            let shuffled = _mm256_shuffle_epi8(ext, ymm_shuffle);
+            let w = _mm256_loadu_si256(ew);
+            acc = _mm256_add_epi32(acc, _mm256_madd_epi16(shuffled, w));
+        }
+
+        let lo = _mm256_castsi256_si128(acc);
+        let hi = _mm256_extracti128_si256::<1>(acc);
+        let final_acc = _mm_add_epi32(lo, hi);
+
+        let rounded = _mm_add_epi32(final_acc, half);
+        let shifted = _mm_srai_epi32::<{ I16_PRECISION }>(rounded);
+        // Pack i32 → i16 (signed saturation), store 4 i16 values (8 bytes)
+        let packed16 = _mm_packs_epi32(shifted, zero);
+        _mm_storeu_si64(idx_mut(out_pixels, out_x), packed16);
+    }
+}
+
+/// Fallback for filter_h_u8_to_i16_4ch when input lacks SIMD padding.
+/// Uses per-pixel edge checks for safety.
+#[archmage::rite]
+fn filter_h_u8_to_i16_4ch_with_edge_fallback(
+    _token: X64V3Token,
+    input: &[u8],
+    output: &mut [i16],
+    weights: &I16WeightTable,
+) {
+    let out_width = weights.len();
+    let groups4 = weights.groups4;
+    let in_pixels = input.len() / 4;
+
+    let ymm_shuffle = _mm256_set_epi8(
+        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0, 15, 14, 7, 6, 13, 12, 5, 4, 11, 10,
+        3, 2, 9, 8, 1, 0,
+    );
+    let half = _mm_set1_epi32(1 << (I16_PRECISION - 1));
+    let zero = _mm_setzero_si128();
+
+    let safe_end = (0..out_width)
+        .position(|x| (weights.left[x] as usize) + groups4 * 4 > in_pixels)
+        .unwrap_or(out_width);
+
+    // Edge pixels: scalar
+    for out_x in safe_end..out_width {
+        let left = weights.left[out_x] as usize;
+        filter_h_u8_to_i16_4ch_edge(
+            _token,
+            input,
+            &mut output[out_x * 4..],
+            out_x,
+            left,
+            weights,
+        );
+    }
+
+    // Interior pixels: SIMD
+    if safe_end > 0 {
+        let (out_pixels, _) = output.as_chunks_mut::<4>();
+
+        for out_x in 0..safe_end {
+            let left = weights.left[out_x] as usize;
+            let byte_start = left * 4;
+
+            let ew = weights.weights_expanded_4ch(out_x);
+            let (ew_chunks, _) = ew.as_chunks::<16>();
+
+            let input_window = &input[byte_start..byte_start + groups4 * 16];
+            let (in_chunks, _) = input_window.as_chunks::<16>();
+
+            let mut acc = _mm256_setzero_si256();
+
+            for (chunk, ew) in in_chunks.iter().zip(ew_chunks.iter()) {
+                let pixels = _mm_loadu_si128(chunk);
+                let ext = _mm256_cvtepu8_epi16(pixels);
+                let shuffled = _mm256_shuffle_epi8(ext, ymm_shuffle);
+                let w = _mm256_loadu_si256(ew);
+                acc = _mm256_add_epi32(acc, _mm256_madd_epi16(shuffled, w));
+            }
+
+            let lo = _mm256_castsi256_si128(acc);
+            let hi = _mm256_extracti128_si256::<1>(acc);
+            let final_acc = _mm_add_epi32(lo, hi);
+
+            let rounded = _mm_add_epi32(final_acc, half);
+            let shifted = _mm_srai_epi32::<{ I16_PRECISION }>(rounded);
+            let packed16 = _mm_packs_epi32(shifted, zero);
+            _mm_storeu_si64(idx_mut(out_pixels, out_x), packed16);
+        }
+    }
+}
+
+/// Scalar fallback for a single edge pixel in 4ch u8→i16 horizontal filter.
+#[inline]
+fn filter_h_u8_to_i16_4ch_edge(
+    _token: X64V3Token,
+    input: &[u8],
+    output: &mut [i16],
+    out_x: usize,
+    left: usize,
+    weights: &I16WeightTable,
+) {
+    let w = weights.weights(out_x);
+    for c in 0..4 {
+        let mut acc: i32 = 0;
+        for (t, &weight) in w.iter().enumerate() {
+            acc += input[(left + t) * 4 + c] as i32 * weight as i32;
+        }
+        let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+        output[c] = rounded as i16;
+    }
+}
+
+/// Scalar fallback for u8→i16 integer horizontal filter (arbitrary channel count).
+#[archmage::rite]
+fn filter_h_u8_to_i16_generic(
+    _token: X64V3Token,
+    input: &[u8],
+    output: &mut [i16],
+    weights: &I16WeightTable,
+    channels: usize,
+) {
+    let out_width = weights.len();
+
+    for out_x in 0..out_width {
+        let left = weights.left[out_x] as usize;
+        let w = weights.weights(out_x);
+        let out_base = out_x * channels;
+
+        for c in 0..channels {
+            let mut acc: i32 = 0;
+            for (t, &weight) in w.iter().enumerate() {
+                acc += input[(left + t) * channels + c] as i32 * weight as i32;
+            }
+            let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+            output[out_base + c] = rounded as i16;
+        }
+    }
+}
+
+/// 4-row batch horizontal filter for 4-channel (RGBA) u8 → i16 output.
+///
+/// Same shared-weight amortization as `filter_h_u8_i16_4rows_v3`. Output stores
+/// i16 values via packs_epi32 → storeu_si64 instead of u8 via packus_epi16.
+#[archmage::arcane]
+pub(crate) fn filter_h_u8_to_i16_4rows_v3(
+    _token: X64V3Token,
+    in0: &[u8],
+    in1: &[u8],
+    in2: &[u8],
+    in3: &[u8],
+    out0: &mut [i16],
+    out1: &mut [i16],
+    out2: &mut [i16],
+    out3: &mut [i16],
+    weights: &I16WeightTable,
+) {
+    filter_h_u8_to_i16_4ch_4rows(_token, in0, in1, in2, in3, out0, out1, out2, out3, weights);
+}
+
+/// Inner implementation of 4-row batch u8→i16 horizontal convolution.
+#[archmage::rite]
+fn filter_h_u8_to_i16_4ch_4rows(
+    _token: X64V3Token,
+    in0: &[u8],
+    in1: &[u8],
+    in2: &[u8],
+    in3: &[u8],
+    out0: &mut [i16],
+    out1: &mut [i16],
+    out2: &mut [i16],
+    out3: &mut [i16],
+    weights: &I16WeightTable,
+) {
+    let out_width = weights.len();
+    let groups4 = weights.groups4;
+    let in_pixels = [in0.len(), in1.len(), in2.len(), in3.len()]
+        .iter()
+        .copied()
+        .min()
+        .unwrap()
+        / 4;
+
+    let max_left = weights.left.iter().map(|&l| l as usize).max().unwrap_or(0);
+    if max_left + groups4 * 4 + 3 >= in_pixels || in_pixels < 4 {
+        filter_h_u8_to_i16_4ch(_token, in0, out0, weights);
+        filter_h_u8_to_i16_4ch(_token, in1, out1, weights);
+        filter_h_u8_to_i16_4ch(_token, in2, out2, weights);
+        filter_h_u8_to_i16_4ch(_token, in3, out3, weights);
+        return;
+    }
+
+    let ymm_shuffle = _mm256_set_epi8(
+        15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0, 15, 14, 7, 6, 13, 12, 5, 4, 11, 10,
+        3, 2, 9, 8, 1, 0,
+    );
+    let half = _mm_set1_epi32(1 << (I16_PRECISION - 1));
+    let zero = _mm_setzero_si128();
+
+    let ew_all = weights.expanded_4ch_all();
+    let (ew_chunks, _) = ew_all.as_chunks::<16>();
+
+    let (op0, _) = out0.as_chunks_mut::<4>();
+    let (op1, _) = out1.as_chunks_mut::<4>();
+    let (op2, _) = out2.as_chunks_mut::<4>();
+    let (op3, _) = out3.as_chunks_mut::<4>();
+
+    for out_x in 0..out_width {
+        let left = weights.left[out_x] as usize;
+        let byte_start = left * 4;
+        let byte_end = byte_start + groups4 * 16;
+        let ew_base = out_x * groups4;
+
+        let (c0, _) = sub(in0, byte_start..byte_end).as_chunks::<16>();
+        let (c1, _) = sub(in1, byte_start..byte_end).as_chunks::<16>();
+        let (c2, _) = sub(in2, byte_start..byte_end).as_chunks::<16>();
+        let (c3, _) = sub(in3, byte_start..byte_end).as_chunks::<16>();
+        let ew_window = sub(ew_chunks, ew_base..ew_base + groups4);
+
+        let mut acc0 = _mm256_setzero_si256();
+        let mut acc1 = _mm256_setzero_si256();
+        let mut acc2 = _mm256_setzero_si256();
+        let mut acc3 = _mm256_setzero_si256();
+
+        for g in 0..groups4 {
+            let w = _mm256_loadu_si256(idx(ew_window, g));
+
+            let p0 = _mm256_cvtepu8_epi16(_mm_loadu_si128(idx(c0, g)));
+            acc0 = _mm256_add_epi32(
+                acc0,
+                _mm256_madd_epi16(_mm256_shuffle_epi8(p0, ymm_shuffle), w),
+            );
+
+            let p1 = _mm256_cvtepu8_epi16(_mm_loadu_si128(idx(c1, g)));
+            acc1 = _mm256_add_epi32(
+                acc1,
+                _mm256_madd_epi16(_mm256_shuffle_epi8(p1, ymm_shuffle), w),
+            );
+
+            let p2 = _mm256_cvtepu8_epi16(_mm_loadu_si128(idx(c2, g)));
+            acc2 = _mm256_add_epi32(
+                acc2,
+                _mm256_madd_epi16(_mm256_shuffle_epi8(p2, ymm_shuffle), w),
+            );
+
+            let p3 = _mm256_cvtepu8_epi16(_mm_loadu_si128(idx(c3, g)));
+            acc3 = _mm256_add_epi32(
+                acc3,
+                _mm256_madd_epi16(_mm256_shuffle_epi8(p3, ymm_shuffle), w),
+            );
+        }
+
+        let f0 = _mm_add_epi32(
+            _mm256_castsi256_si128(acc0),
+            _mm256_extracti128_si256::<1>(acc0),
+        );
+        let f1 = _mm_add_epi32(
+            _mm256_castsi256_si128(acc1),
+            _mm256_extracti128_si256::<1>(acc1),
+        );
+        let f2 = _mm_add_epi32(
+            _mm256_castsi256_si128(acc2),
+            _mm256_extracti128_si256::<1>(acc2),
+        );
+        let f3 = _mm_add_epi32(
+            _mm256_castsi256_si128(acc3),
+            _mm256_extracti128_si256::<1>(acc3),
+        );
+
+        let s0 = _mm_srai_epi32::<{ I16_PRECISION }>(_mm_add_epi32(f0, half));
+        let s1 = _mm_srai_epi32::<{ I16_PRECISION }>(_mm_add_epi32(f1, half));
+        let s2 = _mm_srai_epi32::<{ I16_PRECISION }>(_mm_add_epi32(f2, half));
+        let s3 = _mm_srai_epi32::<{ I16_PRECISION }>(_mm_add_epi32(f3, half));
+
+        // Pack i32 → i16 (signed saturation), store 4 i16 per row
+        let pack0 = _mm_packs_epi32(s0, zero);
+        let pack1 = _mm_packs_epi32(s1, zero);
+        let pack2 = _mm_packs_epi32(s2, zero);
+        let pack3 = _mm_packs_epi32(s3, zero);
+
+        _mm_storeu_si64(idx_mut(op0, out_x), pack0);
+        _mm_storeu_si64(idx_mut(op1, out_x), pack1);
+        _mm_storeu_si64(idx_mut(op2, out_x), pack2);
+        _mm_storeu_si64(idx_mut(op3, out_x), pack3);
+    }
+}
+
 /// Batch vertical filter: process all output rows from the intermediate buffer.
 ///
 /// Uses 2D guards on the contiguous intermediate buffer to eliminate unsafe.

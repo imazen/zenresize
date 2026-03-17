@@ -123,6 +123,53 @@ pub(crate) fn filter_h_u8_i16_scalar(
     }
 }
 
+/// Integer horizontal convolution: u8 input → i16 output (unclamped), scalar fallback.
+/// For sRGB path with i16 intermediate: preserves Lanczos ringing without [0,255] clamp.
+pub(crate) fn filter_h_u8_to_i16_scalar(
+    _token: ScalarToken,
+    input: &[u8],
+    output: &mut [i16],
+    weights: &I16WeightTable,
+    channels: usize,
+) {
+    let out_width = weights.len();
+
+    for out_x in 0..out_width {
+        let left = weights.left[out_x] as usize;
+        let w = weights.weights(out_x);
+        let out_base = out_x * channels;
+
+        for c in 0..channels {
+            let mut acc: i32 = 0;
+            for (t, &weight) in w.iter().enumerate() {
+                acc += input[(left + t) * channels + c] as i32 * weight as i32;
+            }
+            let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+            output[out_base + c] = rounded as i16;
+        }
+    }
+}
+
+/// 4-row batch horizontal convolution: u8 input → i16 output (unclamped), scalar fallback.
+pub(crate) fn filter_h_u8_to_i16_4rows_scalar(
+    _token: ScalarToken,
+    in0: &[u8],
+    in1: &[u8],
+    in2: &[u8],
+    in3: &[u8],
+    out0: &mut [i16],
+    out1: &mut [i16],
+    out2: &mut [i16],
+    out3: &mut [i16],
+    weights: &I16WeightTable,
+) {
+    let ch = 4;
+    filter_h_u8_to_i16_scalar(_token, in0, out0, weights, ch);
+    filter_h_u8_to_i16_scalar(_token, in1, out1, weights, ch);
+    filter_h_u8_to_i16_scalar(_token, in2, out2, weights, ch);
+    filter_h_u8_to_i16_scalar(_token, in3, out3, weights, ch);
+}
+
 /// 4-row batch horizontal convolution, scalar fallback.
 /// Just calls filter_h_u8_i16_scalar 4 times.
 pub(crate) fn filter_h_u8_i16_4rows_scalar(

@@ -693,7 +693,9 @@ impl<B: Background> StreamingResize<B> {
                 let h_padding_bytes = i16_h_weights.groups4 * 16;
                 let v_out_len = in_row_len + h_padding_bytes;
 
-                let u8_v_cache = (0..cache_size).map(|_| vec![0u8; in_row_len]).collect();
+                // Use i16 ring buffer to preserve Lanczos ringing without [0,255] clamp
+                let i16_v_cache =
+                    (0..cache_size).map(|_| vec![0i16; in_row_len]).collect();
 
                 Self {
                     config,
@@ -713,11 +715,16 @@ impl<B: Background> StreamingResize<B> {
                     output_buf_u16: Vec::new(),
                     i16_h_weights: Some(i16_h_weights),
                     i16_v_weights: Some(i16_v_weights),
-                    u8_v_cache,
-                    i16_v_cache: Vec::new(),
-                    temp_v_output_u8: vec![0u8; v_out_len],
-                    temp_v_output_i16: Vec::new(),
-                    temp_h_output_i16: Vec::new(),
+                    u8_v_cache: Vec::new(),
+                    i16_v_cache,
+                    // temp_v_output_u8 used as premul scratch buffer if needed
+                    temp_v_output_u8: if needs_premul {
+                        vec![0u8; in_row_len]
+                    } else {
+                        Vec::new()
+                    },
+                    temp_v_output_i16: vec![0i16; v_out_len],
+                    temp_h_output_i16: vec![0i16; out_row_len],
                     linearized_row_i16: Vec::new(),
                     input_rows_received: 0,
                     output_rows_produced: 0,
@@ -995,16 +1002,29 @@ impl<B: Background> StreamingResize<B> {
 
         match self.path {
             StreamingPath::I16Srgb => {
-                // u8 → optional premul → cache u8 directly (no linearization)
+                // u8 → optional premul → zero-extend to i16 → cache
+                // (i16 ring buffer preserves Lanczos ringing without [0,255] clamp)
                 self.check_ring_buffer().at()?;
                 let cache_slot = self.cache_write_idx % self.cache_size;
                 if self.needs_premul {
+                    // Premul into temp u8 buf, then extend to i16
                     simd::premultiply_u8_row(
                         pixel_data,
-                        &mut self.u8_v_cache[cache_slot][..pixel_len],
+                        &mut self.temp_v_output_u8[..pixel_len],
                     );
+                    for (dst, &src) in self.i16_v_cache[cache_slot][..pixel_len]
+                        .iter_mut()
+                        .zip(self.temp_v_output_u8[..pixel_len].iter())
+                    {
+                        *dst = src as i16;
+                    }
                 } else {
-                    self.u8_v_cache[cache_slot][..pixel_len].copy_from_slice(pixel_data);
+                    for (dst, &src) in self.i16_v_cache[cache_slot][..pixel_len]
+                        .iter_mut()
+                        .zip(pixel_data.iter())
+                    {
+                        *dst = src as i16;
+                    }
                 }
                 self.cache_write_idx += 1;
                 self.input_rows_received += 1;
@@ -1339,15 +1359,11 @@ impl<B: Background> StreamingResize<B> {
 
         match self.path {
             StreamingPath::I16Srgb => {
-                // i16 → u8 cache (values are u8-range zero-extended)
+                // i16 → i16 cache (store directly, no clamp)
                 self.check_ring_buffer().at()?;
                 let cache_slot = self.cache_write_idx % self.cache_size;
-                for (s, d) in row[..pixel_len]
-                    .iter()
-                    .zip(self.u8_v_cache[cache_slot][..pixel_len].iter_mut())
-                {
-                    *d = (*s).clamp(0, 255) as u8;
-                }
+                self.i16_v_cache[cache_slot][..pixel_len]
+                    .copy_from_slice(&row[..pixel_len]);
                 self.cache_write_idx += 1;
                 self.input_rows_received += 1;
                 Ok(())
@@ -2115,8 +2131,8 @@ impl<B: Background> StreamingResize<B> {
         }
     }
 
-    /// Produce one output row via the I16Srgb path: u8 V-filter → u8 H-filter → u8 output.
-    /// Result written to `output_buf_u8`. Increments `output_rows_produced`.
+    /// Produce one output row via the I16Srgb path: i16 V-filter → i16 H-filter → u8 output.
+    /// Uses i16 ring buffer and unclamped i16 filters to preserve Lanczos ringing accuracy.
     fn produce_next_i16_srgb(&mut self, dst: &mut [u8]) {
         let out_y = self.output_rows_produced;
         let i16_v_weights = self.i16_v_weights.as_ref().unwrap();
@@ -2128,29 +2144,37 @@ impl<B: Background> StreamingResize<B> {
         let in_row_len = self.config.resize_in_width() as usize * self.channels;
         let out_row_len = self.config.out_width as usize * self.channels;
 
-        // Step 1: V-filter from u8_v_cache into temp_v_output_u8
+        // Step 1: V-filter from i16_v_cache into temp_v_output_i16 (unclamped)
         with_v_rows(
-            &self.u8_v_cache,
+            &self.i16_v_cache,
             self.cache_size,
             left,
             tap_count,
             resize_in_h,
             in_row_len,
             |rows| {
-                simd::filter_v_row_u8_i16(rows, &mut self.temp_v_output_u8[..in_row_len], weights)
+                simd::filter_v_row_i16(rows, &mut self.temp_v_output_i16[..in_row_len], weights)
             },
         );
 
-        // Step 2: H-filter u8 → u8 (via i16 weights)
+        // Step 2: H-filter i16 → i16 (unclamped)
         let i16_h_weights = self.i16_h_weights.as_ref().unwrap();
-        simd::filter_h_u8_i16(
-            &self.temp_v_output_u8,
-            &mut dst[..out_row_len],
+        simd::filter_h_i16_i16(
+            &self.temp_v_output_i16,
+            &mut self.temp_h_output_i16[..out_row_len],
             i16_h_weights,
             self.channels,
         );
 
-        // Step 3: unpremultiply if needed (in-place on u8 output)
+        // Step 3: clamp i16 → u8 [0,255]
+        for (&v, o) in self.temp_h_output_i16[..out_row_len]
+            .iter()
+            .zip(dst[..out_row_len].iter_mut())
+        {
+            *o = v.clamp(0, 255) as u8;
+        }
+
+        // Step 4: unpremultiply if needed
         if self.needs_premul {
             simd::unpremultiply_u8_row(&mut dst[..out_row_len]);
         }

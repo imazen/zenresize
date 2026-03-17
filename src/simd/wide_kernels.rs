@@ -309,6 +309,98 @@ fn filter_h_u8_i16_generic(
     }
 }
 
+/// Integer horizontal convolution: u8 input → i16 output (unclamped).
+/// Preserves Lanczos ringing without [0,255] clamping.
+#[inline(always)]
+pub(super) fn filter_h_u8_to_i16(
+    input: &[u8],
+    output: &mut [i16],
+    weights: &I16WeightTable,
+    channels: usize,
+) {
+    match channels {
+        4 => filter_h_u8_to_i16_4ch(input, output, weights),
+        _ => filter_h_u8_to_i16_generic(input, output, weights, channels),
+    }
+}
+
+/// 4-channel u8→i16 H kernel using i32x4.
+///
+/// Same accumulation as filter_h_u8_i16_4ch but output stores i16 instead of
+/// clamping to [0,255] u8.
+#[inline(always)]
+fn filter_h_u8_to_i16_4ch(input: &[u8], output: &mut [i16], weights: &I16WeightTable) {
+    let half = i32x4::splat(1 << (I16_PRECISION - 1));
+
+    for out_x in 0..weights.len() {
+        let left = weights.left[out_x] as usize;
+        let w = weights.weights(out_x);
+        let mut acc = i32x4::splat(0);
+
+        for (t, &weight) in w.iter().enumerate() {
+            let off = (left + t) * 4;
+            let pixel = i32x4::new([
+                input[off] as i32,
+                input[off + 1] as i32,
+                input[off + 2] as i32,
+                input[off + 3] as i32,
+            ]);
+            acc += pixel * i32x4::splat(weight as i32);
+        }
+
+        let rounded = (acc + half) >> I16_PRECISION;
+        let arr = rounded.to_array();
+        let out_base = out_x * 4;
+        output[out_base] = arr[0] as i16;
+        output[out_base + 1] = arr[1] as i16;
+        output[out_base + 2] = arr[2] as i16;
+        output[out_base + 3] = arr[3] as i16;
+    }
+}
+
+/// Generic-channel u8→i16 H kernel (scalar).
+#[inline(always)]
+fn filter_h_u8_to_i16_generic(
+    input: &[u8],
+    output: &mut [i16],
+    weights: &I16WeightTable,
+    channels: usize,
+) {
+    for out_x in 0..weights.len() {
+        let left = weights.left[out_x] as usize;
+        let w = weights.weights(out_x);
+        let out_base = out_x * channels;
+
+        for c in 0..channels {
+            let mut acc: i32 = 0;
+            for (t, &weight) in w.iter().enumerate() {
+                acc += input[(left + t) * channels + c] as i32 * weight as i32;
+            }
+            let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+            output[out_base + c] = rounded as i16;
+        }
+    }
+}
+
+/// 4-row batch u8→i16 H kernel. Calls single-row 4 times.
+#[inline(always)]
+pub(super) fn filter_h_u8_to_i16_4rows(
+    in0: &[u8],
+    in1: &[u8],
+    in2: &[u8],
+    in3: &[u8],
+    out0: &mut [i16],
+    out1: &mut [i16],
+    out2: &mut [i16],
+    out3: &mut [i16],
+    weights: &I16WeightTable,
+) {
+    filter_h_u8_to_i16_4ch(in0, out0, weights);
+    filter_h_u8_to_i16_4ch(in1, out1, weights);
+    filter_h_u8_to_i16_4ch(in2, out2, weights);
+    filter_h_u8_to_i16_4ch(in3, out3, weights);
+}
+
 /// 4-row batch integer H kernel. Calls single-row 4 times.
 #[inline(always)]
 pub(super) fn filter_h_u8_i16_4rows(
