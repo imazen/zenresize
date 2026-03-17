@@ -58,10 +58,12 @@ Located in `src/simd/`:
 
 ## TODO
 
-### Compositing composability
-Compositing forces f32 path (correct — needs linear premul f32 math). Consider:
-- Extract compositing into a standalone row processor for callers to compose
-- Per-row i16→f32→composite→u8 in i16 paths (avoids full f32 pipeline)
+### Compositing composability [DONE]
+Blend math extracted into `~/work/zen/zenblend/` (MIT OR Apache-2.0).
+zenresize and zenpipe both delegate to zenblend for all blend operations.
+`BlendMode` enum re-exported from zenresize, `with_blend_mode()` builder on both
+`StreamingResize` and `Resizer`. SrcOver has AVX2+FMA SIMD kernel (2 pixels/iter).
+Remaining: per-row i16→f32→composite→u8 in i16 paths (avoids full f32 pipeline).
 
 ### Native AVX-512 for remaining hot-path kernels
 `filter_v_row_i16` has a native AVX-512 kernel (32 i16/iter). Still delegating to AVX2:
