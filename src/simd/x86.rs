@@ -1442,7 +1442,7 @@ pub(crate) fn filter_h_i16_i16_v3(
                         acc += input[(left + t) * channels + c] as i32 * weight as i32;
                     }
                     let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
-                    output[out_base + c] = rounded.clamp(0, 4095) as i16;
+                    output[out_base + c] = rounded as i16;
                 }
             }
         }
@@ -1483,7 +1483,7 @@ fn filter_h_i16_4ch(
                     acc += input[(left + t) * 4 + c] as i32 * weight as i32;
                 }
                 let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
-                output[out_base + c] = rounded.clamp(0, 4095) as i16;
+                output[out_base + c] = rounded as i16;
             }
         }
         return;
@@ -1499,7 +1499,6 @@ fn filter_h_i16_4ch(
     let xmm_shuffle = _mm_set_epi8(15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0);
     let half = _mm_set1_epi32(1 << (I16_PRECISION - 1));
     let zero = _mm_setzero_si128();
-    let max_val = _mm_set1_epi16(4095);
 
     // Weight chunks: contiguous stride-16 i16 array.
     let ew_all = weights.expanded_4ch_all();
@@ -1543,12 +1542,11 @@ fn filter_h_i16_4ch(
             let rounded = _mm_add_epi32(final_acc, half);
             let shifted = _mm_srai_epi32::<{ I16_PRECISION }>(rounded);
 
-            // Pack i32 → i16 and clamp to 0-4095
+            // Pack i32 → i16 (signed saturation to i16 range, no [0,4095] clamp)
             let packed16 = _mm_packs_epi32(shifted, zero);
-            let clamped = _mm_min_epi16(_mm_max_epi16(packed16, zero), max_val);
 
             // Store 4 × i16 (8 bytes)
-            _mm_storeu_si64(&mut out_pixels[out_x], clamped);
+            _mm_storeu_si64(&mut out_pixels[out_x], packed16);
         }
     } else {
         // Per-pixel edge check path
@@ -1594,8 +1592,7 @@ fn filter_h_i16_4ch(
                 let rounded = _mm_add_epi32(final_acc, half);
                 let shifted = _mm_srai_epi32::<{ I16_PRECISION }>(rounded);
                 let packed16 = _mm_packs_epi32(shifted, zero);
-                let clamped = _mm_min_epi16(_mm_max_epi16(packed16, zero), max_val);
-                _mm_storeu_si64(&mut out_pixels[out_x], clamped);
+                _mm_storeu_si64(&mut out_pixels[out_x], packed16);
             } else {
                 // Scalar fallback for edge pixels
                 let w = weights.weights(out_x);
@@ -1605,7 +1602,7 @@ fn filter_h_i16_4ch(
                         acc += input[(left + t) * 4 + c] as i32 * weight as i32;
                     }
                     let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
-                    out_pixels[out_x][c] = rounded.clamp(0, 4095) as i16;
+                    out_pixels[out_x][c] = rounded as i16;
                 }
             }
         }
@@ -1633,8 +1630,6 @@ pub(crate) fn filter_v_all_i16_i16_v3(
     let half = _mm256_set1_epi32(1 << (I16_PRECISION - 1));
     let chunks8 = h_row_len / 8;
     let in_h_i32 = in_h as i32;
-    let max_val = _mm_set1_epi16(4095);
-    let zero_xmm = _mm_setzero_si128();
 
     // Pre-chunk all intermediate rows for direct indexing.
     let mut int_row_chunks: Vec<&[[i16; 8]]> = Vec::with_capacity(in_h);
@@ -1735,10 +1730,7 @@ pub(crate) fn filter_v_all_i16_i16_v3(
                 let a_hi = _mm256_extracti128_si256::<1>(shifted_a);
                 _mm_storeu_si128(
                     idx_mut(chunks_a, ci),
-                    _mm_min_epi16(
-                        _mm_max_epi16(_mm_packs_epi32(a_lo, a_hi), zero_xmm),
-                        max_val,
-                    ),
+                    _mm_packs_epi32(a_lo, a_hi),
                 );
 
                 // Pack and store row B.
@@ -1748,10 +1740,7 @@ pub(crate) fn filter_v_all_i16_i16_v3(
                 let b_hi = _mm256_extracti128_si256::<1>(shifted_b);
                 _mm_storeu_si128(
                     idx_mut(chunks_b, ci),
-                    _mm_min_epi16(
-                        _mm_max_epi16(_mm_packs_epi32(b_lo, b_hi), zero_xmm),
-                        max_val,
-                    ),
+                    _mm_packs_epi32(b_lo, b_hi),
                 );
             }
 
@@ -1764,7 +1753,7 @@ pub(crate) fn filter_v_all_i16_i16_v3(
                         * w_a[t] as i32;
                 }
                 *out_val =
-                    ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095) as i16;
+                    ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION) as i16;
             }
             for (x, out_val) in tail_b.iter_mut().enumerate() {
                 let mut acc: i32 = 0;
@@ -1773,7 +1762,7 @@ pub(crate) fn filter_v_all_i16_i16_v3(
                         * w_b[t] as i32;
                 }
                 *out_val =
-                    ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095) as i16;
+                    ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION) as i16;
             }
             out_y += 2;
         } else {
@@ -1807,10 +1796,7 @@ pub(crate) fn filter_v_all_i16_i16_v3(
                 let lo_128 = _mm256_castsi256_si128(shifted);
                 let hi_128 = _mm256_extracti128_si256::<1>(shifted);
                 let packed = _mm_packs_epi32(lo_128, hi_128);
-                _mm_storeu_si128(
-                    out_chunk,
-                    _mm_min_epi16(_mm_max_epi16(packed, zero_xmm), max_val),
-                );
+                _mm_storeu_si128(out_chunk, packed);
             }
 
             let tail_start = chunks8 * 8;
@@ -1821,7 +1807,7 @@ pub(crate) fn filter_v_all_i16_i16_v3(
                         * w_a[t] as i32;
                 }
                 *out_val =
-                    ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095) as i16;
+                    ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION) as i16;
             }
             out_y += 1;
         }
@@ -1956,8 +1942,6 @@ pub(crate) fn filter_v_row_i16_v3(
     debug_assert_eq!(tap_count, weights.len());
 
     let half = _mm256_set1_epi32(1 << (I16_PRECISION - 1));
-    let max_val = _mm_set1_epi16(4095);
-    let zero_xmm = _mm_setzero_si128();
     let chunks8 = width / 8;
 
     // Pre-chunk row slices for direct indexing (stack array, no heap alloc).
@@ -2020,9 +2004,8 @@ pub(crate) fn filter_v_row_i16_v3(
         let lo_128 = _mm256_castsi256_si128(shifted);
         let hi_128 = _mm256_extracti128_si256::<1>(shifted);
         let packed = _mm_packs_epi32(lo_128, hi_128);
-        let clamped = _mm_min_epi16(_mm_max_epi16(packed, zero_xmm), max_val);
 
-        _mm_storeu_si128(out_chunk, clamped);
+        _mm_storeu_si128(out_chunk, packed);
     }
 
     // Scalar tail
@@ -2033,7 +2016,7 @@ pub(crate) fn filter_v_row_i16_v3(
             acc += row[tail_start + x] as i32 * weight as i32;
         }
         let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
-        *out_val = rounded.clamp(0, 4095) as i16;
+        *out_val = rounded as i16;
     }
 }
 

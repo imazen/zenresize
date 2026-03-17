@@ -472,8 +472,6 @@ pub(super) fn filter_h_i16_i16(
 #[inline(always)]
 fn filter_h_i16_i16_4ch(input: &[i16], output: &mut [i16], weights: &I16WeightTable) {
     let half = i32x4::splat(1 << (I16_PRECISION - 1));
-    let zero = i32x4::splat(0);
-    let max_val = i32x4::splat(4095);
 
     for out_x in 0..weights.len() {
         let left = weights.left[out_x] as usize;
@@ -492,8 +490,7 @@ fn filter_h_i16_i16_4ch(input: &[i16], output: &mut [i16], weights: &I16WeightTa
         }
 
         let rounded = (acc + half) >> I16_PRECISION;
-        let clamped = rounded.max(zero).min(max_val);
-        let arr = clamped.to_array();
+        let arr = rounded.to_array();
         let out_base = out_x * 4;
         output[out_base] = arr[0] as i16;
         output[out_base + 1] = arr[1] as i16;
@@ -521,7 +518,7 @@ fn filter_h_i16_i16_generic(
                 acc += input[(left + t) * channels + c] as i32 * weight as i32;
             }
             let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
-            output[out_base + c] = rounded.clamp(0, 4095) as i16;
+            output[out_base + c] = rounded as i16;
         }
     }
 }
@@ -575,22 +572,14 @@ pub(super) fn filter_v_all_i16_i16(
                 }
 
                 let half = i32x4::splat(1 << (I16_PRECISION - 1));
-                let zero = i32x4::splat(0);
-                let max_val = i32x4::splat(4095);
 
-                let ca = ((acc_a + half) >> I16_PRECISION)
-                    .max(zero)
-                    .min(max_val)
-                    .to_array();
+                let ca = ((acc_a + half) >> I16_PRECISION).to_array();
                 output[out_start_a + x] = ca[0] as i16;
                 output[out_start_a + x + 1] = ca[1] as i16;
                 output[out_start_a + x + 2] = ca[2] as i16;
                 output[out_start_a + x + 3] = ca[3] as i16;
 
-                let cb = ((acc_b + half) >> I16_PRECISION)
-                    .max(zero)
-                    .min(max_val)
-                    .to_array();
+                let cb = ((acc_b + half) >> I16_PRECISION).to_array();
                 output[out_start_b + x] = cb[0] as i16;
                 output[out_start_b + x + 1] = cb[1] as i16;
                 output[out_start_b + x + 2] = cb[2] as i16;
@@ -607,9 +596,9 @@ pub(super) fn filter_v_all_i16_i16(
                     acc_b += v * w_b[t] as i32;
                 }
                 output[out_start_a + x] =
-                    ((acc_a + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095) as i16;
+                    ((acc_a + (1 << (I16_PRECISION - 1))) >> I16_PRECISION) as i16;
                 output[out_start_b + x] =
-                    ((acc_b + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095) as i16;
+                    ((acc_b + (1 << (I16_PRECISION - 1))) >> I16_PRECISION) as i16;
             }
             out_y += 2;
         } else {
@@ -633,8 +622,7 @@ pub(super) fn filter_v_all_i16_i16(
 
                 let half = i32x4::splat(1 << (I16_PRECISION - 1));
                 let shifted = (acc + half) >> I16_PRECISION;
-                let clamped = shifted.max(i32x4::splat(0)).min(i32x4::splat(4095));
-                let arr = clamped.to_array();
+                let arr = shifted.to_array();
                 output[out_start + x] = arr[0] as i16;
                 output[out_start + x + 1] = arr[1] as i16;
                 output[out_start + x + 2] = arr[2] as i16;
@@ -648,7 +636,7 @@ pub(super) fn filter_v_all_i16_i16(
                     acc += intermediate[in_y_idx * h_row_len + x] as i32 * weight as i32;
                 }
                 output[out_start + x] =
-                    ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 4095) as i16;
+                    ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION) as i16;
             }
             out_y += 1;
         }
@@ -813,6 +801,6 @@ pub(super) fn filter_v_row_i16(rows: &[&[i16]], output: &mut [i16], weights: &[i
             acc += row[x] as i32 * weight as i32;
         }
         let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
-        output[x] = rounded.clamp(0, 4095) as i16;
+        output[x] = rounded as i16;
     }
 }
