@@ -47,6 +47,7 @@ pic-scale = { version = "0.6", default-features = false, features = ["colorspace
 pic-scale-safe = "0.1"
 fast_image_resize = "6"
 zenbench = { path = "/home/lilith/work/zen/zenbench" }
+zenblend = { path = "../zenblend" }
 resize = "0.8"
 rgb = "0.8"
 palette = "0.7"
@@ -117,6 +118,10 @@ harness = false
 
 [[bench]]
 name = "competitors_zen"
+harness = false
+
+[[bench]]
+name = "composite_bench"
 harness = false
 
 [profile.test]
