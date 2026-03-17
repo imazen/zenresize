@@ -77,6 +77,7 @@ pub trait Background {
 ///
 /// This is the default. When used as a generic parameter, the compiler
 /// eliminates all composite code paths (zero overhead).
+#[derive(Clone, Copy)]
 pub struct NoBackground;
 
 impl Background for NoBackground {
@@ -93,6 +94,7 @@ impl Background for NoBackground {
 /// Solid-color background (single premultiplied linear f32 pixel).
 ///
 /// The fast path: no row buffer needed, pixel values fit in registers.
+#[derive(Clone)]
 pub struct SolidBackground {
     pixel: [f32; 4],
     opaque: bool,
@@ -191,6 +193,7 @@ impl Background for SolidBackground {
 ///
 /// The buffer must contain `width * height * channels` elements.
 /// `fill_row` copies the appropriate row into the destination.
+#[derive(Clone, Copy)]
 pub struct SliceBackground<'a> {
     data: &'a [f32],
     row_len: usize,

@@ -25,6 +25,7 @@ use zenpixels::{AlphaMode, ChannelLayout, ChannelType, PixelDescriptor};
 /// This wrapper maps resize-output row `y` → canvas row `y + y_offset` and extracts
 /// the sub-region starting at `x_offset` columns. Used internally by
 /// [`execute_layout_with_background`] when the background covers the full canvas.
+#[derive(Clone)]
 struct OffsetBackground<B: Background> {
     inner: B,
     x_offset: i32,
@@ -404,7 +405,7 @@ pub fn execute_secondary(
 ///
 /// Returns [`CompositeError::PremultipliedInput`] if `desc` uses premultiplied alpha.
 #[allow(clippy::too_many_arguments)]
-pub fn execute_layout_with_background<B: Background>(
+pub fn execute_layout_with_background<B: Background + Clone>(
     decoder_output: &[u8],
     decoder_width: u32,
     decoder_height: u32,
@@ -649,7 +650,7 @@ pub fn execute_layout_with_background<B: Background>(
 /// # Errors
 ///
 /// Returns [`CompositeError::PremultipliedInput`] if `desc` uses premultiplied alpha.
-pub fn execute_with_background<B: Background>(
+pub fn execute_with_background<B: Background + Clone>(
     source_pixels: &[u8],
     ideal: &IdealLayout,
     desc: PixelDescriptor,
@@ -689,7 +690,7 @@ pub fn execute_with_background<B: Background>(
 ///
 /// Returns [`CompositeError::PremultipliedInput`] if `desc` uses premultiplied alpha.
 #[allow(clippy::too_many_arguments)]
-pub fn execute_secondary_with_background<B: Background>(
+pub fn execute_secondary_with_background<B: Background + Clone>(
     source_pixels: &[u8],
     primary_ideal: &IdealLayout,
     primary_source: crate::layout::Size,

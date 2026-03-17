@@ -437,7 +437,10 @@ impl<B: Background> Resizer<B> {
     ///
     /// # Panics
     /// Panics if the config uses `LinearF32` format (use [`resize_f32`](Self::resize_f32) instead).
-    pub fn resize(&mut self, input: &[u8]) -> Vec<u8> {
+    pub fn resize(&mut self, input: &[u8]) -> Vec<u8>
+    where
+        B: Clone,
+    {
         assert!(
             self.config.input.channel_type() == ChannelType::U8,
             "resize() requires Srgb8 format; use resize_f32() for LinearF32 or resize_u16() for Encoded16"
@@ -453,7 +456,10 @@ impl<B: Background> Resizer<B> {
     ///
     /// # Panics
     /// Panics if the config uses `LinearF32` format.
-    pub fn resize_into(&mut self, input: &[u8], output: &mut [u8]) {
+    pub fn resize_into(&mut self, input: &[u8], output: &mut [u8])
+    where
+        B: Clone,
+    {
         assert!(
             self.config.input.channel_type() == ChannelType::U8,
             "resize_into() requires Srgb8 format; use resize_f32_into() for LinearF32 or resize_u16_into() for Encoded16"
@@ -467,28 +473,58 @@ impl<B: Background> Resizer<B> {
         let out_h = config.out_height as usize;
 
         // Delegate to streaming pipeline — unified path for all formats.
+        // When a background is active, pass it through so compositing happens.
         {
             use crate::streaming::StreamingResize;
-            let mut stream = StreamingResize::new(config);
-            let mut out_y = 0usize;
-            for y in 0..in_h {
-                stream
-                    .push_row(&input[y * in_stride..y * in_stride + in_row_len])
-                    .expect("push_row failed in fullframe delegation");
-                while let Some(row) = stream.next_output_row() {
+
+            /// Push all input rows and drain output into the buffer.
+            fn drain_stream<BG: Background>(
+                stream: &mut StreamingResize<BG>,
+                input: &[u8],
+                output: &mut [u8],
+                in_stride: usize,
+                in_row_len: usize,
+                out_row_len: usize,
+                in_h: usize,
+                out_h: usize,
+            ) {
+                let mut out_y = 0usize;
+                for y in 0..in_h {
+                    stream
+                        .push_row(&input[y * in_stride..y * in_stride + in_row_len])
+                        .expect("push_row failed in fullframe delegation");
+                    while let Some(row) = stream.next_output_row() {
+                        let start = out_y * out_row_len;
+                        output[start..start + out_row_len].copy_from_slice(row);
+                        out_y += 1;
+                    }
+                }
+                let remaining = stream.finish();
+                for _ in 0..remaining {
+                    let row =
+                        stream.next_output_row().expect("finish promised remaining rows");
                     let start = out_y * out_row_len;
                     output[start..start + out_row_len].copy_from_slice(row);
                     out_y += 1;
                 }
+                debug_assert_eq!(out_y, out_h);
             }
-            let remaining = stream.finish();
-            for _ in 0..remaining {
-                let row = stream.next_output_row().expect("finish promised remaining rows");
-                let start = out_y * out_row_len;
-                output[start..start + out_row_len].copy_from_slice(row);
-                out_y += 1;
+
+            if self.background.is_transparent() {
+                let mut stream = StreamingResize::new(config);
+                drain_stream(
+                    &mut stream, input, output, in_stride, in_row_len, out_row_len, in_h,
+                    out_h,
+                );
+            } else {
+                let mut stream =
+                    StreamingResize::with_background(config, self.background.clone())
+                        .expect("background setup failed — premultiplied input should have been rejected by Resizer::with_background");
+                drain_stream(
+                    &mut stream, input, output, in_stride, in_row_len, out_row_len, in_h,
+                    out_h,
+                );
             }
-            debug_assert_eq!(out_y, out_h);
         }
 
         /* Old fullframe match arms deleted — see git history. Formerly:

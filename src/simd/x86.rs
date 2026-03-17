@@ -2309,13 +2309,22 @@ pub(crate) fn filter_v_row_i16_v3(
     let tap_count = rows.len();
     debug_assert_eq!(tap_count, weights.len());
 
+    // Fall back to scalar for extreme upscale (>128 taps exceeds stack arrays).
+    const MAX_TAPS: usize = 128;
+    if tap_count > MAX_TAPS {
+        super::scalar::filter_v_row_i16_scalar(
+            archmage::ScalarToken,
+            rows,
+            output,
+            weights,
+        );
+        return;
+    }
+
     let half = _mm256_set1_epi32(1 << (I16_PRECISION - 1));
     let chunks8 = width / 8;
 
-    // Pre-chunk row slices for direct indexing (stack array, no heap alloc).
-    const MAX_TAPS: usize = 128;
-    debug_assert!(tap_count <= MAX_TAPS);
-    let effective_taps = tap_count.min(MAX_TAPS);
+    let effective_taps = tap_count;
     let empty_chunks: &[[i16; 8]] = &[];
     let mut row_chunks = [empty_chunks; MAX_TAPS];
     for (t, slot) in row_chunks.iter_mut().enumerate().take(effective_taps) {
