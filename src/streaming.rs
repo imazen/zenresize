@@ -507,16 +507,17 @@ impl<B: Background> StreamingResize<B> {
         // exact match — any other transfer (BT.709, PQ, HLG) goes to f32.
         let input_tf = config.effective_input_transfer();
         let output_tf = config.effective_output_transfer();
-        let is_u8_format = config.input.channel_type() == ChannelType::U8;
+        let is_u8_io = config.input.channel_type() == ChannelType::U8
+            && config.output.channel_type() == ChannelType::U8;
         let path = if !active_composite
-            && is_u8_format
+            && is_u8_io
             && input_tf == TransferFunction::Linear
             && output_tf == TransferFunction::Linear
             && channels == 4
         {
             StreamingPath::I16Srgb
         } else if !active_composite
-            && is_u8_format
+            && is_u8_io
             && input_tf == TransferFunction::Srgb
             && output_tf == TransferFunction::Srgb
             && channels == 4
@@ -867,6 +868,11 @@ impl<B: Background> StreamingResize<B> {
         &mut self.background
     }
 
+    /// Consume the streaming resizer and return the background.
+    pub fn into_background(self) -> B {
+        self.background
+    }
+
     /// Query the internal working format.
     ///
     /// Callers can use this to produce input data in the optimal format,
@@ -879,6 +885,25 @@ impl<B: Background> StreamingResize<B> {
             StreamingPath::I16Srgb => WorkingFormat::I16Srgb,
             StreamingPath::I16Linear => WorkingFormat::I16Linear,
         }
+    }
+
+    /// Reset the streaming resizer for reuse with a new image of the same dimensions.
+    ///
+    /// Clears all internal state (ring buffer indices, output counters, orientation
+    /// buffers) while preserving weight tables and allocated buffers. This avoids
+    /// the cost of recomputing weight tables (~1ms for 4K Lanczos3).
+    pub fn reset(&mut self) {
+        self.cache_write_idx = 0;
+        self.input_rows_received = 0;
+        self.output_rows_produced = 0;
+        self.finished = false;
+        self.paired_row_ready = false;
+        self.source_row_index = 0;
+        self.orient_rows_emitted = 0;
+        self.orient_ready = false;
+        self.orient_captured = 0;
+        self.pad_top_emitted = 0;
+        self.pad_bottom_emitted = 0;
     }
 
     /// How many input rows must be pushed before the first output row.
