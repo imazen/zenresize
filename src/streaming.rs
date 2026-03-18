@@ -2350,18 +2350,15 @@ impl<B: Background> StreamingResize<B> {
         );
 
         // mask: shape output transparency (after composite, before unpremul)
+        // Uses span hints to skip opaque center and zero transparent edges,
+        // only running per-pixel multiply on the partial corner arcs.
         if let Some(ref mask) = self.mask {
-            use zenblend::mask::MaskFill;
-            let fill = mask.fill_mask_row(&mut self.mask_buf, out_y);
-            match fill {
-                MaskFill::AllOpaque => {} // no-op
-                MaskFill::AllTransparent => {
-                    self.temp_output_f32[..out_row_len].fill(0.0);
-                }
-                MaskFill::Partial => {
-                    zenblend::mask_row(&mut self.temp_output_f32[..out_row_len], &self.mask_buf);
-                }
-            }
+            zenblend::apply_mask_spans(
+                &mut self.temp_output_f32[..out_row_len],
+                &mut self.mask_buf,
+                mask.as_ref(),
+                out_y,
+            );
         }
 
         if self.needs_premul {
