@@ -65,6 +65,25 @@ zenresize and zenpipe both delegate to zenblend for all blend operations.
 `StreamingResize` and `Resizer`. SrcOver has AVX2+FMA SIMD kernel (2 pixels/iter).
 Remaining: per-row i16→f32→composite→u8 in i16 paths (avoids full f32 pipeline).
 
+### zenblend blend modes + mask pipeline [DONE]
+**Phase 1:** 9 new separable blend modes: LinearBurn, LinearDodge, VividLight,
+LinearLight, PinLight, HardMix, Divide, Subtract, Plus. Total: 31 modes.
+Plus operates on premultiplied values directly (SVG/CSS semantics).
+
+**Phase 2:** `mask_row_rgb` (RGB×mask, alpha untouched) and `lerp_row`
+(per-pixel interpolation between two rows). Full SIMD: AVX2+FMA (2 px/iter),
+wide f32x4 (NEON/WASM128), scalar.
+
+**Phase 3:** `LinearGradientMask` and `RadialGradientMask` implementing MaskSource.
+No new dependencies. Pure math with MaskFill hints for uniform-row optimization.
+
+**Phase 4:** `StreamingResize::with_mask()` builder. Pipeline: resize → composite
+→ mask → unpremultiply. Forces f32 path when mask present. Re-exports MaskSource,
+MaskFill, RoundedRectMask, LinearGradientMask, RadialGradientMask from zenblend.
+
+**Phase 5:** `zenpipe::sources::MaskTransformSource` for standalone no-resize masking.
+Requires RGBAF32_LINEAR_PREMUL upstream.
+
 ### Native AVX-512 for remaining hot-path kernels
 `filter_v_row_i16` has a native AVX-512 kernel (32 i16/iter). Still delegating to AVX2:
 - `filter_h_u8_to_i16` — H-filter for sRGB i16 path
