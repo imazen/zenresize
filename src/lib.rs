@@ -87,7 +87,7 @@ pub use composite::{
 
 pub use zenblend::mask::{
     LinearGradientMask, MaskFill, MaskSource, MaskSpan, MaskSpans, RadialGradientMask,
-    RoundedRectMask, SpanKind,
+    RoundedRectMask, SpanKind, mask_pixel_align,
 };
 
 pub use resize::{
