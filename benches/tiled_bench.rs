@@ -146,7 +146,11 @@ fn bench_correctness(c: &mut Criterion) {
             &setup.v_weights,
             tile_chunks,
         );
-        assert_eq!(baseline, tiled, "Tiled output (tile_chunks={}) differs from baseline!", tile_chunks);
+        assert_eq!(
+            baseline, tiled,
+            "Tiled output (tile_chunks={}) differs from baseline!",
+            tile_chunks
+        );
     }
 
     c.bench_function("correctness_verified", |b| {

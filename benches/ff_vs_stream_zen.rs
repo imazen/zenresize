@@ -8,9 +8,15 @@ fn make_gradient(w: u32, h: u32, channels: usize) -> Vec<u8> {
         for x in 0..w {
             let i = (y * w + x) as usize * channels;
             buf[i] = (x % 256) as u8;
-            if channels >= 2 { buf[i + 1] = (y % 256) as u8; }
-            if channels >= 3 { buf[i + 2] = ((x + y) % 256) as u8; }
-            if channels >= 4 { buf[i + 3] = 255; }
+            if channels >= 2 {
+                buf[i + 1] = (y % 256) as u8;
+            }
+            if channels >= 3 {
+                buf[i + 2] = ((x + y) % 256) as u8;
+            }
+            if channels >= 4 {
+                buf[i + 3] = 255;
+            }
         }
     }
     buf
@@ -26,11 +32,12 @@ fn streaming_resize(config: &zenresize::ResizeConfig, input: &[u8]) -> Vec<u8> {
     let row_len = in_w * channels;
     let in_h = config.in_height as usize;
     let mut resizer = zenresize::StreamingResize::new(config);
-    let mut output = Vec::with_capacity(
-        config.out_width as usize * config.out_height as usize * channels,
-    );
+    let mut output =
+        Vec::with_capacity(config.out_width as usize * config.out_height as usize * channels);
     for y in 0..in_h {
-        resizer.push_row(&input[y * row_len..(y + 1) * row_len]).unwrap();
+        resizer
+            .push_row(&input[y * row_len..(y + 1) * row_len])
+            .unwrap();
         while let Some(row) = resizer.next_output_row() {
             output.extend_from_slice(row);
         }
@@ -64,37 +71,53 @@ struct Scenario {
 fn scenarios() -> Vec<Scenario> {
     let mut out = Vec::new();
 
-    let mut add = |label, in_w, in_h, out_w, out_h,
+    let mut add = |label,
+                   in_w,
+                   in_h,
+                   out_w,
+                   out_h,
                    build: fn(u32, u32, u32, u32) -> zenresize::ResizeConfig| {
         let config = build(in_w, in_h, out_w, out_h);
         let channels = config.input.channels();
         let input = make_gradient(in_w, in_h, channels);
-        out.push(Scenario { label, in_w, in_h, out_w, out_h, config, input });
+        out.push(Scenario {
+            label,
+            in_w,
+            in_h,
+            out_w,
+            out_h,
+            config,
+            input,
+        });
     };
 
     fn srgb4(iw: u32, ih: u32, ow: u32, oh: u32) -> zenresize::ResizeConfig {
         zenresize::ResizeConfig::builder(iw, ih, ow, oh)
             .filter(zenresize::Filter::Lanczos)
             .format(zenresize::PixelDescriptor::RGBA8_SRGB)
-            .srgb().build()
+            .srgb()
+            .build()
     }
     fn linear4(iw: u32, ih: u32, ow: u32, oh: u32) -> zenresize::ResizeConfig {
         zenresize::ResizeConfig::builder(iw, ih, ow, oh)
             .filter(zenresize::Filter::Lanczos)
             .format(zenresize::PixelDescriptor::RGBX8_SRGB)
-            .linear().build()
+            .linear()
+            .build()
     }
     fn f32_3ch(iw: u32, ih: u32, ow: u32, oh: u32) -> zenresize::ResizeConfig {
         zenresize::ResizeConfig::builder(iw, ih, ow, oh)
             .filter(zenresize::Filter::Lanczos)
             .format(zenresize::PixelDescriptor::RGB8_SRGB)
-            .linear().build()
+            .linear()
+            .build()
     }
     fn alpha4(iw: u32, ih: u32, ow: u32, oh: u32) -> zenresize::ResizeConfig {
         zenresize::ResizeConfig::builder(iw, ih, ow, oh)
             .filter(zenresize::Filter::Lanczos)
             .format(zenresize::PixelDescriptor::RGBA8_SRGB)
-            .linear().build()
+            .linear()
+            .build()
     }
 
     add("srgb4_1024_2x", 1024, 1024, 512, 512, srgb4);

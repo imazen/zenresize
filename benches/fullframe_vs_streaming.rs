@@ -75,9 +75,8 @@ fn streaming_resize(config: &zenresize::ResizeConfig, input: &[u8]) -> Vec<u8> {
     let in_h = config.in_height as usize;
 
     let mut resizer = zenresize::StreamingResize::new(config);
-    let mut output = Vec::with_capacity(
-        config.out_width as usize * config.out_height as usize * channels,
-    );
+    let mut output =
+        Vec::with_capacity(config.out_width as usize * config.out_height as usize * channels);
 
     for y in 0..in_h {
         resizer
@@ -112,9 +111,8 @@ fn streaming_resize_batch(config: &zenresize::ResizeConfig, input: &[u8], batch:
     let in_h = config.in_height as usize;
 
     let mut resizer = zenresize::StreamingResize::with_batch_hint(config, batch as u32);
-    let mut output = Vec::with_capacity(
-        config.out_width as usize * config.out_height as usize * channels,
-    );
+    let mut output =
+        Vec::with_capacity(config.out_width as usize * config.out_height as usize * channels);
 
     let mut pushed = 0usize;
     while pushed < in_h {
@@ -146,11 +144,7 @@ struct QualityResult {
     streaming_path: String,
 }
 
-fn compare_quality(
-    label: &str,
-    config: &zenresize::ResizeConfig,
-    input: &[u8],
-) -> QualityResult {
+fn compare_quality(label: &str, config: &zenresize::ResizeConfig, input: &[u8]) -> QualityResult {
     let full = fullframe_resize(config, input);
     let stream = streaming_resize(config, input);
 
@@ -329,14 +323,22 @@ fn main() {
     let all = scenarios();
 
     // ===== QUALITY COMPARISON =====
-    println!("╔══════════════════════════════════════════════════════════════════════════════════════╗");
-    println!("║ QUALITY: Fullframe vs Streaming                                                    ║");
-    println!("╠══════════════════════════════════════════════════════════════════════════════════════╣");
+    println!(
+        "╔══════════════════════════════════════════════════════════════════════════════════════╗"
+    );
+    println!(
+        "║ QUALITY: Fullframe vs Streaming                                                    ║"
+    );
+    println!(
+        "╠══════════════════════════════════════════════════════════════════════════════════════╣"
+    );
     println!(
         "║ {:<24} {:>8} {:>8} {:>8} {:>12} {:>12} ║",
         "Scenario", "MaxDiff", "MeanDif", "PSNR", "FF Path", "ST Path"
     );
-    println!("╠══════════════════════════════════════════════════════════════════════════════════════╣");
+    println!(
+        "╠══════════════════════════════════════════════════════════════════════════════════════╣"
+    );
 
     for s in &all {
         let q = compare_quality(s.label, &s.config, &s.input);
@@ -350,7 +352,9 @@ fn main() {
             q.label, q.max_diff, q.mean_diff, psnr_str, q.fullframe_path, q.streaming_path
         );
     }
-    println!("╚══════════════════════════════════════════════════════════════════════════════════════╝");
+    println!(
+        "╚══════════════════════════════════════════════════════════════════════════════════════╝"
+    );
     println!();
 
     // ===== PERFORMANCE COMPARISON =====
@@ -361,7 +365,9 @@ fn main() {
         "║ {:<24} {:>10} {:>10} {:>10} {:>10} {:>7} {:>7} ║",
         "Scenario", "Fullframe", "VFirst", "HFirst", "Best", "VF/FF", "HF/FF"
     );
-    println!("╠══════════════════════════════════════════════════════════════════════════════════════╣");
+    println!(
+        "╠══════════════════════════════════════════════════════════════════════════════════════╣"
+    );
 
     for s in &all {
         let has_hfirst = true; // now available for all channel counts
@@ -406,14 +412,22 @@ fn main() {
 
         let ff_mean = mean(&ff_times);
         let vf_mean = mean(&vf_times);
-        let hf_mean = if has_hfirst { mean(&hf_times) } else { f64::NAN };
+        let hf_mean = if has_hfirst {
+            mean(&hf_times)
+        } else {
+            f64::NAN
+        };
 
         let ff_ci = ci95(&ff_times);
         let vf_ci = ci95(&vf_times);
         let hf_ci = if has_hfirst { ci95(&hf_times) } else { 0.0 };
 
         let vf_ratio = vf_mean / ff_mean;
-        let hf_ratio = if has_hfirst { hf_mean / ff_mean } else { f64::NAN };
+        let hf_ratio = if has_hfirst {
+            hf_mean / ff_mean
+        } else {
+            f64::NAN
+        };
 
         let fmt_time = |us: f64, ci: f64| -> String {
             if us.is_nan() {
@@ -496,8 +510,8 @@ fn main() {
         let streamer = zenresize::StreamingResize::new(&s.config);
         let st_format = streamer.working_format();
         let st_elem = match st_format {
-            zenresize::WorkingFormat::F32 => 2,     // f16 ring
-            zenresize::WorkingFormat::I16Srgb => 1,  // u8 ring
+            zenresize::WorkingFormat::F32 => 2,       // f16 ring
+            zenresize::WorkingFormat::I16Srgb => 1,   // u8 ring
             zenresize::WorkingFormat::I16Linear => 2, // i16 ring
             _ => 4,
         };

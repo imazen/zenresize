@@ -82,7 +82,9 @@ pub(crate) fn filter_h_u8_to_i16_4rows_neon(
     out3: &mut [i16],
     weights: &I16WeightTable,
 ) {
-    super::wide_kernels::filter_h_u8_to_i16_4rows(in0, in1, in2, in3, out0, out1, out2, out3, weights)
+    super::wide_kernels::filter_h_u8_to_i16_4rows(
+        in0, in1, in2, in3, out0, out1, out2, out3, weights,
+    )
 }
 
 #[archmage::arcane]

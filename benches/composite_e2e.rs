@@ -30,11 +30,12 @@ fn streaming_resize_composite(
     let row_len = in_w * channels;
     let in_h = config.in_height as usize;
     let mut resizer = zenresize::StreamingResize::with_background(config, bg).unwrap();
-    let mut output = Vec::with_capacity(
-        config.out_width as usize * config.out_height as usize * channels,
-    );
+    let mut output =
+        Vec::with_capacity(config.out_width as usize * config.out_height as usize * channels);
     for y in 0..in_h {
-        resizer.push_row(&input[y * row_len..(y + 1) * row_len]).unwrap();
+        resizer
+            .push_row(&input[y * row_len..(y + 1) * row_len])
+            .unwrap();
         while let Some(row) = resizer.next_output_row() {
             output.extend_from_slice(row);
         }
@@ -46,20 +47,18 @@ fn streaming_resize_composite(
     output
 }
 
-fn streaming_resize_no_bg(
-    config: &zenresize::ResizeConfig,
-    input: &[u8],
-) -> Vec<u8> {
+fn streaming_resize_no_bg(config: &zenresize::ResizeConfig, input: &[u8]) -> Vec<u8> {
     let in_w = config.in_width as usize;
     let channels = config.input.channels();
     let row_len = in_w * channels;
     let in_h = config.in_height as usize;
     let mut resizer = zenresize::StreamingResize::new(config);
-    let mut output = Vec::with_capacity(
-        config.out_width as usize * config.out_height as usize * channels,
-    );
+    let mut output =
+        Vec::with_capacity(config.out_width as usize * config.out_height as usize * channels);
     for y in 0..in_h {
-        resizer.push_row(&input[y * row_len..(y + 1) * row_len]).unwrap();
+        resizer
+            .push_row(&input[y * row_len..(y + 1) * row_len])
+            .unwrap();
         while let Some(row) = resizer.next_output_row() {
             output.extend_from_slice(row);
         }
@@ -81,9 +80,27 @@ struct Scenario {
 
 zenbench::main!(|suite| {
     let scenarios = [
-        Scenario { label: "4K→1080p", in_w: 3840, in_h: 2160, out_w: 1920, out_h: 1080 },
-        Scenario { label: "4K→800x600", in_w: 4000, in_h: 3000, out_w: 800, out_h: 600 },
-        Scenario { label: "1080p→4K up", in_w: 1920, in_h: 1080, out_w: 3840, out_h: 2160 },
+        Scenario {
+            label: "4K→1080p",
+            in_w: 3840,
+            in_h: 2160,
+            out_w: 1920,
+            out_h: 1080,
+        },
+        Scenario {
+            label: "4K→800x600",
+            in_w: 4000,
+            in_h: 3000,
+            out_w: 800,
+            out_h: 600,
+        },
+        Scenario {
+            label: "1080p→4K up",
+            in_w: 1920,
+            in_h: 1080,
+            out_w: 3840,
+            out_h: 2160,
+        },
     ];
 
     for s in &scenarios {
@@ -120,7 +137,9 @@ zenbench::main!(|suite| {
                     let c = config.clone();
                     let i = input.clone();
                     b.iter(|| {
-                        let bg = zenresize::SolidBackground::white(zenresize::PixelDescriptor::RGBA8_SRGB);
+                        let bg = zenresize::SolidBackground::white(
+                            zenresize::PixelDescriptor::RGBA8_SRGB,
+                        );
                         black_box(streaming_resize_composite(&c, &i, bg));
                     });
                 });
@@ -133,7 +152,13 @@ zenbench::main!(|suite| {
                     let c = config.clone();
                     let i = input.clone();
                     b.iter(|| {
-                        let bg = zenresize::SolidBackground::from_srgb_u8(128, 128, 128, 128, zenresize::PixelDescriptor::RGBA8_SRGB);
+                        let bg = zenresize::SolidBackground::from_srgb_u8(
+                            128,
+                            128,
+                            128,
+                            128,
+                            zenresize::PixelDescriptor::RGBA8_SRGB,
+                        );
                         black_box(streaming_resize_composite(&c, &i, bg));
                     });
                 });

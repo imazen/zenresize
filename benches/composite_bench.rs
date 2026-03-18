@@ -73,11 +73,7 @@ fn make_bg(width: usize) -> Vec<f32> {
 }
 
 zenbench::main!(|suite| {
-    let widths: &[(usize, &str)] = &[
-        (256, "256px"),
-        (1920, "1920px"),
-        (4096, "4096px"),
-    ];
+    let widths: &[(usize, &str)] = &[(256, "256px"), (1920, "1920px"), (4096, "4096px")];
 
     for &(width, label) in widths {
         let fg_template = make_fg(width);
@@ -146,7 +142,11 @@ zenbench::main!(|suite| {
                         let mut fg = fg_t.clone();
                         b.iter(|| {
                             fg.copy_from_slice(&fg_t);
-                            zenblend::blend_row_solid(&mut fg, &pixel, zenblend::BlendMode::SrcOver);
+                            zenblend::blend_row_solid(
+                                &mut fg,
+                                &pixel,
+                                zenblend::BlendMode::SrcOver,
+                            );
                             black_box(fg[0]);
                         });
                     });
@@ -179,7 +179,11 @@ zenbench::main!(|suite| {
                         let mut fg = fg_t.clone();
                         b.iter(|| {
                             fg.copy_from_slice(&fg_t);
-                            zenblend::blend_row_solid_opaque(&mut fg, &opaque_pixel, zenblend::BlendMode::SrcOver);
+                            zenblend::blend_row_solid_opaque(
+                                &mut fg,
+                                &opaque_pixel,
+                                zenblend::BlendMode::SrcOver,
+                            );
                             black_box(fg[0]);
                         });
                     });

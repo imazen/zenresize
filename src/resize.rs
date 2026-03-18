@@ -204,7 +204,10 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
-            let row = self.stream.next_output_row().expect("finish promised remaining rows");
+            let row = self
+                .stream
+                .next_output_row()
+                .expect("finish promised remaining rows");
             let start = out_y * out_row_len;
             output[start..start + out_row_len].copy_from_slice(row);
             out_y += 1;
@@ -282,7 +285,10 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
-            let row = self.stream.next_output_row_f32().expect("finish promised remaining rows");
+            let row = self
+                .stream
+                .next_output_row_f32()
+                .expect("finish promised remaining rows");
             let start = out_y * out_row_len;
             output[start..start + out_row_len].copy_from_slice(row);
             out_y += 1;
@@ -362,7 +368,10 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
-            let row = self.stream.next_output_row_u16().expect("finish promised remaining rows");
+            let row = self
+                .stream
+                .next_output_row_u16()
+                .expect("finish promised remaining rows");
             let start = out_y * out_row_len;
             output[start..start + out_row_len].copy_from_slice(row);
             out_y += 1;
@@ -421,7 +430,10 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
-            let row = self.stream.next_output_row_f32().expect("finish promised remaining rows");
+            let row = self
+                .stream
+                .next_output_row_f32()
+                .expect("finish promised remaining rows");
             let start = out_y * out_row_len;
             output[start..start + out_row_len].copy_from_slice(row);
             out_y += 1;
@@ -476,7 +488,10 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
-            let row = self.stream.next_output_row().expect("finish promised remaining rows");
+            let row = self
+                .stream
+                .next_output_row()
+                .expect("finish promised remaining rows");
             let start = out_y * out_row_len;
             output[start..start + out_row_len].copy_from_slice(row);
             out_y += 1;
@@ -531,7 +546,10 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
-            let row = self.stream.next_output_row_u16().expect("finish promised remaining rows");
+            let row = self
+                .stream
+                .next_output_row_u16()
+                .expect("finish promised remaining rows");
             let start = out_y * out_row_len;
             output[start..start + out_row_len].copy_from_slice(row);
             out_y += 1;
@@ -586,7 +604,10 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
-            let row = self.stream.next_output_row().expect("finish promised remaining rows");
+            let row = self
+                .stream
+                .next_output_row()
+                .expect("finish promised remaining rows");
             let start = out_y * out_row_len;
             output[start..start + out_row_len].copy_from_slice(row);
             out_y += 1;
@@ -641,7 +662,10 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
-            let row = self.stream.next_output_row_f32().expect("finish promised remaining rows");
+            let row = self
+                .stream
+                .next_output_row_f32()
+                .expect("finish promised remaining rows");
             let start = out_y * out_row_len;
             output[start..start + out_row_len].copy_from_slice(row);
             out_y += 1;
@@ -696,7 +720,10 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
-            let row = self.stream.next_output_row_u16().expect("finish promised remaining rows");
+            let row = self
+                .stream
+                .next_output_row_u16()
+                .expect("finish promised remaining rows");
             let start = out_y * out_row_len;
             output[start..start + out_row_len].copy_from_slice(row);
             out_y += 1;
@@ -919,7 +946,8 @@ pub fn resize_hfirst_streaming(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
     for y in 0..in_h {
         // H-filter this input row → ring buffer slot
         let slot = y % cache_size;
-        let in_row = &input[y * in_row_len..y * in_row_len + padded_len.min(input.len() - y * in_row_len)];
+        let in_row =
+            &input[y * in_row_len..y * in_row_len + padded_len.min(input.len() - y * in_row_len)];
         simd::filter_h_u8_i16(in_row, &mut ring[slot], &h_weights, channels);
         input_rows_pushed += 1;
 
@@ -1021,7 +1049,13 @@ pub fn resize_hfirst_streaming_f32(config: &ResizeConfig, input: &[u8]) -> Vec<u
     for y in 0..in_h {
         // Decode input row to f32
         let in_row = &input[y * in_row_len..(y + 1) * in_row_len];
-        decode_u8_row(in_row, &mut temp_f32[..in_row_len], input_tf, channels, has_alpha);
+        decode_u8_row(
+            in_row,
+            &mut temp_f32[..in_row_len],
+            input_tf,
+            channels,
+            has_alpha,
+        );
         if needs_premul {
             simd::premultiply_alpha_row(&mut temp_f32[..in_row_len]);
         }

@@ -17,9 +17,15 @@ fn make_gradient(w: u32, h: u32, channels: usize) -> Vec<u8> {
         for x in 0..w {
             let i = (y * w + x) as usize * channels;
             buf[i] = (x % 256) as u8;
-            if channels >= 2 { buf[i + 1] = (y % 256) as u8; }
-            if channels >= 3 { buf[i + 2] = ((x + y) % 256) as u8; }
-            if channels >= 4 { buf[i + 3] = 255; }
+            if channels >= 2 {
+                buf[i + 1] = (y % 256) as u8;
+            }
+            if channels >= 3 {
+                buf[i + 2] = ((x + y) % 256) as u8;
+            }
+            if channels >= 4 {
+                buf[i + 3] = 255;
+            }
         }
     }
     buf
@@ -90,7 +96,9 @@ fn zen_stream_srgb(src: &[u8], iw: u32, ih: u32, ow: u32, oh: u32) -> Vec<u8> {
     let mut resizer = zenresize::StreamingResize::new(&config);
     let mut output = Vec::with_capacity(ow as usize * oh as usize * 4);
     for y in 0..ih as usize {
-        resizer.push_row(&src[y * row_len..(y + 1) * row_len]).unwrap();
+        resizer
+            .push_row(&src[y * row_len..(y + 1) * row_len])
+            .unwrap();
         while let Some(row) = resizer.next_output_row() {
             output.extend_from_slice(row);
         }
@@ -178,9 +186,8 @@ fn fir_f32(src_f32: &[f32], iw: u32, ih: u32, ow: u32, oh: u32) -> Vec<f32> {
     use fast_image_resize as fir;
     use fir::images::{Image, ImageRef};
     use fir::{FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer};
-    let f32_bytes: &[u8] = unsafe {
-        std::slice::from_raw_parts(src_f32.as_ptr() as *const u8, src_f32.len() * 4)
-    };
+    let f32_bytes: &[u8] =
+        unsafe { std::slice::from_raw_parts(src_f32.as_ptr() as *const u8, src_f32.len() * 4) };
     let src_img = ImageRef::new(iw, ih, f32_bytes, PixelType::F32x4).unwrap();
     let mut dst = Image::new(ow, oh, PixelType::F32x4);
     let mut resizer = Resizer::new();
@@ -202,9 +209,14 @@ fn resize_crate(src: &[u8], iw: u32, ih: u32, ow: u32, oh: u32) -> Vec<u8> {
     use rgb::FromSlice;
     let mut dst = vec![0u8; ow as usize * oh as usize * 4];
     let mut resizer = resize::new(
-        iw as usize, ih as usize, ow as usize, oh as usize,
-        resize::Pixel::RGBA8P, resize::Type::Lanczos3,
-    ).unwrap();
+        iw as usize,
+        ih as usize,
+        ow as usize,
+        oh as usize,
+        resize::Pixel::RGBA8P,
+        resize::Type::Lanczos3,
+    )
+    .unwrap();
     resizer.resize(src.as_rgba(), dst.as_rgba_mut()).unwrap();
     dst
 }
@@ -223,10 +235,34 @@ struct Scenario {
 
 fn scenarios() -> Vec<Scenario> {
     vec![
-        Scenario { label: "1024_2x_down",  iw: 1024, ih: 1024, ow: 512,  oh: 512  },
-        Scenario { label: "4k_2x_down",    iw: 3840, ih: 2160, ow: 1920, oh: 1080 },
-        Scenario { label: "4k_10x_down",   iw: 4000, ih: 3000, ow: 400,  oh: 300  },
-        Scenario { label: "576_2x_up",     iw: 576,  ih: 576,  ow: 1152, oh: 1152 },
+        Scenario {
+            label: "1024_2x_down",
+            iw: 1024,
+            ih: 1024,
+            ow: 512,
+            oh: 512,
+        },
+        Scenario {
+            label: "4k_2x_down",
+            iw: 3840,
+            ih: 2160,
+            ow: 1920,
+            oh: 1080,
+        },
+        Scenario {
+            label: "4k_10x_down",
+            iw: 4000,
+            ih: 3000,
+            ow: 400,
+            oh: 300,
+        },
+        Scenario {
+            label: "576_2x_up",
+            iw: 576,
+            ih: 576,
+            ow: 1152,
+            oh: 1152,
+        },
     ]
 }
 
@@ -235,7 +271,11 @@ fn scenarios() -> Vec<Scenario> {
 // ---------------------------------------------------------------------------
 
 zenbench::main!(|suite| {
-    let ps_label = if cfg!(feature = "bench-simd-competitors") { "ps_simd" } else { "ps_scalar" };
+    let ps_label = if cfg!(feature = "bench-simd-competitors") {
+        "ps_simd"
+    } else {
+        "ps_scalar"
+    };
 
     for s in &scenarios() {
         let (iw, ih, ow, oh) = (s.iw, s.ih, s.ow, s.oh);

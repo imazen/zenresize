@@ -525,9 +525,9 @@ pub(crate) fn filter_v_all_i16_i16_tiled_scalar(
                         acc_b += v * w_b[t] as i32;
                     }
                     output[out_start_a + x] =
-                        ((acc_a + (1 << (I16_PRECISION - 1))) >> I16_PRECISION)                            as i16;
+                        ((acc_a + (1 << (I16_PRECISION - 1))) >> I16_PRECISION) as i16;
                     output[out_start_b + x] =
-                        ((acc_b + (1 << (I16_PRECISION - 1))) >> I16_PRECISION)                            as i16;
+                        ((acc_b + (1 << (I16_PRECISION - 1))) >> I16_PRECISION) as i16;
                 }
                 out_y += 2;
             } else {
@@ -539,7 +539,7 @@ pub(crate) fn filter_v_all_i16_i16_tiled_scalar(
                         acc += intermediate[in_y * h_row_len + x] as i32 * weight as i32;
                     }
                     output[out_start + x] =
-                        ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION)                            as i16;
+                        ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION) as i16;
                 }
                 out_y += 1;
             }
