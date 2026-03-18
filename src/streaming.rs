@@ -339,7 +339,7 @@ pub struct StreamingResize<B: Background = NoBackground> {
     blend_mode: composite::BlendMode,
 
     /// Output mask (rounded corners, gradients, etc). Applied after composite, before unpremul.
-    mask: Option<Box<dyn zenblend::mask::MaskSource>>,
+    mask: Option<Box<dyn zenblend::mask::MaskSource + Send>>,
     /// Per-row mask buffer (out_width elements). Empty when mask is None.
     mask_buf: Vec<f32>,
 
@@ -477,7 +477,7 @@ impl<B: Background> StreamingResize<B> {
     /// alpha modulation without precision loss.
     ///
     /// Panics if rows have already been pushed.
-    pub fn with_mask(mut self, mask: impl zenblend::mask::MaskSource + 'static) -> Self {
+    pub fn with_mask(mut self, mask: impl zenblend::mask::MaskSource + Send + 'static) -> Self {
         assert_eq!(
             self.input_rows_received, 0,
             "with_mask must be called before pushing rows"
