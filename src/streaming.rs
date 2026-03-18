@@ -36,7 +36,7 @@
 //! ```
 
 #[cfg(not(feature = "std"))]
-use alloc::{vec, vec::Vec};
+use alloc::{boxed::Box, vec, vec::Vec};
 
 use crate::color;
 use crate::composite::{self, Background, CompositeError, NoBackground};
@@ -338,6 +338,11 @@ pub struct StreamingResize<B: Background = NoBackground> {
     /// Blend mode for compositing (default: SrcOver).
     blend_mode: composite::BlendMode,
 
+    /// Output mask (rounded corners, gradients, etc). Applied after composite, before unpremul.
+    mask: Option<Box<dyn zenblend::mask::MaskSource>>,
+    /// Per-row mask buffer (out_width elements). Empty when mask is None.
+    mask_buf: Vec<f32>,
+
     // === Crop state (zero-cost when not cropping) ===
     /// Current source row index (0-based, tracks full source image rows pushed).
     source_row_index: u32,
@@ -460,6 +465,74 @@ impl<B: Background> StreamingResize<B> {
         );
         self.blend_mode = mode;
         self
+    }
+
+    /// Set an output mask (rounded corners, gradients, etc).
+    ///
+    /// The mask is applied after compositing and before unpremultiply,
+    /// shaping the final output's transparency. In premultiplied space,
+    /// all four RGBA channels are multiplied by the mask value.
+    ///
+    /// Forces the f32 pipeline path — i16 paths can't handle sub-pixel
+    /// alpha modulation without precision loss.
+    ///
+    /// Panics if rows have already been pushed.
+    pub fn with_mask(mut self, mask: impl zenblend::mask::MaskSource + 'static) -> Self {
+        assert_eq!(
+            self.input_rows_received, 0,
+            "with_mask must be called before pushing rows"
+        );
+        let out_width = self.config.out_width as usize;
+        self.mask_buf = vec![0.0f32; out_width];
+        self.mask = Some(Box::new(mask));
+        // Mask requires f32 path for precision
+        if self.path != StreamingPath::F32 {
+            self.switch_to_f32_path();
+        }
+        self
+    }
+
+    /// Switch from an i16 path to f32 path after construction (before any rows pushed).
+    /// Reallocates ring buffer and weight tables for f32 operation.
+    fn switch_to_f32_path(&mut self) {
+        debug_assert_eq!(self.input_rows_received, 0);
+        let mut filter = InterpolationDetails::create(self.config.filter);
+        if let Some(scale) = self.config.kernel_width_scale {
+            filter = filter.with_blur(scale);
+        }
+        match &self.config.lobe_ratio {
+            crate::pixel::LobeRatio::Natural => {}
+            crate::pixel::LobeRatio::Exact(r) => filter = filter.with_lobe_ratio(*r),
+            crate::pixel::LobeRatio::SharpenPercent(p) => filter = filter.with_sharpen_percent(*p),
+        }
+
+        let resize_in_w = self.config.resize_in_width();
+        let h_weights = F32WeightTable::new(resize_in_w, self.config.out_width, &filter);
+        let h_padding = h_weights.max_taps * self.channels;
+        let in_row_len = resize_in_w as usize * self.channels;
+        let v_cache_row_len = in_row_len + h_padding;
+        let out_row_len = self.config.out_width as usize * self.channels;
+
+        self.v_cache = (0..self.cache_size)
+            .map(|_| vec![0u16; v_cache_row_len])
+            .collect();
+        self.temp_input_f32 = vec![0.0f32; v_cache_row_len];
+        self.temp_v_output = vec![0.0f32; v_cache_row_len];
+        self.temp_output_f32 = vec![0.0f32; out_row_len];
+        self.output_buf_u16 = vec![0u16; out_row_len];
+        self.h_weights = Some(h_weights);
+
+        // Clear i16 buffers
+        self.i16_h_weights = None;
+        self.i16_v_weights = None;
+        self.u8_v_cache = Vec::new();
+        self.i16_v_cache = Vec::new();
+        self.temp_v_output_u8 = Vec::new();
+        self.temp_v_output_i16 = Vec::new();
+        self.temp_h_output_i16 = Vec::new();
+        self.linearized_row_i16 = Vec::new();
+
+        self.path = StreamingPath::F32;
     }
 
     /// Create a streaming resizer with background compositing.
@@ -734,6 +807,8 @@ impl<B: Background> StreamingResize<B> {
                     background,
                     composite_bg_row,
                     blend_mode: composite::BlendMode::SrcOver,
+                    mask: None,
+                    mask_buf: Vec::new(),
                     source_row_index: 0,
                     crop_x_offset,
                     crop_y_start,
@@ -767,8 +842,7 @@ impl<B: Background> StreamingResize<B> {
 
                 // H-first: ring buffer stores H-filtered rows at out_width (not in_width)
                 let h_padding_bytes = i16_h_weights.groups4 * 16;
-                let i16_v_cache =
-                    (0..cache_size).map(|_| vec![0i16; out_row_len]).collect();
+                let i16_v_cache = (0..cache_size).map(|_| vec![0i16; out_row_len]).collect();
 
                 Self {
                     config,
@@ -808,6 +882,8 @@ impl<B: Background> StreamingResize<B> {
                     background,
                     composite_bg_row,
                     blend_mode: composite::BlendMode::SrcOver,
+                    mask: None,
+                    mask_buf: Vec::new(),
                     source_row_index: 0,
                     crop_x_offset,
                     crop_y_start,
@@ -841,8 +917,7 @@ impl<B: Background> StreamingResize<B> {
 
                 // H-first: ring buffer stores H-filtered rows at out_width
                 let h_padding_i16 = i16_h_weights.groups4 * 16;
-                let i16_v_cache =
-                    (0..cache_size).map(|_| vec![0i16; out_row_len]).collect();
+                let i16_v_cache = (0..cache_size).map(|_| vec![0i16; out_row_len]).collect();
 
                 Self {
                     config,
@@ -876,6 +951,8 @@ impl<B: Background> StreamingResize<B> {
                     background,
                     composite_bg_row,
                     blend_mode: composite::BlendMode::SrcOver,
+                    mask: None,
+                    mask_buf: Vec::new(),
                     source_row_index: 0,
                     crop_x_offset,
                     crop_y_start,
@@ -1112,10 +1189,7 @@ impl<B: Background> StreamingResize<B> {
                 let out_row_len = self.config.out_width as usize * self.channels;
 
                 let src = if self.needs_premul {
-                    simd::premultiply_u8_row(
-                        pixel_data,
-                        &mut self.temp_v_output_u8[..pixel_len],
-                    );
+                    simd::premultiply_u8_row(pixel_data, &mut self.temp_v_output_u8[..pixel_len]);
                     &self.temp_v_output_u8[..]
                 } else {
                     pixel_data
@@ -1484,9 +1558,12 @@ impl<B: Background> StreamingResize<B> {
                 let i16_h_weights = self.i16_h_weights.as_ref().unwrap();
                 let out_row_len = self.config.out_width as usize * self.channels;
                 // Copy to linearized_row for SIMD padding, then H-filter
-                self.linearized_row_i16.resize(pixel_len + i16_h_weights.groups4 * 16, 0);
+                self.linearized_row_i16
+                    .resize(pixel_len + i16_h_weights.groups4 * 16, 0);
                 self.linearized_row_i16[..pixel_len].copy_from_slice(&row[..pixel_len]);
-                for v in &mut self.linearized_row_i16[pixel_len..] { *v = 0; }
+                for v in &mut self.linearized_row_i16[pixel_len..] {
+                    *v = 0;
+                }
                 simd::filter_h_i16_i16(
                     &self.linearized_row_i16,
                     &mut self.i16_v_cache[cache_slot][..out_row_len],
@@ -1500,7 +1577,9 @@ impl<B: Background> StreamingResize<B> {
             StreamingPath::I16Linear => {
                 // H-first: H-filter i16 input → ring buffer (out_width wide)
                 self.linearized_row_i16[..pixel_len].copy_from_slice(&row[..pixel_len]);
-                for v in &mut self.linearized_row_i16[pixel_len..] { *v = 0; }
+                for v in &mut self.linearized_row_i16[pixel_len..] {
+                    *v = 0;
+                }
                 self.check_ring_buffer().at()?;
                 let cache_slot = self.cache_write_idx % self.cache_size;
                 let i16_h_weights = self.i16_h_weights.as_ref().unwrap();
@@ -2252,7 +2331,7 @@ impl<B: Background> StreamingResize<B> {
         self.output_rows_produced += 1;
     }
 
-    /// V-filter → H-filter → composite → unpremultiply one output row.
+    /// V-filter → H-filter → composite → mask → unpremultiply one output row.
     /// Result in `temp_output_f32`. Increments `output_rows_produced`.
     fn produce_next_f32(&mut self) {
         self.produce_next_f32_raw();
@@ -2260,7 +2339,7 @@ impl<B: Background> StreamingResize<B> {
         let out_y = self.output_rows_produced - 1; // raw already incremented
         let out_row_len = self.config.out_width as usize * self.channels;
 
-        // composite + unpremul (operates on temp_output_f32)
+        // composite (operates on temp_output_f32)
         composite::composite_dispatch(
             &mut self.temp_output_f32[..out_row_len],
             &mut self.background,
@@ -2269,6 +2348,21 @@ impl<B: Background> StreamingResize<B> {
             self.channels as u8,
             self.blend_mode,
         );
+
+        // mask: shape output transparency (after composite, before unpremul)
+        if let Some(ref mask) = self.mask {
+            use zenblend::mask::MaskFill;
+            let fill = mask.fill_mask_row(&mut self.mask_buf, out_y);
+            match fill {
+                MaskFill::AllOpaque => {} // no-op
+                MaskFill::AllTransparent => {
+                    self.temp_output_f32[..out_row_len].fill(0.0);
+                }
+                MaskFill::Partial => {
+                    zenblend::mask_row(&mut self.temp_output_f32[..out_row_len], &self.mask_buf);
+                }
+            }
+        }
 
         if self.needs_premul {
             simd::unpremultiply_alpha_row(&mut self.temp_output_f32[..out_row_len]);
@@ -2313,11 +2407,7 @@ impl<B: Background> StreamingResize<B> {
             resize_in_h,
             out_row_len,
             |rows| {
-                simd::filter_v_row_i16(
-                    rows,
-                    &mut self.temp_v_output_i16[..out_row_len],
-                    weights_a,
-                );
+                simd::filter_v_row_i16(rows, &mut self.temp_v_output_i16[..out_row_len], weights_a);
             },
         );
 
@@ -2400,11 +2490,7 @@ impl<B: Background> StreamingResize<B> {
             resize_in_h,
             out_row_len,
             |rows| {
-                simd::filter_v_row_i16(
-                    rows,
-                    &mut self.temp_v_output_i16[..out_row_len],
-                    weights_a,
-                );
+                simd::filter_v_row_i16(rows, &mut self.temp_v_output_i16[..out_row_len], weights_a);
             },
         );
 
