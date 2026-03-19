@@ -77,9 +77,11 @@ wide f32x4 (NEON/WASM128), scalar.
 **Phase 3:** `LinearGradientMask` and `RadialGradientMask` implementing MaskSource.
 No new dependencies. Pure math with MaskFill hints for uniform-row optimization.
 
-**Phase 4:** `StreamingResize::with_mask()` builder. Pipeline: resize → composite
-→ mask → unpremultiply. Forces f32 path when mask present. Re-exports MaskSource,
-MaskFill, RoundedRectMask, LinearGradientMask, RadialGradientMask from zenblend.
+**Phase 4:** `StreamingResize::with_mask()` builder. Pipeline: resize → mask
+→ composite → unpremultiply. Mask before composite so rounded corners + white
+background → JPEG gets white corners (not transparent-over-black). Forces f32
+path when mask present. Re-exports MaskSource, MaskFill, RoundedRectMask,
+LinearGradientMask, RadialGradientMask from zenblend.
 
 **Phase 5:** `zenpipe::sources::MaskTransformSource` for standalone no-resize masking.
 Requires RGBAF32_LINEAR_PREMUL upstream.

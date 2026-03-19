@@ -338,7 +338,7 @@ pub struct StreamingResize<B: Background = NoBackground> {
     /// Blend mode for compositing (default: SrcOver).
     blend_mode: composite::BlendMode,
 
-    /// Output mask (rounded corners, gradients, etc). Applied after composite, before unpremul.
+    /// Output mask (rounded corners, gradients, etc). Applied before composite and unpremul.
     mask: Option<Box<dyn zenblend::mask::MaskSource + Send>>,
     /// Per-row mask buffer (out_width elements). Empty when mask is None.
     mask_buf: Vec<f32>,
@@ -2331,25 +2331,21 @@ impl<B: Background> StreamingResize<B> {
         self.output_rows_produced += 1;
     }
 
-    /// V-filter → H-filter → composite → mask → unpremultiply one output row.
+    /// V-filter → H-filter → mask → composite → unpremultiply one output row.
     /// Result in `temp_output_f32`. Increments `output_rows_produced`.
+    ///
+    /// Mask runs before composite so that:
+    /// - Mask-only (PNG): mask shapes alpha → no composite → transparent output
+    /// - Composite-only (JPEG): no mask → composite over bg → opaque output
+    /// - Mask + composite (rounded corners on white → JPEG): mask cuts corners
+    ///   to transparent → composite fills transparent with bg → white corners
     fn produce_next_f32(&mut self) {
         self.produce_next_f32_raw();
 
         let out_y = self.output_rows_produced - 1; // raw already incremented
         let out_row_len = self.config.out_width as usize * self.channels;
 
-        // composite (operates on temp_output_f32)
-        composite::composite_dispatch(
-            &mut self.temp_output_f32[..out_row_len],
-            &mut self.background,
-            &mut self.composite_bg_row,
-            out_y,
-            self.channels as u8,
-            self.blend_mode,
-        );
-
-        // mask: shape output transparency (after composite, before unpremul)
+        // mask: shape output transparency (before composite, before unpremul)
         // Uses span hints to skip opaque center and zero transparent edges,
         // only running per-pixel multiply on the partial corner arcs.
         if let Some(ref mask) = self.mask {
@@ -2360,6 +2356,16 @@ impl<B: Background> StreamingResize<B> {
                 out_y,
             );
         }
+
+        // composite: blend over background (operates on temp_output_f32)
+        composite::composite_dispatch(
+            &mut self.temp_output_f32[..out_row_len],
+            &mut self.background,
+            &mut self.composite_bg_row,
+            out_y,
+            self.channels as u8,
+            self.blend_mode,
+        );
 
         if self.needs_premul {
             simd::unpremultiply_alpha_row(&mut self.temp_output_f32[..out_row_len]);
@@ -4520,5 +4526,99 @@ mod tests {
         let r = StreamingResize::new(&config).with_orientation(OrientOutput::FlipH);
         assert_eq!(r.output_row_len(), 10 * 4);
         assert_eq!(r.total_output_height(), 20);
+    }
+
+    // === Mask pipeline ordering tests ===
+
+    #[test]
+    fn mask_only_corner_pixels_transparent() {
+        // Mask-only (no background): corner pixels should have alpha ≈ 0
+        let config = make_config(20, 20, 20, 20);
+        let mask = zenblend::mask::RoundedRectMask::uniform(20, 20, 8.0);
+        let mut resizer = StreamingResize::new(&config).with_mask(mask);
+
+        // Opaque red input
+        let row = vec![255u8; 20 * 4];
+        let rows = push_drain_collect_u8(&mut resizer, &row, 20);
+        assert_eq!(rows.len(), 20);
+
+        // Corner pixel (0,0): should be transparent (alpha ≈ 0)
+        assert!(rows[0][3] < 10, "corner alpha should be near 0, got {}", rows[0][3]);
+        // Center pixel (10,10): should be opaque (alpha ≈ 255)
+        assert!(rows[10][10 * 4 + 3] > 245, "center alpha should be near 255, got {}", rows[10][10 * 4 + 3]);
+    }
+
+    #[test]
+    fn mask_forces_f32_path() {
+        // with_mask should switch from i16 to f32 path
+        let config = make_config(20, 20, 20, 20);
+        let resizer = StreamingResize::new(&config);
+        // Default for RGBA8_SRGB identity is I16Srgb
+        assert_ne!(resizer.working_format(), WorkingFormat::F32);
+
+        let mask = zenblend::mask::RoundedRectMask::uniform(20, 20, 5.0);
+        let resizer = StreamingResize::new(&config).with_mask(mask);
+        assert_eq!(resizer.working_format(), WorkingFormat::F32);
+    }
+
+    #[test]
+    fn mask_plus_background_white_corners() {
+        // Mask + white background: corner pixels should be white, not transparent
+        let config = make_config(20, 20, 20, 20);
+        let mask = zenblend::mask::RoundedRectMask::uniform(20, 20, 8.0);
+        let bg = SolidBackground::white(PixelDescriptor::RGBA8_SRGB);
+        let mut resizer = StreamingResize::with_background(&config, bg)
+            .unwrap()
+            .with_mask(mask);
+
+        // Opaque red input
+        let mut row = vec![0u8; 20 * 4];
+        for px in row.chunks_exact_mut(4) {
+            px.copy_from_slice(&[255, 0, 0, 255]); // red
+        }
+        let rows = push_drain_collect_u8(&mut resizer, &row, 20);
+        assert_eq!(rows.len(), 20);
+
+        // Corner pixel (0,0): mask cuts to transparent, then composite fills
+        // with white. Should be near white (255,255,255,255).
+        let r = rows[0][0];
+        let g = rows[0][1];
+        let b = rows[0][2];
+        let a = rows[0][3];
+        assert!(
+            r > 240 && g > 240 && b > 240 && a > 240,
+            "corner should be near white, got ({r},{g},{b},{a})"
+        );
+
+        // Center pixel (10,10): mask is opaque (1.0), composite blends red
+        // over white with SrcOver. Since red is fully opaque, result is red.
+        let cx = 10 * 4;
+        let r = rows[10][cx];
+        let g = rows[10][cx + 1];
+        let b = rows[10][cx + 2];
+        let a = rows[10][cx + 3];
+        assert!(
+            r > 240 && g < 15 && b < 15 && a > 240,
+            "center should be red, got ({r},{g},{b},{a})"
+        );
+    }
+
+    #[test]
+    fn no_mask_no_background_unchanged() {
+        // Baseline: no mask, no background → output matches input (identity resize)
+        let config = make_config(10, 10, 10, 10);
+        let mut resizer = StreamingResize::new(&config);
+        let row = vec![128u8; 10 * 4];
+        let rows = push_drain_collect_u8(&mut resizer, &row, 10);
+        assert_eq!(rows.len(), 10);
+        // All pixels should be approximately 128 (identity resize)
+        for r in &rows {
+            for &v in r.iter() {
+                assert!(
+                    (v as i32 - 128).unsigned_abs() < 3,
+                    "expected ~128, got {v}"
+                );
+            }
+        }
     }
 }
