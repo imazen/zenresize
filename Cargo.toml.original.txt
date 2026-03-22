@@ -11,11 +11,9 @@ categories = ["graphics", "multimedia::images", "no-std"]
 
 [features]
 default = ["std", "layout"]
-std = ["archmage/std", "magetypes/std", "linear-srgb/std", "wide/std", "zenlayout?/std", "zenpixels/std", "whereat/std", "zenblend/std", "zennode?/std"]
+std = ["archmage/std", "magetypes/std", "linear-srgb/std", "wide/std", "zenlayout?/std", "zenpixels/std", "whereat/std", "zenblend/std"]
 avx512 = ["archmage/avx512"]
 layout = ["dep:zenlayout"]
-# zenode node definitions (Constrain schema with RIAPI keys)
-zennode = ["dep:zennode"]
 # Enable SIMD features on pic-scale for benchmarks (default: scalar-only)
 bench-simd-competitors = ["pic-scale/sse", "pic-scale/avx", "pic-scale/rdm"]
 pretty-safe = []
@@ -24,8 +22,8 @@ pretty-safe = []
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512", "bench-simd-competitors", "pretty-safe"))'] }
 
 [dependencies]
-archmage = { version = "0.9.7", default-features = false, features = ["macros"] }
-magetypes = { version = "0.9.7", default-features = false }
+archmage = { version = "0.9.12", default-features = false, features = ["macros"] }
+magetypes = { version = "0.9.12", default-features = false }
 zenlayout = { version = "0.2", default-features = false, optional = true }
 linear-srgb = { version = "0.6.3", default-features = false, features = ["transfer"] }
 safe_unaligned_simd = "0.2.5"
@@ -34,20 +32,18 @@ zenpixels = { version = "0.1", default-features = false }
 imgref = "1.12"
 libm = { version = "0.2", default-features = false }
 rgb = { version = "0.8", default-features = false }
-whereat = { version = "0.1.3", path = "../whereat", default-features = false }
+whereat = { version = "0.1.4", default-features = false }
 zenblend = { version = "0.1.0", path = "../zenblend", default-features = false }
-# Self-documenting node definitions for pipeline integration
-zennode = { path = "../zennode/zennode", default-features = false, features = ["derive"], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
-tango-bench = "0.6"
+tango-bench = "0.7"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 linear-srgb = "0.6.3"
 colorutils-rs = "0.7"
 
 # Competitors (pic-scale: SIMD controlled by bench-simd-competitors feature)
-pic-scale = { version = "0.6", default-features = false, features = ["colorspaces"] }
+pic-scale = { version = "0.7", default-features = false, features = ["colorspaces"] }
 pic-scale-safe = "0.1"
 fast_image_resize = "6"
 zenbench = { path = "/home/lilith/work/zen/zenbench" }
