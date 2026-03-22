@@ -8,6 +8,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use zenresize::filter::{Filter, InterpolationDetails};
 use zenresize::weights::I16WeightTable;
 
+#[allow(dead_code)]
 struct VFilterSetup {
     name: &'static str,
     in_w: u32,

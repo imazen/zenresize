@@ -8,7 +8,7 @@ use zenresize::filter::{Filter, InterpolationDetails};
 use zenresize::weights::I16WeightTable;
 
 fn main() {
-    let in_w = 3840u32;
+    let _in_w = 3840u32;
     let in_h = 2160u32;
     let out_w = 1920u32;
     let out_h = 1080u32;
