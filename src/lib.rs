@@ -39,7 +39,8 @@ pub(crate) mod color;
 pub mod composite;
 #[cfg(feature = "layout")]
 pub(crate) mod execute;
-pub(crate) mod filter;
+#[doc(hidden)]
+pub mod filter;
 #[cfg(feature = "layout")]
 pub mod layout;
 pub(crate) mod pixel;
@@ -47,7 +48,8 @@ pub mod plane;
 pub(crate) mod resize;
 pub(crate) mod streaming;
 pub(crate) mod transfer;
-pub(crate) mod weights;
+#[doc(hidden)]
+pub mod weights;
 #[allow(dead_code)] // WIP: generic resize pipeline types
 pub(crate) mod working;
 
@@ -55,16 +57,8 @@ pub(crate) mod working;
 #[allow(clippy::excessive_precision)]
 pub mod fastmath;
 mod proven;
-mod simd;
-
-// Expose internals for benchmarks that test SIMD kernels directly.
-#[cfg(feature = "bench-internals")]
 #[doc(hidden)]
-pub mod bench_internals {
-    pub use crate::filter::InterpolationDetails;
-    pub use crate::simd::{filter_v_all_u8_i16, filter_v_all_u8_i16_tiled};
-    pub use crate::weights::I16WeightTable;
-}
+pub mod simd;
 
 // Re-exports from zenpixels
 pub use zenpixels::{AlphaMode, ChannelLayout, ChannelType, PixelDescriptor, TransferFunction};
