@@ -104,6 +104,7 @@ fn hfirst_streaming_resize(config: &zenresize::ResizeConfig, input: &[u8]) -> Ve
     }
 }
 
+#[allow(dead_code)]
 fn streaming_resize_batch(config: &zenresize::ResizeConfig, input: &[u8], batch: usize) -> Vec<u8> {
     let in_w = config.in_width as usize;
     let channels = config.input.channels();
@@ -181,7 +182,7 @@ fn compare_quality(label: &str, config: &zenresize::ResizeConfig, input: &[u8]) 
     let input_tf = config.effective_input_transfer();
     let output_tf = config.effective_output_transfer();
     let needs_premul = config.input.alpha == Some(zenresize::AlphaMode::Straight);
-    let linearize = input_tf == zenresize::TransferFunction::Srgb
+    let _linearize = input_tf == zenresize::TransferFunction::Srgb
         && output_tf == zenresize::TransferFunction::Srgb;
 
     let actual_linearize = config.needs_linearization();
@@ -498,10 +499,8 @@ fn main() {
 
         let elem_size = if is_u8 && ch == 4 && !linearize && !needs_premul {
             1 // u8 sRGB path
-        } else if is_u8 && ch == 4 && linearize && !needs_premul {
-            2 // i16 linear path
         } else {
-            2 // f16 intermediate
+            2 // i16 linear or f16 intermediate path
         };
         let ff_intermediate = h_row_len * s.in_h as usize * elem_size;
         let ff_output = h_row_len * s.out_h as usize;

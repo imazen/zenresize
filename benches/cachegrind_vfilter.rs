@@ -4,8 +4,8 @@
 //!   cargo build --release --bench cachegrind_vfilter
 //!   valgrind --tool=cachegrind target/release/deps/cachegrind_vfilter-*
 
-use zenresize::filter::{Filter, InterpolationDetails};
-use zenresize::weights::I16WeightTable;
+use zenresize::Filter;
+use zenresize::bench_internals::{I16WeightTable, InterpolationDetails, filter_v_all_u8_i16, filter_v_all_u8_i16_tiled};
 
 fn main() {
     let in_w = 3840u32;
@@ -32,7 +32,7 @@ fn main() {
         "baseline" => {
             let mut output = vec![0u8; out_len];
             for _ in 0..3 {
-                zenresize::simd::filter_v_all_u8_i16(
+                filter_v_all_u8_i16(
                     &intermediate,
                     &mut output,
                     h_row_len,
@@ -46,7 +46,7 @@ fn main() {
         "tiled" => {
             let mut output = vec![0u8; out_len];
             for _ in 0..3 {
-                zenresize::simd::filter_v_all_u8_i16_tiled(
+                filter_v_all_u8_i16_tiled(
                     &intermediate,
                     &mut output,
                     h_row_len,

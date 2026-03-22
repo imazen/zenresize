@@ -57,6 +57,15 @@ pub mod fastmath;
 mod proven;
 mod simd;
 
+// Expose internals for benchmarks that test SIMD kernels directly.
+#[cfg(feature = "bench-internals")]
+#[doc(hidden)]
+pub mod bench_internals {
+    pub use crate::filter::InterpolationDetails;
+    pub use crate::simd::{filter_v_all_u8_i16, filter_v_all_u8_i16_tiled};
+    pub use crate::weights::I16WeightTable;
+}
+
 // Re-exports from zenpixels
 pub use zenpixels::{AlphaMode, ChannelLayout, ChannelType, PixelDescriptor, TransferFunction};
 

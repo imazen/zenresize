@@ -5,8 +5,8 @@
 //! to keep shared input rows hot in L1 cache across consecutive output rows.
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use zenresize::filter::{Filter, InterpolationDetails};
-use zenresize::weights::I16WeightTable;
+use zenresize::Filter;
+use zenresize::bench_internals::{I16WeightTable, InterpolationDetails, filter_v_all_u8_i16, filter_v_all_u8_i16_tiled};
 
 struct VFilterSetup {
     name: &'static str,
@@ -78,7 +78,7 @@ fn bench_v_filter(c: &mut Criterion) {
             |b| {
                 let mut output = vec![0u8; out_len];
                 b.iter(|| {
-                    zenresize::simd::filter_v_all_u8_i16(
+                    filter_v_all_u8_i16(
                         &setup.intermediate,
                         &mut output,
                         h_row_len,
@@ -102,7 +102,7 @@ fn bench_v_filter(c: &mut Criterion) {
                 |b| {
                     let mut output = vec![0u8; out_len];
                     b.iter(|| {
-                        zenresize::simd::filter_v_all_u8_i16_tiled(
+                        filter_v_all_u8_i16_tiled(
                             &setup.intermediate,
                             &mut output,
                             h_row_len,
@@ -126,7 +126,7 @@ fn bench_correctness(c: &mut Criterion) {
     let out_len = setup.h_row_len * setup.out_h as usize;
 
     let mut baseline = vec![0u8; out_len];
-    zenresize::simd::filter_v_all_u8_i16(
+    filter_v_all_u8_i16(
         &setup.intermediate,
         &mut baseline,
         setup.h_row_len,
@@ -137,7 +137,7 @@ fn bench_correctness(c: &mut Criterion) {
 
     for &tile_chunks in &[64, 128, 256, 512] {
         let mut tiled = vec![0u8; out_len];
-        zenresize::simd::filter_v_all_u8_i16_tiled(
+        filter_v_all_u8_i16_tiled(
             &setup.intermediate,
             &mut tiled,
             setup.h_row_len,
