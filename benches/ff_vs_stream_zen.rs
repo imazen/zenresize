@@ -58,6 +58,7 @@ fn hfirst_resize(config: &zenresize::ResizeConfig, input: &[u8]) -> Vec<u8> {
     }
 }
 
+#[allow(dead_code)]
 struct Scenario {
     label: &'static str,
     in_w: u32,
