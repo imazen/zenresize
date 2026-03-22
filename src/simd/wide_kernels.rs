@@ -541,6 +541,161 @@ pub(super) fn filter_v_all_u8_i16(
     }
 }
 
+/// Tiled batch vertical filter: u8 intermediate → u8 output with column tiling.
+///
+/// `tile_chunks` is the number of 16-byte chunks per tile. Processes column tiles
+/// to improve L1 cache reuse across consecutive output rows that share overlapping
+/// input row windows.
+#[inline(always)]
+pub(super) fn filter_v_all_u8_i16_tiled(
+    intermediate: &[u8],
+    output: &mut [u8],
+    h_row_len: usize,
+    in_h: usize,
+    out_h: usize,
+    weights: &I16WeightTable,
+    tile_chunks: usize,
+) {
+    let in_h_i32 = in_h as i32 - 1;
+    let chunks16 = h_row_len / 16;
+    let base16 = chunks16 * 16;
+
+    // Process column tiles of 16-byte chunks.
+    for tile_ci in (0..chunks16).step_by(tile_chunks) {
+        let tile_ci_end = (tile_ci + tile_chunks).min(chunks16);
+
+        let mut out_y = 0;
+        while out_y < out_h {
+            let left = weights.left[out_y];
+            let tap_count = weights.tap_count(out_y);
+            let w_a = weights.weights(out_y);
+
+            let batch2 = out_y + 1 < out_h
+                && weights.left[out_y + 1] == left
+                && weights.tap_count(out_y + 1) == tap_count;
+
+            if batch2 {
+                let w_b = weights.weights(out_y + 1);
+                let out_start_a = out_y * h_row_len;
+                let out_start_b = (out_y + 1) * h_row_len;
+
+                for chunk_idx in tile_ci..tile_ci_end {
+                    let x = chunk_idx * 16;
+                    let mut acc_a_lo = i32x8::splat(0);
+                    let mut acc_a_hi = i32x8::splat(0);
+                    let mut acc_b_lo = i32x8::splat(0);
+                    let mut acc_b_hi = i32x8::splat(0);
+
+                    for t in 0..tap_count {
+                        let in_y_idx = (left + t as i32).clamp(0, in_h_i32) as usize;
+                        let off = in_y_idx * h_row_len + x;
+                        let bytes: [u8; 16] = intermediate[off..off + 16].try_into().unwrap();
+                        let src = u8x16::new(bytes);
+                        let lo = i16x8::from_u8x16_low(src);
+                        let hi = i16x8::from_u8x16_high(src);
+                        let wva = i16x8::splat(w_a[t]);
+                        let wvb = i16x8::splat(w_b[t]);
+                        acc_a_lo += lo.mul_widen(wva);
+                        acc_a_hi += hi.mul_widen(wva);
+                        acc_b_lo += lo.mul_widen(wvb);
+                        acc_b_hi += hi.mul_widen(wvb);
+                    }
+
+                    let half = i32x8::splat(1 << (I16_PRECISION - 1));
+                    let sa_lo = i16x8::from_i32x8_saturate((acc_a_lo + half) >> I16_PRECISION);
+                    let sa_hi = i16x8::from_i32x8_saturate((acc_a_hi + half) >> I16_PRECISION);
+                    output[out_start_a + x..out_start_a + x + 16]
+                        .copy_from_slice(&u8x16::narrow_i16x8(sa_lo, sa_hi).to_array());
+
+                    let sb_lo = i16x8::from_i32x8_saturate((acc_b_lo + half) >> I16_PRECISION);
+                    let sb_hi = i16x8::from_i32x8_saturate((acc_b_hi + half) >> I16_PRECISION);
+                    output[out_start_b + x..out_start_b + x + 16]
+                        .copy_from_slice(&u8x16::narrow_i16x8(sb_lo, sb_hi).to_array());
+                }
+                out_y += 2;
+            } else {
+                let out_start = out_y * h_row_len;
+
+                for chunk_idx in tile_ci..tile_ci_end {
+                    let x = chunk_idx * 16;
+                    let mut acc_lo = i32x8::splat(0);
+                    let mut acc_hi = i32x8::splat(0);
+
+                    for (t, &weight) in w_a[..tap_count].iter().enumerate() {
+                        let in_y_idx = (left + t as i32).clamp(0, in_h_i32) as usize;
+                        let off = in_y_idx * h_row_len + x;
+                        let bytes: [u8; 16] = intermediate[off..off + 16].try_into().unwrap();
+                        let src = u8x16::new(bytes);
+                        let lo = i16x8::from_u8x16_low(src);
+                        let hi = i16x8::from_u8x16_high(src);
+                        let wv = i16x8::splat(weight);
+                        acc_lo += lo.mul_widen(wv);
+                        acc_hi += hi.mul_widen(wv);
+                    }
+
+                    let half = i32x8::splat(1 << (I16_PRECISION - 1));
+                    let shifted_lo = (acc_lo + half) >> I16_PRECISION;
+                    let shifted_hi = (acc_hi + half) >> I16_PRECISION;
+                    let packed_lo = i16x8::from_i32x8_saturate(shifted_lo);
+                    let packed_hi = i16x8::from_i32x8_saturate(shifted_hi);
+                    output[out_start + x..out_start + x + 16]
+                        .copy_from_slice(&u8x16::narrow_i16x8(packed_lo, packed_hi).to_array());
+                }
+                out_y += 1;
+            }
+        }
+    }
+
+    // Process remainder columns (< 16 bytes) that don't fit in any tile.
+    // These are handled once for all output rows, not per-tile.
+    if base16 < h_row_len {
+        let mut out_y = 0;
+        while out_y < out_h {
+            let left = weights.left[out_y];
+            let tap_count = weights.tap_count(out_y);
+            let w_a = weights.weights(out_y);
+
+            let batch2 = out_y + 1 < out_h
+                && weights.left[out_y + 1] == left
+                && weights.tap_count(out_y + 1) == tap_count;
+
+            if batch2 {
+                let w_b = weights.weights(out_y + 1);
+                let out_start_a = out_y * h_row_len;
+                let out_start_b = (out_y + 1) * h_row_len;
+
+                for x in base16..h_row_len {
+                    let mut acc_a: i32 = 0;
+                    let mut acc_b: i32 = 0;
+                    for t in 0..tap_count {
+                        let in_y_idx = (left + t as i32).clamp(0, in_h_i32) as usize;
+                        let v = intermediate[in_y_idx * h_row_len + x] as i32;
+                        acc_a += v * w_a[t] as i32;
+                        acc_b += v * w_b[t] as i32;
+                    }
+                    output[out_start_a + x] =
+                        ((acc_a + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 255) as u8;
+                    output[out_start_b + x] =
+                        ((acc_b + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 255) as u8;
+                }
+                out_y += 2;
+            } else {
+                let out_start = out_y * h_row_len;
+                for x in base16..h_row_len {
+                    let mut acc: i32 = 0;
+                    for (t, &weight) in w_a[..tap_count].iter().enumerate() {
+                        let in_y_idx = (left + t as i32).clamp(0, in_h_i32) as usize;
+                        acc += intermediate[in_y_idx * h_row_len + x] as i32 * weight as i32;
+                    }
+                    output[out_start + x] =
+                        ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION).clamp(0, 255) as u8;
+                }
+                out_y += 1;
+            }
+        }
+    }
+}
+
 // ============================================================================
 // Integer i16→i16 path (linear-light i12 values 0-4095)
 // ============================================================================

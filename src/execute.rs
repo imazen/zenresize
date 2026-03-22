@@ -2068,6 +2068,7 @@ mod tests {
     // Test 23: streaming_from_plan with trim+pad combined
     // -----------------------------------------------------------------------
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn streaming_from_plan_trim_and_pad() {
         let src_w = 80u32;
         let src_h = 60u32;

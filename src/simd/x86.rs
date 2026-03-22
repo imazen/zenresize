@@ -2879,6 +2879,7 @@ fn tf_row_inplace(
 macro_rules! v4_delegate_v3 {
     ($(fn $name:ident($($arg:ident: $ty:ty),* $(,)?) $(-> $ret:ty)?;)*) => {$(
         #[archmage::arcane]
+        #[allow(dead_code)]
         pub(crate) fn $name(_token: X64V4Token, $($arg: $ty),*) $(-> $ret)? {
             paste_v3!($name)(_token.v3(), $($arg),*)
         }

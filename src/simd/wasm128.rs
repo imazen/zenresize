@@ -118,6 +118,22 @@ pub(crate) fn filter_v_all_u8_i16_wasm128(
 }
 
 #[archmage::arcane]
+pub(crate) fn filter_v_all_u8_i16_tiled_wasm128(
+    _token: Wasm128Token,
+    intermediate: &[u8],
+    output: &mut [u8],
+    h_row_len: usize,
+    in_h: usize,
+    out_h: usize,
+    weights: &crate::weights::I16WeightTable,
+    tile_chunks: usize,
+) {
+    super::wide_kernels::filter_v_all_u8_i16_tiled(
+        intermediate, output, h_row_len, in_h, out_h, weights, tile_chunks,
+    )
+}
+
+#[archmage::arcane]
 pub(crate) fn premultiply_u8_row_wasm128(_token: Wasm128Token, input: &[u8], output: &mut [u8]) {
     super::wide_kernels::premultiply_u8_row(input, output)
 }
