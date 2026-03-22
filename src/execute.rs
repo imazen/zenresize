@@ -910,7 +910,7 @@ fn premul_f32_row_to_srgb_u8(src: &[f32], dst: &mut [u8], has_alpha: bool, ch: u
             pixel_u8[0] = linear_srgb::default::linear_to_srgb_u8(r);
             pixel_u8[1] = linear_srgb::default::linear_to_srgb_u8(g);
             pixel_u8[2] = linear_srgb::default::linear_to_srgb_u8(b);
-            pixel_u8[3] = (a * 255.0 + 0.5).min(255.0).max(0.0) as u8;
+            pixel_u8[3] = (a * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
         }
     } else {
         for (pixel_f32, pixel_u8) in src.chunks_exact(ch).zip(dst.chunks_exact_mut(ch)) {
@@ -2105,33 +2105,33 @@ mod tests {
         assert_eq!(output_rows[0].len(), 30 * ch);
 
         // Top 7 rows should be white padding
-        for y in 0..7 {
+        for (y, row) in output_rows.iter().enumerate().take(7) {
             for x in 0..30 {
-                let px = &output_rows[y][x * ch..(x + 1) * ch];
+                let px = &row[x * ch..(x + 1) * ch];
                 assert_eq!(px, &[255, 255, 255, 255], "top pad row {y}, col {x}");
             }
         }
 
         // Bottom 8 rows (30 - 7 - 15 = 8) should be white padding
-        for y in 22..30 {
+        for (y, row) in output_rows.iter().enumerate().take(30).skip(22) {
             for x in 0..30 {
-                let px = &output_rows[y][x * ch..(x + 1) * ch];
+                let px = &row[x * ch..(x + 1) * ch];
                 assert_eq!(px, &[255, 255, 255, 255], "bottom pad row {y}, col {x}");
             }
         }
 
         // Left padding (cols 0..5) in content rows should be white
-        for y in 7..22 {
+        for (y, row) in output_rows.iter().enumerate().take(22).skip(7) {
             for x in 0..5 {
-                let px = &output_rows[y][x * ch..(x + 1) * ch];
+                let px = &row[x * ch..(x + 1) * ch];
                 assert_eq!(px, &[255, 255, 255, 255], "left pad row {y}, col {x}");
             }
         }
 
         // Right padding (cols 25..30) in content rows should be white
-        for y in 7..22 {
+        for (y, row) in output_rows.iter().enumerate().take(22).skip(7) {
             for x in 25..30 {
-                let px = &output_rows[y][x * ch..(x + 1) * ch];
+                let px = &row[x * ch..(x + 1) * ch];
                 assert_eq!(px, &[255, 255, 255, 255], "right pad row {y}, col {x}");
             }
         }

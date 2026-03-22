@@ -2566,6 +2566,7 @@ impl<B: Background> StreamingResize<B> {
 
     /// Internal: cache i16 row from `linearized_row_i16` into the i16 ring buffer (I16Linear path).
     #[track_caller]
+    #[allow(dead_code)]
     fn push_row_internal_i16(&mut self) -> Result<(), At<StreamingError>> {
         self.check_ring_buffer().at()?;
 
@@ -4295,7 +4296,7 @@ mod tests {
                 assert_eq!(out.len(), 2 * 4);
                 // Values should be in [0, 1] range (linear f32)
                 for &v in out {
-                    assert!(v >= 0.0 && v <= 1.1, "premul value out of range: {v}");
+                    assert!((0.0..=1.1).contains(&v), "premul value out of range: {v}");
                 }
             }
         }
@@ -4543,9 +4544,17 @@ mod tests {
         assert_eq!(rows.len(), 20);
 
         // Corner pixel (0,0): should be transparent (alpha ≈ 0)
-        assert!(rows[0][3] < 10, "corner alpha should be near 0, got {}", rows[0][3]);
+        assert!(
+            rows[0][3] < 10,
+            "corner alpha should be near 0, got {}",
+            rows[0][3]
+        );
         // Center pixel (10,10): should be opaque (alpha ≈ 255)
-        assert!(rows[10][10 * 4 + 3] > 245, "center alpha should be near 255, got {}", rows[10][10 * 4 + 3]);
+        assert!(
+            rows[10][10 * 4 + 3] > 245,
+            "center alpha should be near 255, got {}",
+            rows[10][10 * 4 + 3]
+        );
     }
 
     #[test]

@@ -151,6 +151,7 @@ pub(crate) fn filter_h_u8_to_i16_scalar(
 }
 
 /// 4-row batch horizontal convolution: u8 input → i16 output (unclamped), scalar fallback.
+#[allow(dead_code)]
 pub(crate) fn filter_h_u8_to_i16_4rows_scalar(
     _token: ScalarToken,
     in0: &[u8],
@@ -253,6 +254,7 @@ pub(crate) fn filter_v_all_u8_i16_scalar(
 ///
 /// Processes column tiles of width `tile_width` to improve L1 cache reuse
 /// across consecutive output rows that share overlapping input row windows.
+#[allow(dead_code)]
 pub(crate) fn filter_v_all_u8_i16_tiled_scalar(
     _token: ScalarToken,
     intermediate: &[u8],
@@ -409,6 +411,7 @@ pub(crate) fn filter_v_all_i16_i16_scalar(
 ///
 /// Groups consecutive output rows into bands whose combined input row span
 /// fits in L1 cache, then processes each band in column tiles.
+#[allow(dead_code)]
 pub(crate) fn filter_v_all_u8_i16_2d_tiled_scalar(
     _token: ScalarToken,
     intermediate: &[u8],
@@ -485,6 +488,7 @@ pub(crate) fn filter_v_all_u8_i16_2d_tiled_scalar(
 }
 
 /// Tiled batch vertical filter for all output rows (i16→i16), scalar fallback.
+#[allow(dead_code)]
 pub(crate) fn filter_v_all_i16_i16_tiled_scalar(
     _token: ScalarToken,
     intermediate: &[i16],

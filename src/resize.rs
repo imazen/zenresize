@@ -969,9 +969,9 @@ pub fn resize_hfirst_streaming(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
 
             // Gather row references from ring buffer
             let mut row_refs: [&[u8]; 128] = [&[]; 128];
-            for t in 0..tap_count {
+            for (t, slot) in row_refs.iter_mut().enumerate().take(tap_count) {
                 let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                row_refs[t] = &ring[in_y % cache_size];
+                *slot = &ring[in_y % cache_size];
             }
 
             // V-filter directly to output (no temp buffer needed!)
@@ -993,9 +993,9 @@ pub fn resize_hfirst_streaming(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
         let weights = v_weights.weights(out_y);
 
         let mut row_refs: [&[u8]; 128] = [&[]; 128];
-        for t in 0..tap_count {
+        for (t, slot) in row_refs.iter_mut().enumerate().take(tap_count) {
             let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-            row_refs[t] = &ring[in_y % cache_size];
+            *slot = &ring[in_y % cache_size];
         }
 
         let out_start = out_y * out_row_len;
@@ -1082,9 +1082,9 @@ pub fn resize_hfirst_streaming_f32(config: &ResizeConfig, input: &[u8]) -> Vec<u
 
             // Gather row references from ring buffer
             let mut row_refs: [&[u16]; 128] = [&[]; 128];
-            for t in 0..tap_count {
+            for (t, slot) in row_refs.iter_mut().enumerate().take(tap_count) {
                 let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                row_refs[t] = &ring[in_y % cache_size];
+                *slot = &ring[in_y % cache_size];
             }
 
             // V-filter f16 → f32
@@ -1115,9 +1115,9 @@ pub fn resize_hfirst_streaming_f32(config: &ResizeConfig, input: &[u8]) -> Vec<u
         let weights = v_weights.weights(out_y);
 
         let mut row_refs: [&[u16]; 128] = [&[]; 128];
-        for t in 0..tap_count {
+        for (t, slot) in row_refs.iter_mut().enumerate().take(tap_count) {
             let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-            row_refs[t] = &ring[in_y % cache_size];
+            *slot = &ring[in_y % cache_size];
         }
 
         simd::filter_v_row_f16(&row_refs[..tap_count], &mut temp_output, weights);

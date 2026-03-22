@@ -17,9 +17,11 @@ layout = ["dep:zenlayout"]
 # Enable SIMD features on pic-scale for benchmarks (default: scalar-only)
 bench-simd-competitors = ["pic-scale/sse", "pic-scale/avx", "pic-scale/rdm"]
 pretty-safe = []
+# Expose internal modules (filter, weights, simd) for benchmarks that test internals directly.
+bench-internals = []
 
 [lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512", "bench-simd-competitors", "pretty-safe"))'] }
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512", "bench-simd-competitors", "bench-internals", "pretty-safe"))'] }
 
 [dependencies]
 archmage = { version = "0.9.4", default-features = false, features = ["macros"] }

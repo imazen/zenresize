@@ -116,6 +116,7 @@ pub(crate) fn filter_h_u8_to_i16(
 }
 
 /// Integer horizontal filter: 4 rows at once, u8 input → i16 output (unclamped), RGBA only.
+#[allow(dead_code)]
 pub(crate) fn filter_h_u8_to_i16_4rows(
     in0: &[u8],
     in1: &[u8],
@@ -156,6 +157,7 @@ pub fn filter_v_all_u8_i16(
 /// Tiled batch V-filter: u8 intermediate → u8 output with column tiling.
 ///
 /// `tile_chunks` is the number of 16-byte chunks per tile.
+#[allow(dead_code)]
 pub fn filter_v_all_u8_i16_tiled(
     intermediate: &[u8],
     output: &mut [u8],
