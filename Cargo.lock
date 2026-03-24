@@ -99,9 +99,9 @@ dependencies = [
 
 [[package]]
 name = "archmage"
-version = "0.9.10"
+version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3277aaadcdb806f088022607cbc1f545d93f2be875ed308a17274006126a8e4"
+checksum = "b31252c47e70c7056709e9f98842aef4f709056c2b3a4f666c584f8cc37f7ca0"
 dependencies = [
  "archmage-macros",
  "safe_unaligned_simd",
@@ -109,9 +109,9 @@ dependencies = [
 
 [[package]]
 name = "archmage-macros"
-version = "0.9.10"
+version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d21eb5f22a36e5509ba9ac633a6bf96ef9a2e5ef1b047a959dfcfbe975664205"
+checksum = "3a97189db9dffc2e13364c6f56461085d65743ff4d17890d6b80744203aae92b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -690,9 +690,9 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "magetypes"
-version = "0.9.10"
+version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e687f5c9d3f0e6a06df3cbde6c271231c83b5a1b9b3dd3439014b355c770be9"
+checksum = "c805c315148e092279cd19d011ce4b22ff9d3cc593cca089364f6501d12087b1"
 dependencies = [
  "archmage",
 ]
@@ -876,9 +876,9 @@ dependencies = [
 
 [[package]]
 name = "pic-scale"
-version = "0.6.15"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff95ed1aee2a9952d6e292e3408024d212c4a2443174413f60480f2991a99727"
+checksum = "5196f7f6df40016227f2c8e3357b4b2fe444ea8674d2d598b643772891bb822e"
 dependencies = [
  "colorutils-rs",
  "novtb",
@@ -1262,9 +1262,9 @@ dependencies = [
 
 [[package]]
 name = "tango-bench"
-version = "0.6.0"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "257822358c6f206fed78bfe6369cf959063b0644d70f88df6b19f2dadc93423e"
+checksum = "ba54db8d29ede035b03f551299f4d8cb58b225fafc4382191594df95aa1a53e7"
 dependencies = [
  "alloca",
  "anyhow",
@@ -1272,6 +1272,7 @@ dependencies = [
  "colorz",
  "glob-match",
  "goblin",
+ "libc",
  "libloading",
  "log",
  "num-traits",
@@ -1279,6 +1280,7 @@ dependencies = [
  "scroll",
  "tempfile",
  "thiserror 1.0.69",
+ "windows",
 ]
 
 [[package]]
