@@ -4,6 +4,7 @@
 //! with scalar fallback on other architectures. All functions are
 //! `#[inline(always)]` so they inline into the archmage-dispatched callers.
 
+use archmage::autoversion;
 use wide::{f32x4, i16x8, i32x4, i32x8, u8x16};
 
 use crate::weights::{F32WeightTable, I16_PRECISION, I16WeightTable};
@@ -28,7 +29,7 @@ pub(super) fn filter_h_row_f32(
 }
 
 /// 4-channel horizontal f32 convolution using f32x4 FMA.
-#[inline(always)]
+#[autoversion]
 fn filter_h_4ch(input: &[f32], output: &mut [f32], weights: &F32WeightTable) {
     let (in_pixels, _) = input.as_chunks::<4>();
     let (out_pixels, _) = output.as_chunks_mut::<4>();
@@ -46,7 +47,7 @@ fn filter_h_4ch(input: &[f32], output: &mut [f32], weights: &F32WeightTable) {
 }
 
 /// 3-channel horizontal f32 convolution (scalar, auto-vectorized).
-#[inline(always)]
+#[autoversion]
 fn filter_h_3ch(input: &[f32], output: &mut [f32], weights: &F32WeightTable) {
     for out_x in 0..weights.len() {
         let left = weights.left[out_x] as usize;
@@ -71,7 +72,7 @@ fn filter_h_3ch(input: &[f32], output: &mut [f32], weights: &F32WeightTable) {
 }
 
 /// Generic-channel horizontal f32 convolution (scalar).
-#[inline(always)]
+#[autoversion]
 fn filter_h_generic(input: &[f32], output: &mut [f32], weights: &F32WeightTable, channels: usize) {
     for out_x in 0..weights.len() {
         let left = weights.left[out_x] as usize;
@@ -95,7 +96,7 @@ fn filter_h_generic(input: &[f32], output: &mut [f32], weights: &F32WeightTable,
 ///
 /// Processes 8 pixels (32 floats) per outer loop iteration with 8 f32x4
 /// accumulators for maximum ILP and reduced loop overhead.
-#[inline(always)]
+#[autoversion]
 pub(super) fn filter_v_row_f32(rows: &[&[f32]], output: &mut [f32], weights: &[f32]) {
     // Process 8 pixels (32 floats) at a time with 8 accumulators
     let (out_chunks32, out_remainder32) = output.as_chunks_mut::<32>();
@@ -162,7 +163,7 @@ pub(super) fn filter_v_row_f32(rows: &[&[f32]], output: &mut [f32], weights: &[f
 }
 
 /// Convert u8 → f32 (divide by 255) using f32x4.
-#[inline(always)]
+#[autoversion]
 pub(super) fn u8_to_f32_row(input: &[u8], output: &mut [f32]) {
     debug_assert_eq!(input.len(), output.len());
     let scale = f32x4::splat(1.0 / 255.0);
@@ -181,7 +182,7 @@ pub(super) fn u8_to_f32_row(input: &[u8], output: &mut [f32]) {
 }
 
 /// Convert f32 → u8 (multiply by 255, round, clamp) using f32x4.
-#[inline(always)]
+#[autoversion]
 pub(super) fn f32_to_u8_row(input: &[f32], output: &mut [u8]) {
     debug_assert_eq!(input.len(), output.len());
     let scale = f32x4::splat(255.0);
@@ -207,7 +208,7 @@ pub(super) fn f32_to_u8_row(input: &[f32], output: &mut [u8]) {
 }
 
 /// Premultiply alpha in-place on RGBA f32 row using f32x4.
-#[inline(always)]
+#[autoversion]
 pub(super) fn premultiply_alpha_row(row: &mut [f32]) {
     for pixel in row.chunks_exact_mut(4) {
         let a = pixel[3];
@@ -218,7 +219,7 @@ pub(super) fn premultiply_alpha_row(row: &mut [f32]) {
 }
 
 /// Unpremultiply alpha in-place on RGBA f32 row.
-#[inline(always)]
+#[autoversion]
 pub(super) fn unpremultiply_alpha_row(row: &mut [f32]) {
     for pixel in row.chunks_exact_mut(4) {
         let a = pixel[3];
@@ -252,7 +253,7 @@ pub(super) fn filter_h_u8_i16(
 /// 4-channel integer H kernel using i32x4.
 ///
 /// Accumulates 4 channels in parallel per output pixel.
-#[inline(always)]
+#[autoversion]
 fn filter_h_u8_i16_4ch(input: &[u8], output: &mut [u8], weights: &I16WeightTable) {
     let half = i32x4::splat(1 << (I16_PRECISION - 1));
     let zero = i32x4::splat(0);
@@ -286,7 +287,7 @@ fn filter_h_u8_i16_4ch(input: &[u8], output: &mut [u8], weights: &I16WeightTable
 }
 
 /// Generic-channel integer H kernel (scalar).
-#[inline(always)]
+#[autoversion]
 fn filter_h_u8_i16_generic(
     input: &[u8],
     output: &mut [u8],
@@ -328,7 +329,7 @@ pub(super) fn filter_h_u8_to_i16(
 ///
 /// Same accumulation as filter_h_u8_i16_4ch but output stores i16 instead of
 /// clamping to [0,255] u8.
-#[inline(always)]
+#[autoversion]
 fn filter_h_u8_to_i16_4ch(input: &[u8], output: &mut [i16], weights: &I16WeightTable) {
     let half = i32x4::splat(1 << (I16_PRECISION - 1));
 
@@ -359,7 +360,7 @@ fn filter_h_u8_to_i16_4ch(input: &[u8], output: &mut [i16], weights: &I16WeightT
 }
 
 /// Generic-channel u8→i16 H kernel (scalar).
-#[inline(always)]
+#[autoversion]
 fn filter_h_u8_to_i16_generic(
     input: &[u8],
     output: &mut [i16],
@@ -421,7 +422,7 @@ pub(super) fn filter_h_u8_i16_4rows(
 }
 
 /// Batch vertical filter: process all output rows from the intermediate buffer.
-#[inline(always)]
+#[autoversion]
 pub(super) fn filter_v_all_u8_i16(
     intermediate: &[u8],
     output: &mut [u8],
@@ -546,7 +547,7 @@ pub(super) fn filter_v_all_u8_i16(
 /// `tile_chunks` is the number of 16-byte chunks per tile. Processes column tiles
 /// to improve L1 cache reuse across consecutive output rows that share overlapping
 /// input row windows.
-#[inline(always)]
+#[autoversion]
 pub(super) fn filter_v_all_u8_i16_tiled(
     intermediate: &[u8],
     output: &mut [u8],
@@ -716,7 +717,7 @@ pub(super) fn filter_h_i16_i16(
 }
 
 /// 4-channel i16 H kernel using i32x4.
-#[inline(always)]
+#[autoversion]
 fn filter_h_i16_i16_4ch(input: &[i16], output: &mut [i16], weights: &I16WeightTable) {
     let half = i32x4::splat(1 << (I16_PRECISION - 1));
 
@@ -747,7 +748,7 @@ fn filter_h_i16_i16_4ch(input: &[i16], output: &mut [i16], weights: &I16WeightTa
 }
 
 /// Generic-channel i16 H kernel (scalar).
-#[inline(always)]
+#[autoversion]
 fn filter_h_i16_i16_generic(
     input: &[i16],
     output: &mut [i16],
@@ -772,7 +773,7 @@ fn filter_h_i16_i16_generic(
 
 /// Batch vertical filter: i16 intermediate → i16 output via i32 accumulator.
 /// For linear-light i12 path (values 0-4095).
-#[inline(always)]
+#[autoversion]
 pub(super) fn filter_v_all_i16_i16(
     intermediate: &[i16],
     output: &mut [i16],
@@ -895,7 +896,7 @@ pub(super) fn filter_v_all_i16_i16(
 // ============================================================================
 
 /// Premultiply alpha on RGBA u8 row: input → output.
-#[inline(always)]
+#[autoversion]
 pub(super) fn premultiply_u8_row(input: &[u8], output: &mut [u8]) {
     debug_assert_eq!(input.len(), output.len());
     for (inp, out) in input.chunks_exact(4).zip(output.chunks_exact_mut(4)) {
@@ -908,7 +909,7 @@ pub(super) fn premultiply_u8_row(input: &[u8], output: &mut [u8]) {
 }
 
 /// Unpremultiply alpha in-place on RGBA u8 row.
-#[inline(always)]
+#[autoversion]
 pub(super) fn unpremultiply_u8_row(row: &mut [u8]) {
     for pixel in row.chunks_exact_mut(4) {
         let a = pixel[3];
@@ -930,7 +931,7 @@ pub(super) fn unpremultiply_u8_row(row: &mut [u8]) {
 // ============================================================================
 
 /// Streaming V-filter: u8 rows → u8 output via i16 weights.
-#[inline(always)]
+#[autoversion]
 pub(super) fn filter_v_row_u8_i16(rows: &[&[u8]], output: &mut [u8], weights: &[i16]) {
     let width = output.len();
     debug_assert_eq!(rows.len(), weights.len());
@@ -950,7 +951,7 @@ pub(super) fn filter_v_row_u8_i16(rows: &[&[u8]], output: &mut [u8], weights: &[
 // ============================================================================
 
 /// Bulk convert f32 → f16 row (scalar, uses software conversion).
-#[inline(always)]
+#[autoversion]
 pub(super) fn f32_to_f16_row(input: &[f32], output: &mut [u16]) {
     debug_assert_eq!(input.len(), output.len());
     for (inp, out) in input.iter().zip(output.iter_mut()) {
@@ -959,7 +960,7 @@ pub(super) fn f32_to_f16_row(input: &[f32], output: &mut [u16]) {
 }
 
 /// Bulk convert f16 → f32 row (scalar, uses software conversion).
-#[inline(always)]
+#[autoversion]
 pub(super) fn f16_to_f32_row(input: &[u16], output: &mut [f32]) {
     debug_assert_eq!(input.len(), output.len());
     for (inp, out) in input.iter().zip(output.iter_mut()) {
@@ -968,7 +969,7 @@ pub(super) fn f16_to_f32_row(input: &[u16], output: &mut [f32]) {
 }
 
 /// Horizontal f32 convolution with f16 output — dispatch by channel count.
-#[inline(always)]
+#[autoversion]
 pub(super) fn filter_h_row_f32_to_f16(
     input: &[f32],
     output: &mut [u16],
@@ -992,7 +993,7 @@ pub(super) fn filter_h_row_f32_to_f16(
 }
 
 /// Streaming V-filter: f16 rows → f32 output via f32 weights.
-#[inline(always)]
+#[autoversion]
 pub(super) fn filter_v_row_f16(rows: &[&[u16]], output: &mut [f32], weights: &[f32]) {
     let width = output.len();
     debug_assert_eq!(rows.len(), weights.len());
@@ -1010,7 +1011,7 @@ pub(super) fn filter_v_row_f16(rows: &[&[u16]], output: &mut [f32], weights: &[f
 }
 
 /// Batch V-filter: f16 intermediate → f32 output.
-#[inline(always)]
+#[autoversion]
 pub(super) fn filter_v_all_f16(
     intermediate: &[u16],
     output: &mut [f32],
@@ -1037,7 +1038,7 @@ pub(super) fn filter_v_all_f16(
 }
 
 /// Streaming V-filter: i16 rows → i16 output via i16 weights.
-#[inline(always)]
+#[autoversion]
 pub(super) fn filter_v_row_i16(rows: &[&[i16]], output: &mut [i16], weights: &[i16]) {
     let width = output.len();
     debug_assert_eq!(rows.len(), weights.len());
