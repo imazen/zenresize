@@ -378,24 +378,24 @@ impl TransferCurve for Srgb {
         has_alpha: bool,
         premul: bool,
     ) {
-        // u16 sRGB: normalize to [0,1], apply sRGB EOTF
-        if has_alpha && channels >= 2 {
-            for pixel in src
+        // Use linear-srgb's 65536-entry const LUT for u16 sRGB decode.
+        use linear_srgb::default::{srgb_u16_to_linear, srgb_u16_to_linear_rgba_slice};
+
+        if has_alpha && channels == 4 {
+            srgb_u16_to_linear_rgba_slice(src, dst);
+        } else if has_alpha && channels >= 2 {
+            for (src_px, dst_px) in src
                 .chunks_exact(channels)
                 .zip(dst.chunks_exact_mut(channels))
             {
-                let (src_px, dst_px) = pixel;
-                // Color channels: sRGB curve
                 for i in 0..channels - 1 {
-                    dst_px[i] = self.to_linear(src_px[i] as f32 / 65535.0);
+                    dst_px[i] = srgb_u16_to_linear(src_px[i]);
                 }
-                // Alpha: linear scale
                 dst_px[channels - 1] = src_px[channels - 1] as f32 / 65535.0;
             }
         } else {
-            // No alpha: all channels through sRGB
             for (s, d) in src.iter().zip(dst.iter_mut()) {
-                *d = self.to_linear(*s as f32 / 65535.0);
+                *d = srgb_u16_to_linear(*s);
             }
         }
         if premul {
@@ -412,6 +412,10 @@ impl TransferCurve for Srgb {
         has_alpha: bool,
         unpremul: bool,
     ) {
+        // Encode uses the rational polynomial (not the LUT) for perfect roundtrip
+        // accuracy with the LUT decode path. The polynomial is 10× slower than the
+        // LUT but encode is rarely the bottleneck — decode dominates in pipelines
+        // that read u16 images (camera RAW, TIFF, PNG16).
         let work: Vec<f32>;
         let src = if unpremul {
             work = {
@@ -1155,7 +1159,8 @@ mod tests {
 
         for i in 0..values.len() {
             let diff = (values[i] as i32 - out[i] as i32).unsigned_abs();
-            // u16 roundtrip through f32 scalar sRGB curve — allow ±1 from rounding
+            // LUT decode + polynomial encode: exact LUT forward, polynomial inverse.
+            // Roundtrip should be ±1 from f32 intermediate rounding.
             assert!(
                 diff <= 1,
                 "sRGB u16 roundtrip off by {} at value {}: {} -> {} -> {}",
