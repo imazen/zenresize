@@ -27,7 +27,11 @@ pub(super) fn filter_h_row_f32(
     }
 }
 
-/// 4-channel horizontal f32 convolution using f32x4 FMA.
+/// 4-channel horizontal f32 convolution using f32x4.
+///
+/// Uses `*` + `+=` instead of `mul_add` because `wide::f32x4::mul_add` on
+/// wasm32 (no FMA) goes through a `pick!` branch to `(a * b) + c` anyway.
+/// Direct `*` + `+=` gives LLVM a cleaner expression to schedule.
 #[inline(always)]
 fn filter_h_4ch(input: &[f32], output: &mut [f32], weights: &F32WeightTable) {
     let (in_pixels, _) = input.as_chunks::<4>();
@@ -38,8 +42,7 @@ fn filter_h_4ch(input: &[f32], output: &mut [f32], weights: &F32WeightTable) {
         let w = weights.weights(out_x);
         let mut acc = f32x4::ZERO;
         for (t, &weight) in w.iter().enumerate() {
-            let pixel = f32x4::new(in_pixels[left + t]);
-            acc = pixel.mul_add(f32x4::splat(weight), acc);
+            acc += f32x4::new(in_pixels[left + t]) * f32x4::splat(weight);
         }
         out_pixels[out_x] = acc.to_array();
     }
@@ -115,14 +118,14 @@ pub(super) fn filter_v_row_f32(rows: &[&[f32]], output: &mut [f32], weights: &[f
             let wv = f32x4::splat(weight);
             let (row_chunks, _) = row.as_chunks::<4>();
             let ri = base / 4;
-            acc0 = f32x4::new(row_chunks[ri]).mul_add(wv, acc0);
-            acc1 = f32x4::new(row_chunks[ri + 1]).mul_add(wv, acc1);
-            acc2 = f32x4::new(row_chunks[ri + 2]).mul_add(wv, acc2);
-            acc3 = f32x4::new(row_chunks[ri + 3]).mul_add(wv, acc3);
-            acc4 = f32x4::new(row_chunks[ri + 4]).mul_add(wv, acc4);
-            acc5 = f32x4::new(row_chunks[ri + 5]).mul_add(wv, acc5);
-            acc6 = f32x4::new(row_chunks[ri + 6]).mul_add(wv, acc6);
-            acc7 = f32x4::new(row_chunks[ri + 7]).mul_add(wv, acc7);
+            acc0 += f32x4::new(row_chunks[ri]) * wv;
+            acc1 += f32x4::new(row_chunks[ri + 1]) * wv;
+            acc2 += f32x4::new(row_chunks[ri + 2]) * wv;
+            acc3 += f32x4::new(row_chunks[ri + 3]) * wv;
+            acc4 += f32x4::new(row_chunks[ri + 4]) * wv;
+            acc5 += f32x4::new(row_chunks[ri + 5]) * wv;
+            acc6 += f32x4::new(row_chunks[ri + 6]) * wv;
+            acc7 += f32x4::new(row_chunks[ri + 7]) * wv;
         }
 
         out_chunk[0..4].copy_from_slice(&acc0.to_array());
@@ -144,8 +147,7 @@ pub(super) fn filter_v_row_f32(rows: &[&[f32]], output: &mut [f32], weights: &[f
         let mut acc = f32x4::ZERO;
         for (row, &weight) in rows.iter().zip(weights.iter()) {
             let (row_chunks, _) = row.as_chunks::<4>();
-            let src = f32x4::new(row_chunks[ri]);
-            acc = src.mul_add(f32x4::splat(weight), acc);
+            acc += f32x4::new(row_chunks[ri]) * f32x4::splat(weight);
         }
         *out_chunk = acc.to_array();
     }
@@ -194,7 +196,7 @@ pub(super) fn f32_to_u8_row(input: &[f32], output: &mut [u8]) {
     for (inp, out) in in_chunks.iter().zip(out_chunks.iter_mut()) {
         let fv = f32x4::new(*inp);
         // Match scalar: (v * 255.0 + 0.5).clamp(0.0, 255.0) as u8
-        let scaled = fv.mul_add(scale, half);
+        let scaled = fv * scale + half;
         let clamped = scaled.max(zero).min(max);
         let iv = clamped.fast_trunc_int();
         let arr = iv.to_array();
