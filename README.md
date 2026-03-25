@@ -452,7 +452,7 @@ The imgref functions override the config's dimensions, formats, and stride. Filt
 
 ## Benchmarks
 
-The `benches/` directory contains 11 benchmark binaries covering throughput, precision, and profiling:
+The `benches/` directory contains 17 benchmark binaries covering throughput, precision, and profiling:
 
 | Benchmark | What it measures |
 |-----------|-----------------|
