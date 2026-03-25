@@ -30,6 +30,14 @@ Located in `src/simd/`:
 - `neon.rs`, `wasm128.rs` — Token wrappers for wide_kernels
 - `mod.rs` — Dispatch via `archmage::incant!`
 
+### Compositing / Blending
+
+Blend math lives in `~/work/zen/zenblend/` (MIT OR Apache-2.0). zenresize re-exports
+`BlendMode` from zenblend and delegates all blend operations to it. Both `StreamingResize`
+and `Resizer` expose a `with_blend_mode()` builder. The `pretty-safe` feature replaces
+bounds-checked indexing with `get_unchecked` in SIMD kernels where bounds are proven by
+prior guards — the default build is `#![forbid(unsafe_code)]`.
+
 **H-filter `filter_h_4ch` (f32 path):** AVX2 256-bit, 8 taps per iteration with 4 accumulators. Uses `vpermps` for weight broadcasting — loads 8 weights at once, permutes to create per-tap lane broadcasts. SSE 128-bit remainder for 0-7 leftover taps.
 
 **H-filter `filter_h_u8_4ch` (i16 path):** AVX2 256-bit using `madd_epi16` for paired tap accumulation with pre-expanded weight tables.
