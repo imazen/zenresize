@@ -128,7 +128,13 @@ pub(crate) fn filter_v_all_u8_i16_tiled_neon(
     tile_chunks: usize,
 ) {
     super::wide_kernels::filter_v_all_u8_i16_tiled(
-        intermediate, output, h_row_len, in_h, out_h, weights, tile_chunks,
+        intermediate,
+        output,
+        h_row_len,
+        in_h,
+        out_h,
+        weights,
+        tile_chunks,
     )
 }
 
