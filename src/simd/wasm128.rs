@@ -1,8 +1,9 @@
-//! WASM SIMD128 convolution kernels via portable `wide` SIMD.
+//! WASM SIMD128 convolution kernels via portable magetypes SIMD.
 //!
-//! All implementations delegate to `wide_kernels` which uses `wide` crate types
-//! (f32x4, i16x8, etc.) that compile to WASM SIMD128 instructions when built
-//! with `-C target-feature=+simd128`.
+//! All implementations delegate to `wide_kernels` which uses magetypes generic
+//! types that compile to WASM SIMD128 instructions when built with
+//! `-C target-feature=+simd128`. The `#[magetypes(neon, wasm128)]` macro
+//! generates `_wasm128` suffixed variants that these wrappers call.
 
 use crate::weights::{F32WeightTable, I16WeightTable};
 use archmage::Wasm128Token;
@@ -15,7 +16,7 @@ pub(crate) fn filter_h_row_f32_wasm128(
     weights: &F32WeightTable,
     channels: usize,
 ) {
-    super::wide_kernels::filter_h_row_f32(input, output, weights, channels)
+    super::wide_kernels::filter_h_row_f32_impl_wasm128(_token, input, output, weights, channels)
 }
 
 #[archmage::arcane]
@@ -25,27 +26,27 @@ pub(crate) fn filter_v_row_f32_wasm128(
     output: &mut [f32],
     weights: &[f32],
 ) {
-    super::wide_kernels::filter_v_row_f32(rows, output, weights)
+    super::wide_kernels::filter_v_row_f32_impl_wasm128(_token, rows, output, weights)
 }
 
 #[archmage::arcane]
 pub(crate) fn u8_to_f32_row_wasm128(_token: Wasm128Token, input: &[u8], output: &mut [f32]) {
-    super::wide_kernels::u8_to_f32_row(input, output)
+    super::wide_kernels::u8_to_f32_row_impl_wasm128(_token, input, output)
 }
 
 #[archmage::arcane]
 pub(crate) fn f32_to_u8_row_wasm128(_token: Wasm128Token, input: &[f32], output: &mut [u8]) {
-    super::wide_kernels::f32_to_u8_row(input, output)
+    super::wide_kernels::f32_to_u8_row_impl_wasm128(_token, input, output)
 }
 
 #[archmage::arcane]
 pub(crate) fn premultiply_alpha_row_wasm128(_token: Wasm128Token, row: &mut [f32]) {
-    super::wide_kernels::premultiply_alpha_row(row)
+    super::wide_kernels::premultiply_alpha_row_impl_wasm128(_token, row)
 }
 
 #[archmage::arcane]
 pub(crate) fn unpremultiply_alpha_row_wasm128(_token: Wasm128Token, row: &mut [f32]) {
-    super::wide_kernels::unpremultiply_alpha_row(row)
+    super::wide_kernels::unpremultiply_alpha_row_impl_wasm128(_token, row)
 }
 
 #[archmage::arcane]
@@ -56,7 +57,7 @@ pub(crate) fn filter_h_u8_i16_wasm128(
     weights: &I16WeightTable,
     channels: usize,
 ) {
-    super::wide_kernels::filter_h_u8_i16(input, output, weights, channels)
+    super::wide_kernels::filter_h_u8_i16_impl_wasm128(_token, input, output, weights, channels)
 }
 
 #[archmage::arcane]
@@ -67,7 +68,7 @@ pub(crate) fn filter_h_u8_to_i16_wasm128(
     weights: &I16WeightTable,
     channels: usize,
 ) {
-    super::wide_kernels::filter_h_u8_to_i16(input, output, weights, channels)
+    super::wide_kernels::filter_h_u8_to_i16_impl_wasm128(_token, input, output, weights, channels)
 }
 
 #[archmage::arcane]
@@ -83,8 +84,8 @@ pub(crate) fn filter_h_u8_to_i16_4rows_wasm128(
     out3: &mut [i16],
     weights: &I16WeightTable,
 ) {
-    super::wide_kernels::filter_h_u8_to_i16_4rows(
-        in0, in1, in2, in3, out0, out1, out2, out3, weights,
+    super::wide_kernels::filter_h_u8_to_i16_4rows_impl_wasm128(
+        _token, in0, in1, in2, in3, out0, out1, out2, out3, weights,
     )
 }
 
@@ -101,7 +102,9 @@ pub(crate) fn filter_h_u8_i16_4rows_wasm128(
     out3: &mut [u8],
     weights: &I16WeightTable,
 ) {
-    super::wide_kernels::filter_h_u8_i16_4rows(in0, in1, in2, in3, out0, out1, out2, out3, weights)
+    super::wide_kernels::filter_h_u8_i16_4rows_impl_wasm128(
+        _token, in0, in1, in2, in3, out0, out1, out2, out3, weights,
+    )
 }
 
 #[archmage::arcane]
@@ -114,7 +117,15 @@ pub(crate) fn filter_v_all_u8_i16_wasm128(
     out_h: usize,
     weights: &crate::weights::I16WeightTable,
 ) {
-    super::wide_kernels::filter_v_all_u8_i16(intermediate, output, h_row_len, in_h, out_h, weights)
+    super::wide_kernels::filter_v_all_u8_i16_impl_wasm128(
+        _token,
+        intermediate,
+        output,
+        h_row_len,
+        in_h,
+        out_h,
+        weights,
+    )
 }
 
 #[archmage::arcane]
@@ -128,7 +139,8 @@ pub(crate) fn filter_v_all_u8_i16_tiled_wasm128(
     weights: &crate::weights::I16WeightTable,
     tile_chunks: usize,
 ) {
-    super::wide_kernels::filter_v_all_u8_i16_tiled(
+    super::wide_kernels::filter_v_all_u8_i16_tiled_impl_wasm128(
+        _token,
         intermediate,
         output,
         h_row_len,
@@ -141,12 +153,12 @@ pub(crate) fn filter_v_all_u8_i16_tiled_wasm128(
 
 #[archmage::arcane]
 pub(crate) fn premultiply_u8_row_wasm128(_token: Wasm128Token, input: &[u8], output: &mut [u8]) {
-    super::wide_kernels::premultiply_u8_row(input, output)
+    super::wide_kernels::premultiply_u8_row_impl_wasm128(_token, input, output)
 }
 
 #[archmage::arcane]
 pub(crate) fn unpremultiply_u8_row_wasm128(_token: Wasm128Token, row: &mut [u8]) {
-    super::wide_kernels::unpremultiply_u8_row(row)
+    super::wide_kernels::unpremultiply_u8_row_impl_wasm128(_token, row)
 }
 
 #[archmage::arcane]
@@ -157,7 +169,7 @@ pub(crate) fn filter_h_i16_i16_wasm128(
     weights: &I16WeightTable,
     channels: usize,
 ) {
-    super::wide_kernels::filter_h_i16_i16(input, output, weights, channels)
+    super::wide_kernels::filter_h_i16_i16_impl_wasm128(_token, input, output, weights, channels)
 }
 
 #[archmage::arcane]
@@ -170,7 +182,15 @@ pub(crate) fn filter_v_all_i16_i16_wasm128(
     out_h: usize,
     weights: &crate::weights::I16WeightTable,
 ) {
-    super::wide_kernels::filter_v_all_i16_i16(intermediate, output, h_row_len, in_h, out_h, weights)
+    super::wide_kernels::filter_v_all_i16_i16_impl_wasm128(
+        _token,
+        intermediate,
+        output,
+        h_row_len,
+        in_h,
+        out_h,
+        weights,
+    )
 }
 
 #[archmage::arcane]
@@ -180,7 +200,7 @@ pub(crate) fn filter_v_row_u8_i16_wasm128(
     output: &mut [u8],
     weights: &[i16],
 ) {
-    super::wide_kernels::filter_v_row_u8_i16(rows, output, weights)
+    super::wide_kernels::filter_v_row_u8_i16_impl_wasm128(_token, rows, output, weights)
 }
 
 #[archmage::arcane]
@@ -190,19 +210,19 @@ pub(crate) fn filter_v_row_i16_wasm128(
     output: &mut [i16],
     weights: &[i16],
 ) {
-    super::wide_kernels::filter_v_row_i16(rows, output, weights)
+    super::wide_kernels::filter_v_row_i16_impl_wasm128(_token, rows, output, weights)
 }
 
-// f16 kernels — delegate to wide_kernels (scalar-style)
+// f16 kernels — delegate to wide_kernels
 
 #[archmage::arcane]
 pub(crate) fn f32_to_f16_row_wasm128(_token: Wasm128Token, input: &[f32], output: &mut [u16]) {
-    super::wide_kernels::f32_to_f16_row(input, output)
+    super::wide_kernels::f32_to_f16_row_impl_wasm128(_token, input, output)
 }
 
 #[archmage::arcane]
 pub(crate) fn f16_to_f32_row_wasm128(_token: Wasm128Token, input: &[u16], output: &mut [f32]) {
-    super::wide_kernels::f16_to_f32_row(input, output)
+    super::wide_kernels::f16_to_f32_row_impl_wasm128(_token, input, output)
 }
 
 #[archmage::arcane]
@@ -213,7 +233,9 @@ pub(crate) fn filter_h_row_f32_to_f16_wasm128(
     weights: &F32WeightTable,
     channels: usize,
 ) {
-    super::wide_kernels::filter_h_row_f32_to_f16(input, output, weights, channels)
+    super::wide_kernels::filter_h_row_f32_to_f16_impl_wasm128(
+        _token, input, output, weights, channels,
+    )
 }
 
 #[archmage::arcane]
@@ -223,7 +245,7 @@ pub(crate) fn filter_v_row_f16_wasm128(
     output: &mut [f32],
     weights: &[f32],
 ) {
-    super::wide_kernels::filter_v_row_f16(rows, output, weights)
+    super::wide_kernels::filter_v_row_f16_impl_wasm128(_token, rows, output, weights)
 }
 
 #[archmage::arcane]
@@ -236,7 +258,15 @@ pub(crate) fn filter_v_all_f16_wasm128(
     out_h: usize,
     weights: &F32WeightTable,
 ) {
-    super::wide_kernels::filter_v_all_f16(intermediate, output, h_row_len, in_h, out_h, weights)
+    super::wide_kernels::filter_v_all_f16_impl_wasm128(
+        _token,
+        intermediate,
+        output,
+        h_row_len,
+        in_h,
+        out_h,
+        weights,
+    )
 }
 
 // Transfer function batch processors — wrap linear-srgb rites via closures.

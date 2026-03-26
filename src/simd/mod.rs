@@ -2,8 +2,8 @@
 //!
 //! Uses archmage incant! dispatch to select the best available implementation:
 //! - x86_64: AVX2+FMA (X64V3Token)
-//! - AArch64: NEON via wide (NeonToken)
-//! - WASM32: SIMD128 via wide (Wasm128Token)
+//! - AArch64: NEON via magetypes (NeonToken)
+//! - WASM32: SIMD128 via magetypes (Wasm128Token)
 //! - Fallback: Scalar
 #![allow(clippy::too_many_arguments)]
 
@@ -18,8 +18,11 @@ mod x86;
 #[allow(unused_imports)]
 use x86::*;
 
-// Portable wide SIMD kernels (shared by NEON and WASM128)
+// Portable SIMD kernels via magetypes (shared by NEON and WASM128)
+// allow(dead_code): #[magetypes] generates _scalar variants that are unused
+// because scalar.rs provides the scalar fallbacks for incant!
 #[cfg(any(target_arch = "aarch64", target_arch = "wasm32"))]
+#[allow(dead_code)]
 mod wide_kernels;
 
 // Portable transfer function SIMD kernels via magetypes f32x4

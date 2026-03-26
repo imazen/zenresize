@@ -26,8 +26,8 @@ Two resize APIs with different pipeline architectures:
 Located in `src/simd/`:
 - `x86.rs` — AVX2+FMA kernels via archmage `X64V3Token`
 - `scalar.rs` — Portable fallback
-- `wide_kernels.rs` — Portable SIMD via `wide` crate (NEON, WASM128)
-- `neon.rs`, `wasm128.rs` — Token wrappers for wide_kernels
+- `wide_kernels.rs` — Portable SIMD via `magetypes` generic types (`#[magetypes(neon, wasm128)]`)
+- `neon.rs`, `wasm128.rs` — Token wrappers calling `_impl_neon`/`_impl_wasm128` from wide_kernels
 - `mod.rs` — Dispatch via `archmage::incant!`
 
 ### Compositing / Blending

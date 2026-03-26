@@ -1900,7 +1900,6 @@ dependencies = [
  "safe_unaligned_simd",
  "tango-bench",
  "whereat",
- "wide",
  "zenbench",
  "zenblend",
  "zenlayout",

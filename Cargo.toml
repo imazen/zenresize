@@ -11,7 +11,7 @@ categories = ["graphics", "multimedia::images", "no-std"]
 
 [features]
 default = ["std", "layout"]
-std = ["archmage/std", "magetypes/std", "linear-srgb/std", "wide/std", "zenlayout?/std", "zenpixels/std", "whereat/std", "zenblend/std", "zennode?/std"]
+std = ["archmage/std", "magetypes/std", "linear-srgb/std", "zenlayout?/std", "zenpixels/std", "whereat/std", "zenblend/std", "zennode?/std"]
 avx512 = ["archmage/avx512"]
 layout = ["dep:zenlayout"]
 # zennode node definitions (Constrain schema with RIAPI keys)
@@ -29,7 +29,6 @@ magetypes = { version = "0.9.12", default-features = false }
 zenlayout = { version = "0.2", default-features = false, optional = true }
 linear-srgb = { version = "0.6.5", default-features = false, features = ["transfer"] }
 safe_unaligned_simd = "0.2.5"
-wide = { version = "1.1", default-features = false }
 zenpixels = { version = "0.2.0", default-features = false }
 imgref = "1.12"
 libm = { version = "0.2", default-features = false }
