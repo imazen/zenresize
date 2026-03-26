@@ -6,7 +6,8 @@
 //!   3. 3 full-size planes via PlaneResizer (i16 1ch, simulates 4:4:4)
 //!   4. 1 full + 2 half-size planes via PlaneResizer (i16 1ch, simulates 4:2:0)
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use zenbench::criterion_compat::*;
+use zenbench::{criterion_group, criterion_main};
 use zenresize::{AlphaMode, Filter, PixelDescriptor, PlaneResizer, ResizeConfig, Resizer};
 
 // ---------------------------------------------------------------------------
@@ -36,7 +37,7 @@ fn planar_vs_interleaved(c: &mut Criterion) {
         let out_h = h / 2;
         let pixels = w as u64 * h as u64;
 
-        group.throughput(criterion::Throughput::Elements(pixels));
+        group.throughput(Throughput::Elements(pixels));
 
         // -- Rgbx interleaved (no premul) --
         {
@@ -140,7 +141,7 @@ fn f32_planar_vs_interleaved(c: &mut Criterion) {
         let out_h = h / 2;
         let pixels = w as u64 * h as u64;
 
-        group.throughput(criterion::Throughput::Elements(pixels));
+        group.throughput(Throughput::Elements(pixels));
 
         // -- f32 Rgbx interleaved (4ch, no premul) --
         {

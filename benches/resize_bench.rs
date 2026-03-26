@@ -3,12 +3,14 @@
 //! All benchmarks use Lanczos3 filter, single-threaded, RGBA u8 pixels.
 //! Each library is tested in sRGB mode (fast) and linear-light mode where available.
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use zenbench::criterion_compat::*;
+use zenbench::{criterion_group, criterion_main};
 
 // ---------------------------------------------------------------------------
 // Synthetic image generation (real vs synth is <1% difference for SIMD kernels)
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 struct TestImage {
     name: &'static str,
     width: u32,
@@ -171,7 +173,7 @@ fn downscale_50(c: &mut Criterion) {
         let megapixels = (img.width as f64 * img.height as f64) / 1e6;
         let param = format!("{}_{}", img.name, img.width);
 
-        group.throughput(criterion::Throughput::Elements(
+        group.throughput(Throughput::Elements(
             (img.width as u64) * (img.height as u64),
         ));
 
@@ -223,7 +225,7 @@ fn downscale_25(c: &mut Criterion) {
         let out_h = img.height / 4;
         let param = format!("{}_{}", img.name, img.width);
 
-        group.throughput(criterion::Throughput::Elements(
+        group.throughput(Throughput::Elements(
             (img.width as u64) * (img.height as u64),
         ));
 
@@ -270,9 +272,7 @@ fn upscale_200(c: &mut Criterion) {
     let out_h = img.height * 2;
     let param = format!("{}_{}", img.name, img.width);
 
-    group.throughput(criterion::Throughput::Elements(
-        (out_w as u64) * (out_h as u64),
-    ));
+    group.throughput(Throughput::Elements((out_w as u64) * (out_h as u64)));
 
     group.bench_with_input(BenchmarkId::new("zenresize_srgb", &param), img, |b, img| {
         b.iter(|| bench_zenresize_srgb(img, out_w, out_h))

@@ -4,7 +4,8 @@
 //! image sizes and tile widths. The tiled variant processes column strips
 //! to keep shared input rows hot in L1 cache across consecutive output rows.
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use zenbench::criterion_compat::*;
+use zenbench::{criterion_group, criterion_main};
 use zenresize::filter::{Filter, InterpolationDetails};
 use zenresize::weights::I16WeightTable;
 

@@ -6,8 +6,9 @@
 //! All batch benchmarks process 1000 RGBA pixels (4000 f32 values).
 
 #![allow(clippy::excessive_precision)]
-use criterion::{Criterion, criterion_group, criterion_main};
 use linear_srgb::default as lsrgb;
+use zenbench::criterion_compat::*;
+use zenbench::{criterion_group, criterion_main};
 use zenresize::{Bt709, Hlg, Pq, Srgb, TransferCurve};
 
 const ROW_LEN: usize = 4000; // 1000 RGBA pixels
