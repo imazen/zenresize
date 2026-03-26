@@ -1,7 +1,7 @@
-//! zenode node definitions for image resizing/constraining.
+//! Zennode definitions for image resizing/constraining.
 //!
-//! Defines [`Constrain`] with RIAPI-compatible querystring keys matching
-//! imageflow's established resize parameters.
+//! Defines [`Constrain`] with full resize-engine control using `Option<T>`
+//! for optional parameters — `None` means "auto" or "not specified."
 
 extern crate alloc;
 use alloc::string::String;
@@ -11,10 +11,27 @@ use zennode::*;
 /// Constrain image dimensions with resize, crop, or pad modes.
 ///
 /// The primary resize/layout node. Computes how to map source dimensions
-/// to target dimensions using the selected constraint mode and gravity.
+/// to target dimensions using the selected constraint mode, gravity, and
+/// resampling hints.
 ///
-/// JSON API: `{ "w": 800, "h": 600, "mode": "within", "filter": "lanczos" }`
-/// RIAPI: `?w=800&h=600&mode=within&down.filter=lanczos`
+/// Optional parameters (`Option<T>`) use `None` for "not specified" —
+/// the engine picks sensible defaults based on the operation.
+///
+/// JSON API:
+/// ```json
+/// {
+///   "w": 800,
+///   "h": 600,
+///   "mode": "fit_crop",
+///   "gravity": "top_left",
+///   "down_filter": "lanczos",
+///   "up_filter": "ginseng",
+///   "sharpen": 15.0,
+///   "scaling_colorspace": "linear"
+/// }
+/// ```
+///
+/// RIAPI: `?w=800&h=600&mode=fit_crop&anchor=top_left&down.filter=lanczos`
 #[derive(Node, Clone, Debug)]
 #[node(id = "zenresize.constrain", group = Geometry, role = Resize)]
 #[node(coalesce = "layout_plan")]
@@ -22,28 +39,31 @@ use zennode::*;
 #[node(format(preferred = LinearF32))]
 #[node(tags("resize", "geometry", "scale"))]
 pub struct Constrain {
-    /// Target width in pixels. 0 means unconstrained (derive from height + aspect ratio).
+    // ─── Dimensions ───
+    /// Target width in pixels. None = unconstrained (derive from height + aspect ratio).
     #[param(range(0..=65535), default = 0, step = 1)]
     #[param(unit = "px", section = "Dimensions", label = "Width")]
     #[kv("w", "width")]
-    pub w: u32,
+    pub w: Option<u32>,
 
-    /// Target height in pixels. 0 means unconstrained (derive from width + aspect ratio).
+    /// Target height in pixels. None = unconstrained (derive from width + aspect ratio).
     #[param(range(0..=65535), default = 0, step = 1)]
     #[param(unit = "px", section = "Dimensions", label = "Height")]
     #[kv("h", "height")]
-    pub h: u32,
+    pub h: Option<u32>,
 
+    // ─── Layout ───
     /// Constraint mode controlling how the image fits the target dimensions.
     ///
-    /// - `"distort"` — stretch to exact dimensions, ignoring aspect ratio
-    /// - `"within"` — fit inside target, never upscale (default)
-    /// - `"fit"` — fit inside target, may upscale
-    /// - `"within_crop"` — fill target by cropping, never upscale
-    /// - `"fit_crop"` — fill target by cropping, may upscale
-    /// - `"fit_pad"` — fit inside target, pad to exact dimensions
-    /// - `"within_pad"` — fit inside target without upscale, pad to exact dimensions
-    /// - `"aspect_crop"` — crop to target aspect ratio without resizing
+    /// - "distort" — stretch to exact dimensions, ignoring aspect ratio
+    /// - "within" — fit inside target, never upscale (default)
+    /// - "fit" — fit inside target, may upscale
+    /// - "within_crop" — fill target by cropping, never upscale
+    /// - "fit_crop" — fill target by cropping, may upscale
+    /// - "fit_pad" — fit inside target, pad to exact dimensions
+    /// - "within_pad" — fit inside target without upscale, pad to exact dimensions
+    /// - "pad_within" — never upscale, always pad to exact canvas
+    /// - "aspect_crop" — crop to target aspect ratio without resizing
     #[param(default = "within")]
     #[param(section = "Layout", label = "Mode")]
     #[kv("mode")]
@@ -53,48 +73,100 @@ pub struct Constrain {
     ///
     /// Controls which part of the image is preserved when cropping,
     /// or where the image is positioned when padding.
-    /// Values: `"center"`, `"top_left"`, `"top"`, `"top_right"`,
-    /// `"left"`, `"right"`, `"bottom_left"`, `"bottom"`, `"bottom_right"`.
+    /// Values: "center", "top_left", "top", "top_right",
+    /// "left", "right", "bottom_left", "bottom", "bottom_right".
     #[param(default = "center")]
     #[param(section = "Layout", label = "Anchor")]
     #[kv("anchor")]
     pub gravity: String,
 
-    /// Resampling filter for downscaling and upscaling.
+    /// Background color for pad modes.
     ///
-    /// Empty string means auto-select (Robidoux for downscale, Ginseng for upscale).
-    /// Values: `"robidoux"`, `"lanczos"`, `"mitchell"`, `"catmull_rom"`,
-    /// `"cubic"`, `"ginseng"`, `"hermite"`, `"box"`, `"triangle"`, `"linear"`, etc.
-    #[param(default = "")]
-    #[param(section = "Quality", label = "Filter")]
-    #[kv("down.filter", "up.filter")]
-    pub filter: String,
-
-    /// Post-resize sharpening amount (0 = none, 100 = maximum).
-    #[param(range(0.0..=100.0), default = 0.0, identity = 0.0, step = 1.0)]
-    #[param(unit = "%", section = "Quality", label = "Sharpen")]
-    #[kv("f.sharpen")]
-    pub sharpen: f32,
-
-    /// Background color for pad modes (CSS-style hex or named color).
-    ///
-    /// Empty string means transparent. Examples: `"white"`, `"#FF0000"`, `"000000FF"`.
+    /// None = transparent. Accepts CSS-style hex or named colors:
+    /// "white", "#FF0000", "000000FF".
     #[param(default = "")]
     #[param(section = "Layout", label = "Background Color")]
     #[kv("bgcolor")]
-    pub bgcolor: String,
+    pub bgcolor: Option<String>,
+
+    // ─── Resampling ───
+    /// Downscale resampling filter. None = auto (Robidoux).
+    ///
+    /// 31 filters available: "robidoux", "robidoux_sharp", "robidoux_fast",
+    /// "lanczos", "lanczos_sharp", "lanczos2", "lanczos2_sharp",
+    /// "ginseng", "ginseng_sharp", "mitchell", "catmull_rom", "cubic",
+    /// "cubic_sharp", "cubic_b_spline", "hermite", "triangle", "linear",
+    /// "box", "fastest", "jinc", "n_cubic", "n_cubic_sharp", etc.
+    #[param(default = "")]
+    #[param(section = "Quality", label = "Downscale Filter")]
+    #[kv("down.filter")]
+    pub down_filter: Option<String>,
+
+    /// Upscale resampling filter. None = auto (Ginseng).
+    ///
+    /// Same filter names as down_filter.
+    #[param(default = "")]
+    #[param(section = "Quality", label = "Upscale Filter")]
+    #[kv("up.filter")]
+    pub up_filter: Option<String>,
+
+    /// Color space for resampling math. None = auto ("linear" for most operations).
+    ///
+    /// - "linear" — resize in linear light (gamma-correct, default)
+    /// - "srgb" — resize in sRGB gamma space (faster, less correct)
+    #[param(default = "")]
+    #[param(section = "Quality", label = "Scaling Colorspace")]
+    pub scaling_colorspace: Option<String>,
+
+    // ─── Sharpening & Blur ───
+    /// Post-resize sharpening amount (0 = none, 100 = maximum).
+    ///
+    /// None = no sharpening. Applied as an unsharp mask after resize.
+    #[param(range(0.0..=100.0), default = 0.0, step = 1.0)]
+    #[param(unit = "%", section = "Quality", label = "Sharpen")]
+    #[kv("f.sharpen")]
+    pub sharpen: Option<f32>,
+
+    /// Negative-lobe ratio for in-kernel sharpening.
+    ///
+    /// None = use filter's natural ratio. 0.0 = flatten (maximum smoothness).
+    /// Above natural = sharpen. This is zero-cost (applied during weight computation).
+    #[param(range(0.0..=1.0), default = 0.0, step = 0.01)]
+    #[param(section = "Advanced", label = "Lobe Ratio")]
+    pub lobe_ratio: Option<f32>,
+
+    /// Kernel width scale factor. None = auto (1.0).
+    ///
+    /// > 1.0 = softer (widens filter window), < 1.0 = sharper (aliasing risk).
+    /// Combined with blur. This is zero-cost (applied during weight computation).
+    #[param(range(0.1..=4.0), default = 1.0, step = 0.01)]
+    #[param(section = "Advanced", label = "Kernel Width Scale")]
+    pub kernel_width_scale: Option<f32>,
+
+    /// Post-resize Gaussian blur sigma. None = no blur.
+    ///
+    /// Applied as a separable H+V pass after resize. Not equivalent to
+    /// kernel_width_scale (which changes the resampling kernel itself).
+    #[param(range(0.0..=100.0), default = 0.0, step = 0.1)]
+    #[param(section = "Advanced", label = "Post Blur")]
+    pub post_blur: Option<f32>,
 }
 
 impl Default for Constrain {
     fn default() -> Self {
         Self {
-            w: 0,
-            h: 0,
+            w: None,
+            h: None,
             mode: String::from("within"),
             gravity: String::from("center"),
-            filter: String::new(),
-            sharpen: 0.0,
-            bgcolor: String::new(),
+            bgcolor: None,
+            down_filter: None,
+            up_filter: None,
+            scaling_colorspace: None,
+            sharpen: None,
+            lobe_ratio: None,
+            kernel_width_scale: None,
+            post_blur: None,
         }
     }
 }
@@ -104,7 +176,7 @@ pub fn register(registry: &mut NodeRegistry) {
     registry.register(&CONSTRAIN_NODE);
 }
 
-/// All zenresize zenode definitions.
+/// All zenresize zennode definitions.
 pub static ALL: &[&dyn NodeDef] = &[&CONSTRAIN_NODE];
 
 #[cfg(test)]
@@ -137,40 +209,66 @@ mod tests {
     }
 
     #[test]
-    fn param_count_and_names() {
+    fn param_count() {
         let schema = CONSTRAIN_NODE.schema();
-        let names: Vec<&str> = schema.params.iter().map(|p| p.name).collect();
-        assert!(names.contains(&"w"));
-        assert!(names.contains(&"h"));
-        assert!(names.contains(&"mode"));
-        assert!(names.contains(&"gravity"));
-        assert!(names.contains(&"filter"));
-        assert!(names.contains(&"sharpen"));
-        assert!(names.contains(&"bgcolor"));
-        assert_eq!(names.len(), 7);
+        assert_eq!(schema.params.len(), 12);
     }
 
     #[test]
-    fn defaults() {
+    fn optional_params_marked() {
+        let schema = CONSTRAIN_NODE.schema();
+        let optional_names: Vec<&str> = schema
+            .params
+            .iter()
+            .filter(|p| p.optional)
+            .map(|p| p.name)
+            .collect();
+        assert!(optional_names.contains(&"w"));
+        assert!(optional_names.contains(&"h"));
+        assert!(optional_names.contains(&"bgcolor"));
+        assert!(optional_names.contains(&"down_filter"));
+        assert!(optional_names.contains(&"up_filter"));
+        assert!(optional_names.contains(&"scaling_colorspace"));
+        assert!(optional_names.contains(&"sharpen"));
+        assert!(optional_names.contains(&"lobe_ratio"));
+        assert!(optional_names.contains(&"kernel_width_scale"));
+        assert!(optional_names.contains(&"post_blur"));
+
+        let required_names: Vec<&str> = schema
+            .params
+            .iter()
+            .filter(|p| !p.optional)
+            .map(|p| p.name)
+            .collect();
+        assert!(required_names.contains(&"mode"));
+        assert!(required_names.contains(&"gravity"));
+    }
+
+    #[test]
+    fn defaults_are_none() {
         let node = CONSTRAIN_NODE.create_default().unwrap();
-        assert_eq!(node.get_param("w"), Some(ParamValue::U32(0)));
-        assert_eq!(node.get_param("h"), Some(ParamValue::U32(0)));
+        assert_eq!(node.get_param("w"), Some(ParamValue::None));
+        assert_eq!(node.get_param("h"), Some(ParamValue::None));
+        assert_eq!(node.get_param("down_filter"), Some(ParamValue::None));
+        assert_eq!(node.get_param("up_filter"), Some(ParamValue::None));
+        assert_eq!(node.get_param("sharpen"), Some(ParamValue::None));
+        assert_eq!(node.get_param("lobe_ratio"), Some(ParamValue::None));
+        assert_eq!(node.get_param("kernel_width_scale"), Some(ParamValue::None));
+        assert_eq!(node.get_param("post_blur"), Some(ParamValue::None));
+        assert_eq!(node.get_param("bgcolor"), Some(ParamValue::None));
+        assert_eq!(node.get_param("scaling_colorspace"), Some(ParamValue::None));
+    }
+
+    #[test]
+    fn required_defaults() {
+        let node = CONSTRAIN_NODE.create_default().unwrap();
         assert_eq!(
             node.get_param("mode"),
-            Some(ParamValue::Str(String::from("within")))
+            Some(ParamValue::Str("within".into()))
         );
         assert_eq!(
             node.get_param("gravity"),
-            Some(ParamValue::Str(String::from("center")))
-        );
-        assert_eq!(
-            node.get_param("filter"),
-            Some(ParamValue::Str(String::new()))
-        );
-        assert_eq!(node.get_param("sharpen"), Some(ParamValue::F32(0.0)));
-        assert_eq!(
-            node.get_param("bgcolor"),
-            Some(ParamValue::Str(String::new()))
+            Some(ParamValue::Str("center".into()))
         );
     }
 
@@ -192,16 +290,21 @@ mod tests {
     }
 
     #[test]
-    fn from_kv_mode_and_filter() {
-        let mut kv = KvPairs::from_querystring("w=400&mode=fit_crop&down.filter=lanczos");
+    fn from_kv_mode_and_filters() {
+        let mut kv =
+            KvPairs::from_querystring("w=400&mode=fit_crop&down.filter=lanczos&up.filter=ginseng");
         let node = CONSTRAIN_NODE.from_kv(&mut kv).unwrap().unwrap();
         assert_eq!(
             node.get_param("mode"),
             Some(ParamValue::Str("fit_crop".into()))
         );
         assert_eq!(
-            node.get_param("filter"),
+            node.get_param("down_filter"),
             Some(ParamValue::Str("lanczos".into()))
+        );
+        assert_eq!(
+            node.get_param("up_filter"),
+            Some(ParamValue::Str("ginseng".into()))
         );
         assert_eq!(kv.unconsumed().count(), 0);
     }
@@ -236,43 +339,64 @@ mod tests {
     }
 
     #[test]
-    fn json_round_trip() {
-        let mut params = ParamMap::new();
-        params.insert("w".into(), ParamValue::U32(1920));
-        params.insert("h".into(), ParamValue::U32(1080));
-        params.insert("mode".into(), ParamValue::Str("fit_crop".into()));
-        params.insert("filter".into(), ParamValue::Str("lanczos".into()));
-        params.insert("sharpen".into(), ParamValue::F32(5.0));
+    fn set_and_clear_optional() {
+        let mut node = Constrain::default();
+        assert_eq!(node.w, None);
 
-        let node = CONSTRAIN_NODE.create(&params).unwrap();
-        assert_eq!(node.get_param("w"), Some(ParamValue::U32(1920)));
-        assert_eq!(node.get_param("h"), Some(ParamValue::U32(1080)));
-        assert_eq!(
-            node.get_param("mode"),
-            Some(ParamValue::Str("fit_crop".into()))
-        );
+        // Set via set_param
+        let boxed: &mut dyn NodeInstance = &mut node;
+        assert!(boxed.set_param("w", ParamValue::U32(800)));
+        assert_eq!(boxed.get_param("w"), Some(ParamValue::U32(800)));
 
-        // Round-trip through to_params/create
-        let exported = node.to_params();
-        let node2 = CONSTRAIN_NODE.create(&exported).unwrap();
-        assert_eq!(node2.get_param("w"), Some(ParamValue::U32(1920)));
-        assert_eq!(
-            node2.get_param("filter"),
-            Some(ParamValue::Str("lanczos".into()))
-        );
-        assert_eq!(node2.get_param("sharpen"), Some(ParamValue::F32(5.0)));
+        // Clear with ParamValue::None
+        assert!(boxed.set_param("w", ParamValue::None));
+        assert_eq!(boxed.get_param("w"), Some(ParamValue::None));
     }
 
     #[test]
-    fn downcast_to_concrete() {
+    fn round_trip() {
+        let c = Constrain {
+            w: Some(1920),
+            h: Some(1080),
+            mode: String::from("fit_crop"),
+            gravity: String::from("top_left"),
+            bgcolor: Some(String::from("white")),
+            down_filter: Some(String::from("lanczos")),
+            up_filter: Some(String::from("ginseng")),
+            scaling_colorspace: Some(String::from("linear")),
+            sharpen: Some(15.0),
+            lobe_ratio: None,
+            kernel_width_scale: None,
+            post_blur: Some(0.5),
+        };
+        let params = c.to_params();
+        let node = CONSTRAIN_NODE.create(&params).unwrap();
+        let restored = node.as_any().downcast_ref::<Constrain>().unwrap();
+
+        assert_eq!(restored.w, Some(1920));
+        assert_eq!(restored.h, Some(1080));
+        assert_eq!(restored.mode, "fit_crop");
+        assert_eq!(restored.gravity, "top_left");
+        assert_eq!(restored.bgcolor.as_deref(), Some("white"));
+        assert_eq!(restored.down_filter.as_deref(), Some("lanczos"));
+        assert_eq!(restored.up_filter.as_deref(), Some("ginseng"));
+        assert_eq!(restored.scaling_colorspace.as_deref(), Some("linear"));
+        assert_eq!(restored.sharpen, Some(15.0));
+        assert_eq!(restored.lobe_ratio, None);
+        assert_eq!(restored.kernel_width_scale, None);
+        assert_eq!(restored.post_blur, Some(0.5));
+    }
+
+    #[test]
+    fn downcast_default() {
         let node = CONSTRAIN_NODE.create_default().unwrap();
         let c = node.as_any().downcast_ref::<Constrain>().unwrap();
-        assert_eq!(c.w, 0);
-        assert_eq!(c.h, 0);
+        assert_eq!(c.w, None);
+        assert_eq!(c.h, None);
         assert_eq!(c.mode, "within");
         assert_eq!(c.gravity, "center");
-        assert_eq!(c.filter, "");
-        assert_eq!(c.sharpen, 0.0);
+        assert_eq!(c.down_filter, None);
+        assert_eq!(c.sharpen, None);
     }
 
     #[test]
