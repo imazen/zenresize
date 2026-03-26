@@ -20,10 +20,42 @@
 
 #[cfg(not(feature = "std"))]
 use alloc::{vec, vec::Vec};
+#[cfg(feature = "std")]
+use core::cell::RefCell;
 
 use crate::color;
 use crate::fastmath;
 use crate::simd;
+
+// =============================================================================
+// Scratch buffer for unpremultiply (avoids per-row heap allocation)
+// =============================================================================
+
+/// Prepare an unpremultiplied copy of `src` without per-call allocation.
+///
+/// With `std`, reuses a thread-local scratch buffer that grows to the
+/// high-water mark and stays allocated for the thread's lifetime.
+/// Without `std`, falls back to `src.to_vec()`.
+#[cfg(feature = "std")]
+fn unpremultiply_to_scratch(src: &[f32], f: impl FnOnce(&[f32])) {
+    thread_local! {
+        static SCRATCH: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
+    }
+    SCRATCH.with(|cell| {
+        let mut scratch = cell.borrow_mut();
+        scratch.clear();
+        scratch.extend_from_slice(src);
+        simd::unpremultiply_alpha_row(&mut scratch);
+        f(&scratch);
+    });
+}
+
+#[cfg(not(feature = "std"))]
+fn unpremultiply_to_scratch(src: &[f32], f: impl FnOnce(&[f32])) {
+    let mut tmp = src.to_vec();
+    simd::unpremultiply_alpha_row(&mut tmp);
+    f(&tmp);
+}
 
 // =============================================================================
 // TransferCurve trait
@@ -214,10 +246,7 @@ impl TransferCurve for NoTransfer {
         unpremul: bool,
     ) {
         if unpremul {
-            // Need a mutable copy for unpremultiply
-            let mut tmp = src.to_vec();
-            simd::unpremultiply_alpha_row(&mut tmp);
-            simd::f32_to_u8_row(&tmp, dst);
+            unpremultiply_to_scratch(src, |s| simd::f32_to_u8_row(s, dst));
         } else {
             simd::f32_to_u8_row(src, dst);
         }
@@ -250,11 +279,11 @@ impl TransferCurve for NoTransfer {
         unpremul: bool,
     ) {
         if unpremul {
-            let mut tmp = src.to_vec();
-            simd::unpremultiply_alpha_row(&mut tmp);
-            for (s, d) in tmp.iter().zip(dst.iter_mut()) {
-                *d = (*s * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
-            }
+            unpremultiply_to_scratch(src, |s| {
+                for (sv, d) in s.iter().zip(dst.iter_mut()) {
+                    *d = (*sv * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
+                }
+            });
         } else {
             for (s, d) in src.iter().zip(dst.iter_mut()) {
                 *d = (*s * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
@@ -361,9 +390,9 @@ impl TransferCurve for Srgb {
         unpremul: bool,
     ) {
         if unpremul {
-            let mut tmp = src.to_vec();
-            simd::unpremultiply_alpha_row(&mut tmp);
-            color::linear_f32_to_srgb_u8(&tmp, dst, channels, has_alpha);
+            unpremultiply_to_scratch(src, |s| {
+                color::linear_f32_to_srgb_u8(s, dst, channels, has_alpha);
+            });
         } else {
             color::linear_f32_to_srgb_u8(src, dst, channels, has_alpha);
         }
@@ -416,34 +445,30 @@ impl TransferCurve for Srgb {
         // accuracy with the LUT decode path. The polynomial is 10× slower than the
         // LUT but encode is rarely the bottleneck — decode dominates in pipelines
         // that read u16 images (camera RAW, TIFF, PNG16).
-        let work: Vec<f32>;
-        let src = if unpremul {
-            work = {
-                let mut tmp = src.to_vec();
-                simd::unpremultiply_alpha_row(&mut tmp);
-                tmp
-            };
-            &work
-        } else {
-            src
+        let encode = |src: &[f32], dst: &mut [u16]| {
+            if has_alpha && channels >= 2 {
+                for (src_px, dst_px) in src
+                    .chunks_exact(channels)
+                    .zip(dst.chunks_exact_mut(channels))
+                {
+                    for i in 0..channels - 1 {
+                        dst_px[i] = (self.from_linear(src_px[i]) * 65535.0 + 0.5)
+                            .clamp(0.0, 65535.0) as u16;
+                    }
+                    dst_px[channels - 1] =
+                        (src_px[channels - 1] * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
+                }
+            } else {
+                for (s, d) in src.iter().zip(dst.iter_mut()) {
+                    *d = (self.from_linear(*s) * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
+                }
+            }
         };
 
-        if has_alpha && channels >= 2 {
-            for (src_px, dst_px) in src
-                .chunks_exact(channels)
-                .zip(dst.chunks_exact_mut(channels))
-            {
-                for i in 0..channels - 1 {
-                    dst_px[i] =
-                        (self.from_linear(src_px[i]) * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
-                }
-                dst_px[channels - 1] =
-                    (src_px[channels - 1] * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
-            }
+        if unpremul {
+            unpremultiply_to_scratch(src, |s| encode(s, dst));
         } else {
-            for (s, d) in src.iter().zip(dst.iter_mut()) {
-                *d = (self.from_linear(*s) * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
-            }
+            encode(src, dst);
         }
     }
 
@@ -549,32 +574,30 @@ impl TransferCurve for Bt709 {
         has_alpha: bool,
         unpremul: bool,
     ) {
-        let work: Vec<f32>;
-        let src = if unpremul {
-            work = {
-                let mut tmp = src.to_vec();
-                simd::unpremultiply_alpha_row(&mut tmp);
-                tmp
-            };
-            &work
-        } else {
-            src
+        let encode = |src: &[f32], dst: &mut [u8]| {
+            if has_alpha && channels >= 2 {
+                for (src_px, dst_px) in src
+                    .chunks_exact(channels)
+                    .zip(dst.chunks_exact_mut(channels))
+                {
+                    for i in 0..channels - 1 {
+                        dst_px[i] =
+                            (self.from_linear(src_px[i]) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+                    }
+                    dst_px[channels - 1] =
+                        (src_px[channels - 1] * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+                }
+            } else {
+                for (s, d) in src.iter().zip(dst.iter_mut()) {
+                    *d = (self.from_linear(*s) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+                }
+            }
         };
 
-        if has_alpha && channels >= 2 {
-            for (src_px, dst_px) in src
-                .chunks_exact(channels)
-                .zip(dst.chunks_exact_mut(channels))
-            {
-                for i in 0..channels - 1 {
-                    dst_px[i] = (self.from_linear(src_px[i]) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-                }
-                dst_px[channels - 1] = (src_px[channels - 1] * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-            }
+        if unpremul {
+            unpremultiply_to_scratch(src, |s| encode(s, dst));
         } else {
-            for (s, d) in src.iter().zip(dst.iter_mut()) {
-                *d = (self.from_linear(*s) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-            }
+            encode(src, dst);
         }
     }
 
@@ -616,34 +639,30 @@ impl TransferCurve for Bt709 {
         has_alpha: bool,
         unpremul: bool,
     ) {
-        let work: Vec<f32>;
-        let src = if unpremul {
-            work = {
-                let mut tmp = src.to_vec();
-                simd::unpremultiply_alpha_row(&mut tmp);
-                tmp
-            };
-            &work
-        } else {
-            src
+        let encode = |src: &[f32], dst: &mut [u16]| {
+            if has_alpha && channels >= 2 {
+                for (src_px, dst_px) in src
+                    .chunks_exact(channels)
+                    .zip(dst.chunks_exact_mut(channels))
+                {
+                    for i in 0..channels - 1 {
+                        dst_px[i] = (self.from_linear(src_px[i]) * 65535.0 + 0.5)
+                            .clamp(0.0, 65535.0) as u16;
+                    }
+                    dst_px[channels - 1] =
+                        (src_px[channels - 1] * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
+                }
+            } else {
+                for (s, d) in src.iter().zip(dst.iter_mut()) {
+                    *d = (self.from_linear(*s) * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
+                }
+            }
         };
 
-        if has_alpha && channels >= 2 {
-            for (src_px, dst_px) in src
-                .chunks_exact(channels)
-                .zip(dst.chunks_exact_mut(channels))
-            {
-                for i in 0..channels - 1 {
-                    dst_px[i] =
-                        (self.from_linear(src_px[i]) * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
-                }
-                dst_px[channels - 1] =
-                    (src_px[channels - 1] * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
-            }
+        if unpremul {
+            unpremultiply_to_scratch(src, |s| encode(s, dst));
         } else {
-            for (s, d) in src.iter().zip(dst.iter_mut()) {
-                *d = (self.from_linear(*s) * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
-            }
+            encode(src, dst);
         }
     }
 
@@ -756,32 +775,30 @@ impl TransferCurve for Pq {
         has_alpha: bool,
         unpremul: bool,
     ) {
-        let work: Vec<f32>;
-        let src = if unpremul {
-            work = {
-                let mut tmp = src.to_vec();
-                simd::unpremultiply_alpha_row(&mut tmp);
-                tmp
-            };
-            &work
-        } else {
-            src
+        let encode = |src: &[f32], dst: &mut [u8]| {
+            if has_alpha && channels >= 2 {
+                for (src_px, dst_px) in src
+                    .chunks_exact(channels)
+                    .zip(dst.chunks_exact_mut(channels))
+                {
+                    for i in 0..channels - 1 {
+                        dst_px[i] =
+                            (self.from_linear(src_px[i]) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+                    }
+                    dst_px[channels - 1] =
+                        (src_px[channels - 1] * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+                }
+            } else {
+                for (s, d) in src.iter().zip(dst.iter_mut()) {
+                    *d = (self.from_linear(*s) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+                }
+            }
         };
 
-        if has_alpha && channels >= 2 {
-            for (src_px, dst_px) in src
-                .chunks_exact(channels)
-                .zip(dst.chunks_exact_mut(channels))
-            {
-                for i in 0..channels - 1 {
-                    dst_px[i] = (self.from_linear(src_px[i]) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-                }
-                dst_px[channels - 1] = (src_px[channels - 1] * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-            }
+        if unpremul {
+            unpremultiply_to_scratch(src, |s| encode(s, dst));
         } else {
-            for (s, d) in src.iter().zip(dst.iter_mut()) {
-                *d = (self.from_linear(*s) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-            }
+            encode(src, dst);
         }
     }
 
@@ -823,34 +840,30 @@ impl TransferCurve for Pq {
         has_alpha: bool,
         unpremul: bool,
     ) {
-        let work: Vec<f32>;
-        let src = if unpremul {
-            work = {
-                let mut tmp = src.to_vec();
-                simd::unpremultiply_alpha_row(&mut tmp);
-                tmp
-            };
-            &work
-        } else {
-            src
+        let encode = |src: &[f32], dst: &mut [u16]| {
+            if has_alpha && channels >= 2 {
+                for (src_px, dst_px) in src
+                    .chunks_exact(channels)
+                    .zip(dst.chunks_exact_mut(channels))
+                {
+                    for i in 0..channels - 1 {
+                        dst_px[i] = (self.from_linear(src_px[i]) * 65535.0 + 0.5)
+                            .clamp(0.0, 65535.0) as u16;
+                    }
+                    dst_px[channels - 1] =
+                        (src_px[channels - 1] * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
+                }
+            } else {
+                for (s, d) in src.iter().zip(dst.iter_mut()) {
+                    *d = (self.from_linear(*s) * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
+                }
+            }
         };
 
-        if has_alpha && channels >= 2 {
-            for (src_px, dst_px) in src
-                .chunks_exact(channels)
-                .zip(dst.chunks_exact_mut(channels))
-            {
-                for i in 0..channels - 1 {
-                    dst_px[i] =
-                        (self.from_linear(src_px[i]) * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
-                }
-                dst_px[channels - 1] =
-                    (src_px[channels - 1] * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
-            }
+        if unpremul {
+            unpremultiply_to_scratch(src, |s| encode(s, dst));
         } else {
-            for (s, d) in src.iter().zip(dst.iter_mut()) {
-                *d = (self.from_linear(*s) * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
-            }
+            encode(src, dst);
         }
     }
 
@@ -962,32 +975,30 @@ impl TransferCurve for Hlg {
         has_alpha: bool,
         unpremul: bool,
     ) {
-        let work: Vec<f32>;
-        let src = if unpremul {
-            work = {
-                let mut tmp = src.to_vec();
-                simd::unpremultiply_alpha_row(&mut tmp);
-                tmp
-            };
-            &work
-        } else {
-            src
+        let encode = |src: &[f32], dst: &mut [u8]| {
+            if has_alpha && channels >= 2 {
+                for (src_px, dst_px) in src
+                    .chunks_exact(channels)
+                    .zip(dst.chunks_exact_mut(channels))
+                {
+                    for i in 0..channels - 1 {
+                        dst_px[i] =
+                            (self.from_linear(src_px[i]) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+                    }
+                    dst_px[channels - 1] =
+                        (src_px[channels - 1] * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+                }
+            } else {
+                for (s, d) in src.iter().zip(dst.iter_mut()) {
+                    *d = (self.from_linear(*s) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+                }
+            }
         };
 
-        if has_alpha && channels >= 2 {
-            for (src_px, dst_px) in src
-                .chunks_exact(channels)
-                .zip(dst.chunks_exact_mut(channels))
-            {
-                for i in 0..channels - 1 {
-                    dst_px[i] = (self.from_linear(src_px[i]) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-                }
-                dst_px[channels - 1] = (src_px[channels - 1] * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-            }
+        if unpremul {
+            unpremultiply_to_scratch(src, |s| encode(s, dst));
         } else {
-            for (s, d) in src.iter().zip(dst.iter_mut()) {
-                *d = (self.from_linear(*s) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-            }
+            encode(src, dst);
         }
     }
 
@@ -1029,34 +1040,30 @@ impl TransferCurve for Hlg {
         has_alpha: bool,
         unpremul: bool,
     ) {
-        let work: Vec<f32>;
-        let src = if unpremul {
-            work = {
-                let mut tmp = src.to_vec();
-                simd::unpremultiply_alpha_row(&mut tmp);
-                tmp
-            };
-            &work
-        } else {
-            src
+        let encode = |src: &[f32], dst: &mut [u16]| {
+            if has_alpha && channels >= 2 {
+                for (src_px, dst_px) in src
+                    .chunks_exact(channels)
+                    .zip(dst.chunks_exact_mut(channels))
+                {
+                    for i in 0..channels - 1 {
+                        dst_px[i] = (self.from_linear(src_px[i]) * 65535.0 + 0.5)
+                            .clamp(0.0, 65535.0) as u16;
+                    }
+                    dst_px[channels - 1] =
+                        (src_px[channels - 1] * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
+                }
+            } else {
+                for (s, d) in src.iter().zip(dst.iter_mut()) {
+                    *d = (self.from_linear(*s) * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
+                }
+            }
         };
 
-        if has_alpha && channels >= 2 {
-            for (src_px, dst_px) in src
-                .chunks_exact(channels)
-                .zip(dst.chunks_exact_mut(channels))
-            {
-                for i in 0..channels - 1 {
-                    dst_px[i] =
-                        (self.from_linear(src_px[i]) * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
-                }
-                dst_px[channels - 1] =
-                    (src_px[channels - 1] * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
-            }
+        if unpremul {
+            unpremultiply_to_scratch(src, |s| encode(s, dst));
         } else {
-            for (s, d) in src.iter().zip(dst.iter_mut()) {
-                *d = (self.from_linear(*s) * 65535.0 + 0.5).clamp(0.0, 65535.0) as u16;
-            }
+            encode(src, dst);
         }
     }
 
