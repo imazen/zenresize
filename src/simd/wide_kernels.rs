@@ -279,6 +279,57 @@ pub(super) fn unpremultiply_alpha_row_impl(_token: Token, row: &mut [f32]) {
 // Integer u8/i16 path
 // ============================================================================
 
+/// Load 4 contiguous u8 values as an i32x4 using a single 32-bit load.
+///
+/// Instead of 4 scalar byte loads + 4 lane inserts, this does one `u32` load
+/// followed by shift+mask extraction. LLVM can lower this to a single
+/// `v128.load32_zero` + extend on wasm128, or `ldr s` + `uxtl` on NEON.
+#[inline(always)]
+fn load_u8x4_as_i32x4<T: magetypes::simd::backends::I32x4Backend>(
+    token: T,
+    slice: &[u8],
+    offset: usize,
+) -> GenericI32x4<T> {
+    // Single 32-bit load of 4 contiguous bytes
+    let bytes: [u8; 4] = [
+        slice[offset],
+        slice[offset + 1],
+        slice[offset + 2],
+        slice[offset + 3],
+    ];
+    let word = u32::from_le_bytes(bytes);
+    GenericI32x4::from_array(
+        token,
+        [
+            (word & 0xFF) as i32,
+            ((word >> 8) & 0xFF) as i32,
+            ((word >> 16) & 0xFF) as i32,
+            (word >> 24) as i32,
+        ],
+    )
+}
+
+/// Load 4 contiguous i16 values as an i32x4 using a contiguous slice access.
+///
+/// Constructs the array from a slice, enabling LLVM to see the contiguous load
+/// pattern and potentially emit a single 64-bit load + widening instruction.
+#[inline(always)]
+fn load_i16x4_as_i32x4<T: magetypes::simd::backends::I32x4Backend>(
+    token: T,
+    slice: &[i16],
+    offset: usize,
+) -> GenericI32x4<T> {
+    GenericI32x4::from_array(
+        token,
+        [
+            slice[offset] as i32,
+            slice[offset + 1] as i32,
+            slice[offset + 2] as i32,
+            slice[offset + 3] as i32,
+        ],
+    )
+}
+
 /// Integer horizontal convolution — dispatch by channel count.
 #[magetypes(neon, wasm128)]
 #[inline(always)]
@@ -298,6 +349,8 @@ pub(super) fn filter_h_u8_i16_impl(
 /// 4-channel integer H kernel using i32x4.
 ///
 /// Accumulates 4 channels in parallel per output pixel.
+/// Uses `weights_padded` for fixed-length iteration so LLVM can unroll,
+/// and batch-loads 4 bytes via a single u32 load.
 #[inline(always)]
 fn filter_h_u8_i16_4ch<T: magetypes::simd::backends::I32x4Backend>(
     token: T,
@@ -311,24 +364,17 @@ fn filter_h_u8_i16_4ch<T: magetypes::simd::backends::I32x4Backend>(
     let half = i32x4::splat(token, 1 << (I16_PRECISION - 1));
     let zero = i32x4::splat(token, 0);
     let max = i32x4::splat(token, 255);
+    let max_taps = weights.max_taps;
 
     for out_x in 0..weights.len() {
         let left = weights.left[out_x] as usize;
-        let w = weights.weights(out_x);
+        let w = weights.weights_padded(out_x);
         let mut acc = i32x4::zero(token);
 
-        for (t, &weight) in w.iter().enumerate() {
+        for t in 0..max_taps {
             let off = (left + t) * 4;
-            let pixel = i32x4::from_array(
-                token,
-                [
-                    input[off] as i32,
-                    input[off + 1] as i32,
-                    input[off + 2] as i32,
-                    input[off + 3] as i32,
-                ],
-            );
-            acc += pixel * i32x4::splat(token, weight as i32);
+            let pixel = load_u8x4_as_i32x4(token, input, off);
+            acc += pixel * w[t] as i32;
         }
 
         let rounded = (acc + half).shr_arithmetic_const::<{ I16_PRECISION }>();
@@ -386,7 +432,7 @@ pub(super) fn filter_h_u8_to_i16_impl(
 /// 4-channel u8→i16 H kernel using i32x4.
 ///
 /// Same accumulation as filter_h_u8_i16_4ch but output stores i16 instead of
-/// clamping to [0,255] u8.
+/// clamping to [0,255] u8. Uses batch u32 loads and fixed-length padded weights.
 #[inline(always)]
 fn filter_h_u8_to_i16_4ch<T: magetypes::simd::backends::I32x4Backend>(
     token: T,
@@ -398,24 +444,17 @@ fn filter_h_u8_to_i16_4ch<T: magetypes::simd::backends::I32x4Backend>(
     type i32x4<U> = GenericI32x4<U>;
 
     let half = i32x4::splat(token, 1 << (I16_PRECISION - 1));
+    let max_taps = weights.max_taps;
 
     for out_x in 0..weights.len() {
         let left = weights.left[out_x] as usize;
-        let w = weights.weights(out_x);
+        let w = weights.weights_padded(out_x);
         let mut acc = i32x4::zero(token);
 
-        for (t, &weight) in w.iter().enumerate() {
+        for t in 0..max_taps {
             let off = (left + t) * 4;
-            let pixel = i32x4::from_array(
-                token,
-                [
-                    input[off] as i32,
-                    input[off + 1] as i32,
-                    input[off + 2] as i32,
-                    input[off + 3] as i32,
-                ],
-            );
-            acc += pixel * i32x4::splat(token, weight as i32);
+            let pixel = load_u8x4_as_i32x4(token, input, off);
+            acc += pixel * w[t] as i32;
         }
 
         let rounded = (acc + half).shr_arithmetic_const::<{ I16_PRECISION }>();
@@ -501,8 +540,9 @@ pub(super) fn filter_h_u8_i16_4rows_impl(
 /// Process one 16-byte column chunk of the V-filter using 4 i32x4 accumulators.
 ///
 /// Each 16-byte chunk is split into 4 groups of 4 bytes, each widened to i32x4
-/// and multiplied by the broadcast weight. This structure maps directly to
-/// NEON's `vmull_s16`/`vmlal_s16` and WASM128's `i32x4.extmul_low_i16x8`.
+/// via a single u32 load and shift extraction, then multiplied by the broadcast
+/// weight. This structure maps directly to NEON's `vmull_s16`/`vmlal_s16` and
+/// WASM128's `i32x4.extmul_low_i16x8`.
 #[inline(always)]
 fn v_filter_chunk_16<T: magetypes::simd::backends::I32x4Backend>(
     token: T,
@@ -518,57 +558,13 @@ fn v_filter_chunk_16<T: magetypes::simd::backends::I32x4Backend>(
     for t in 0..tap_count {
         let in_y_idx = (left + t as i32).clamp(0, in_h_i32) as usize;
         let off = in_y_idx * h_row_len + x;
-        let bytes: [u8; 16] = intermediate[off..off + 16].try_into().unwrap();
         let w = weights[t] as i32;
-        let wv = GenericI32x4::splat(token, w);
 
-        // Group 0: bytes[0..4] widened to i32
-        let g0 = GenericI32x4::from_array(
-            token,
-            [
-                bytes[0] as i32,
-                bytes[1] as i32,
-                bytes[2] as i32,
-                bytes[3] as i32,
-            ],
-        );
-        acc[0] += g0 * wv;
-
-        // Group 1: bytes[4..8]
-        let g1 = GenericI32x4::from_array(
-            token,
-            [
-                bytes[4] as i32,
-                bytes[5] as i32,
-                bytes[6] as i32,
-                bytes[7] as i32,
-            ],
-        );
-        acc[1] += g1 * wv;
-
-        // Group 2: bytes[8..12]
-        let g2 = GenericI32x4::from_array(
-            token,
-            [
-                bytes[8] as i32,
-                bytes[9] as i32,
-                bytes[10] as i32,
-                bytes[11] as i32,
-            ],
-        );
-        acc[2] += g2 * wv;
-
-        // Group 3: bytes[12..16]
-        let g3 = GenericI32x4::from_array(
-            token,
-            [
-                bytes[12] as i32,
-                bytes[13] as i32,
-                bytes[14] as i32,
-                bytes[15] as i32,
-            ],
-        );
-        acc[3] += g3 * wv;
+        // Each group: single u32 load + shift extraction instead of 4 scalar loads
+        acc[0] += load_u8x4_as_i32x4(token, intermediate, off) * w;
+        acc[1] += load_u8x4_as_i32x4(token, intermediate, off + 4) * w;
+        acc[2] += load_u8x4_as_i32x4(token, intermediate, off + 8) * w;
+        acc[3] += load_u8x4_as_i32x4(token, intermediate, off + 12) * w;
     }
 }
 
@@ -928,6 +924,9 @@ pub(super) fn filter_h_i16_i16_impl(
 }
 
 /// 4-channel i16 H kernel using i32x4.
+///
+/// Uses `from_slice` for contiguous i16 loads and fixed-length padded weights
+/// for LLVM unrolling.
 #[inline(always)]
 fn filter_h_i16_i16_4ch<T: magetypes::simd::backends::I32x4Backend>(
     token: T,
@@ -939,13 +938,14 @@ fn filter_h_i16_i16_4ch<T: magetypes::simd::backends::I32x4Backend>(
     type i32x4<U> = GenericI32x4<U>;
 
     let half = i32x4::splat(token, 1 << (I16_PRECISION - 1));
+    let max_taps = weights.max_taps;
 
     for out_x in 0..weights.len() {
         let left = weights.left[out_x] as usize;
-        let w = weights.weights(out_x);
+        let w = weights.weights_padded(out_x);
         let mut acc = i32x4::zero(token);
 
-        for (t, &weight) in w.iter().enumerate() {
+        for t in 0..max_taps {
             let off = (left + t) * 4;
             let pixel = i32x4::from_array(
                 token,
@@ -956,7 +956,7 @@ fn filter_h_i16_i16_4ch<T: magetypes::simd::backends::I32x4Backend>(
                     input[off + 3] as i32,
                 ],
             );
-            acc += pixel * i32x4::splat(token, weight as i32);
+            acc += pixel * w[t] as i32;
         }
 
         let rounded = (acc + half).shr_arithmetic_const::<{ I16_PRECISION }>();
@@ -1036,17 +1036,9 @@ pub(super) fn filter_v_all_i16_i16_impl(
                 for t in 0..tap_count {
                     let in_y_idx = (left + t as i32).clamp(0, in_h_i32) as usize;
                     let off = in_y_idx * h_row_len + x;
-                    let src = i32x4::from_array(
-                        token,
-                        [
-                            intermediate[off] as i32,
-                            intermediate[off + 1] as i32,
-                            intermediate[off + 2] as i32,
-                            intermediate[off + 3] as i32,
-                        ],
-                    );
-                    acc_a += src * i32x4::splat(token, w_a[t] as i32);
-                    acc_b += src * i32x4::splat(token, w_b[t] as i32);
+                    let src = load_i16x4_as_i32x4(token, intermediate, off);
+                    acc_a += src * w_a[t] as i32;
+                    acc_b += src * w_b[t] as i32;
                 }
 
                 let half = i32x4::splat(token, 1 << (I16_PRECISION - 1));
@@ -1089,16 +1081,8 @@ pub(super) fn filter_v_all_i16_i16_impl(
                 for (t, &weight) in w_a[..tap_count].iter().enumerate() {
                     let in_y_idx = (left + t as i32).clamp(0, in_h_i32) as usize;
                     let off = in_y_idx * h_row_len + x;
-                    let src = i32x4::from_array(
-                        token,
-                        [
-                            intermediate[off] as i32,
-                            intermediate[off + 1] as i32,
-                            intermediate[off + 2] as i32,
-                            intermediate[off + 3] as i32,
-                        ],
-                    );
-                    acc += src * i32x4::splat(token, weight as i32);
+                    let src = load_i16x4_as_i32x4(token, intermediate, off);
+                    acc += src * weight as i32;
                 }
 
                 let half = i32x4::splat(token, 1 << (I16_PRECISION - 1));
@@ -1166,18 +1150,50 @@ pub(super) fn unpremultiply_u8_row_impl(_token: Token, row: &mut [u8]) {
 // ============================================================================
 
 /// Streaming V-filter: u8 rows → u8 output via i16 weights.
+///
+/// Uses i32x4 for the bulk of the work (4 bytes at a time), with scalar tail.
 #[magetypes(neon, wasm128)]
 #[inline(always)]
 pub(super) fn filter_v_row_u8_i16_impl(
-    _token: Token,
+    token: Token,
     rows: &[&[u8]],
     output: &mut [u8],
     weights: &[i16],
 ) {
+    #[allow(non_camel_case_types)]
+    type i32x4<U> = GenericI32x4<U>;
+
     let width = output.len();
     debug_assert_eq!(rows.len(), weights.len());
 
-    for x in 0..width {
+    let half = i32x4::splat(token, 1 << (I16_PRECISION - 1));
+    let zero = i32x4::splat(token, 0);
+    let max = i32x4::splat(token, 255);
+
+    // Process 4 bytes at a time via i32x4
+    let chunks4 = width / 4;
+    let base4 = chunks4 * 4;
+
+    for chunk_idx in 0..chunks4 {
+        let x = chunk_idx * 4;
+        let mut acc = i32x4::zero(token);
+
+        for (row, &weight) in rows.iter().zip(weights.iter()) {
+            let pixel = load_u8x4_as_i32x4(token, row, x);
+            acc += pixel * weight as i32;
+        }
+
+        let rounded = (acc + half).shr_arithmetic_const::<{ I16_PRECISION }>();
+        let clamped = rounded.max(zero).min(max);
+        let arr = clamped.to_array();
+        output[x] = arr[0] as u8;
+        output[x + 1] = arr[1] as u8;
+        output[x + 2] = arr[2] as u8;
+        output[x + 3] = arr[3] as u8;
+    }
+
+    // Scalar tail
+    for x in base4..width {
         let mut acc: i32 = 0;
         for (row, &weight) in rows.iter().zip(weights.iter()) {
             acc += row[x] as i32 * weight as i32;
@@ -1291,18 +1307,47 @@ pub(super) fn filter_v_all_f16_impl(
 }
 
 /// Streaming V-filter: i16 rows → i16 output via i16 weights.
+///
+/// Uses i32x4 for the bulk of the work (4 i16 values at a time), with scalar tail.
 #[magetypes(neon, wasm128)]
 #[inline(always)]
 pub(super) fn filter_v_row_i16_impl(
-    _token: Token,
+    token: Token,
     rows: &[&[i16]],
     output: &mut [i16],
     weights: &[i16],
 ) {
+    #[allow(non_camel_case_types)]
+    type i32x4<U> = GenericI32x4<U>;
+
     let width = output.len();
     debug_assert_eq!(rows.len(), weights.len());
 
-    for x in 0..width {
+    let half = i32x4::splat(token, 1 << (I16_PRECISION - 1));
+
+    // Process 4 i16 values at a time via i32x4
+    let chunks4 = width / 4;
+    let base4 = chunks4 * 4;
+
+    for chunk_idx in 0..chunks4 {
+        let x = chunk_idx * 4;
+        let mut acc = i32x4::zero(token);
+
+        for (row, &weight) in rows.iter().zip(weights.iter()) {
+            let src = load_i16x4_as_i32x4(token, row, x);
+            acc += src * weight as i32;
+        }
+
+        let shifted = (acc + half).shr_arithmetic_const::<{ I16_PRECISION }>();
+        let arr = shifted.to_array();
+        output[x] = arr[0] as i16;
+        output[x + 1] = arr[1] as i16;
+        output[x + 2] = arr[2] as i16;
+        output[x + 3] = arr[3] as i16;
+    }
+
+    // Scalar tail
+    for x in base4..width {
         let mut acc: i32 = 0;
         for (row, &weight) in rows.iter().zip(weights.iter()) {
             acc += row[x] as i32 * weight as i32;
