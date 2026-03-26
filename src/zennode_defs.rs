@@ -10,24 +10,34 @@ use zennode::*;
 
 /// Constrain image dimensions with resize, crop, or pad modes.
 ///
-/// The primary resize/layout node. Computes how to map source dimensions
-/// to target dimensions using the selected constraint mode, gravity, and
-/// resampling hints.
+/// The unified resize/layout node — combines layout geometry with
+/// resampling hints in a single node, matching imageflow's ergonomic
+/// Constrain API.
 ///
 /// Optional parameters (`Option<T>`) use `None` for "not specified" —
 /// the engine picks sensible defaults based on the operation.
 ///
-/// JSON API:
+/// # Gravity
+///
+/// Two ways to specify gravity:
+/// - **Named anchor** (`gravity`): "center", "top_left", "bottom_right", etc.
+/// - **Percentage** (`gravity_x`/`gravity_y`): 0.0–1.0, overrides named anchor when set.
+///
+/// If `gravity_x` and `gravity_y` are both set, the named `gravity` is ignored.
+///
+/// # JSON API
+///
+/// Simple (named anchor):
+/// ```json
+/// { "w": 800, "h": 600, "mode": "fit_crop", "gravity": "top_left" }
+/// ```
+///
+/// Precise (percentage gravity):
 /// ```json
 /// {
-///   "w": 800,
-///   "h": 600,
-///   "mode": "fit_crop",
-///   "gravity": "top_left",
-///   "down_filter": "lanczos",
-///   "up_filter": "ginseng",
-///   "sharpen": 15.0,
-///   "scaling_colorspace": "linear"
+///   "w": 800, "h": 600, "mode": "fit_crop",
+///   "gravity_x": 0.33, "gravity_y": 0.0,
+///   "down_filter": "lanczos", "sharpen": 15.0
 /// }
 /// ```
 ///
@@ -69,25 +79,45 @@ pub struct Constrain {
     #[kv("mode")]
     pub mode: String,
 
-    /// Anchor/gravity point for crop and pad operations.
+    /// Named anchor for crop/pad positioning.
     ///
     /// Controls which part of the image is preserved when cropping,
     /// or where the image is positioned when padding.
+    ///
     /// Values: "center", "top_left", "top", "top_right",
     /// "left", "right", "bottom_left", "bottom", "bottom_right".
+    ///
+    /// Overridden by `gravity_x`/`gravity_y` when both are set.
     #[param(default = "center")]
-    #[param(section = "Layout", label = "Anchor")]
+    #[param(section = "Position", label = "Anchor")]
     #[kv("anchor")]
     pub gravity: String,
 
-    /// Background color for pad modes.
+    /// Horizontal gravity (0.0 = left, 0.5 = center, 1.0 = right).
+    ///
+    /// When both `gravity_x` and `gravity_y` are set, they override the
+    /// named `gravity` anchor. Use for precise positioning beyond the 9
+    /// cardinal points (e.g., rule-of-thirds at 0.33).
+    #[param(range(0.0..=1.0), default = 0.5, step = 0.01)]
+    #[param(section = "Position", label = "Gravity X")]
+    pub gravity_x: Option<f32>,
+
+    /// Vertical gravity (0.0 = top, 0.5 = center, 1.0 = bottom).
+    ///
+    /// When both `gravity_x` and `gravity_y` are set, they override the
+    /// named `gravity` anchor.
+    #[param(range(0.0..=1.0), default = 0.5, step = 0.01)]
+    #[param(section = "Position", label = "Gravity Y")]
+    pub gravity_y: Option<f32>,
+
+    /// Canvas background color for pad modes.
     ///
     /// None = transparent. Accepts CSS-style hex or named colors:
     /// "white", "#FF0000", "000000FF".
     #[param(default = "")]
-    #[param(section = "Layout", label = "Background Color")]
-    #[kv("bgcolor")]
-    pub bgcolor: Option<String>,
+    #[param(section = "Position", label = "Canvas Color")]
+    #[kv("bgcolor", "canvas_color")]
+    pub canvas_color: Option<String>,
 
     // ─── Resampling ───
     /// Downscale resampling filter. None = auto (Robidoux).
@@ -159,7 +189,9 @@ impl Default for Constrain {
             h: None,
             mode: String::from("within"),
             gravity: String::from("center"),
-            bgcolor: None,
+            gravity_x: None,
+            gravity_y: None,
+            canvas_color: None,
             down_filter: None,
             up_filter: None,
             scaling_colorspace: None,
@@ -211,7 +243,10 @@ mod tests {
     #[test]
     fn param_count() {
         let schema = CONSTRAIN_NODE.schema();
-        assert_eq!(schema.params.len(), 12);
+        // w, h, mode, gravity, gravity_x, gravity_y, canvas_color,
+        // down_filter, up_filter, scaling_colorspace,
+        // sharpen, lobe_ratio, kernel_width_scale, post_blur
+        assert_eq!(schema.params.len(), 14);
     }
 
     #[test]
@@ -225,7 +260,9 @@ mod tests {
             .collect();
         assert!(optional_names.contains(&"w"));
         assert!(optional_names.contains(&"h"));
-        assert!(optional_names.contains(&"bgcolor"));
+        assert!(optional_names.contains(&"gravity_x"));
+        assert!(optional_names.contains(&"gravity_y"));
+        assert!(optional_names.contains(&"canvas_color"));
         assert!(optional_names.contains(&"down_filter"));
         assert!(optional_names.contains(&"up_filter"));
         assert!(optional_names.contains(&"scaling_colorspace"));
@@ -249,13 +286,15 @@ mod tests {
         let node = CONSTRAIN_NODE.create_default().unwrap();
         assert_eq!(node.get_param("w"), Some(ParamValue::None));
         assert_eq!(node.get_param("h"), Some(ParamValue::None));
+        assert_eq!(node.get_param("gravity_x"), Some(ParamValue::None));
+        assert_eq!(node.get_param("gravity_y"), Some(ParamValue::None));
+        assert_eq!(node.get_param("canvas_color"), Some(ParamValue::None));
         assert_eq!(node.get_param("down_filter"), Some(ParamValue::None));
         assert_eq!(node.get_param("up_filter"), Some(ParamValue::None));
         assert_eq!(node.get_param("sharpen"), Some(ParamValue::None));
         assert_eq!(node.get_param("lobe_ratio"), Some(ParamValue::None));
         assert_eq!(node.get_param("kernel_width_scale"), Some(ParamValue::None));
         assert_eq!(node.get_param("post_blur"), Some(ParamValue::None));
-        assert_eq!(node.get_param("bgcolor"), Some(ParamValue::None));
         assert_eq!(node.get_param("scaling_colorspace"), Some(ParamValue::None));
     }
 
@@ -317,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    fn from_kv_anchor_and_bgcolor() {
+    fn from_kv_anchor_and_canvas_color() {
         let mut kv =
             KvPairs::from_querystring("w=400&h=400&mode=fit_pad&anchor=top_left&bgcolor=white");
         let node = CONSTRAIN_NODE.from_kv(&mut kv).unwrap().unwrap();
@@ -326,8 +365,18 @@ mod tests {
             Some(ParamValue::Str("top_left".into()))
         );
         assert_eq!(
-            node.get_param("bgcolor"),
+            node.get_param("canvas_color"),
             Some(ParamValue::Str("white".into()))
+        );
+    }
+
+    #[test]
+    fn from_kv_canvas_color_alias() {
+        let mut kv = KvPairs::from_querystring("w=400&canvas_color=black");
+        let node = CONSTRAIN_NODE.from_kv(&mut kv).unwrap().unwrap();
+        assert_eq!(
+            node.get_param("canvas_color"),
+            Some(ParamValue::Str("black".into()))
         );
     }
 
@@ -354,13 +403,15 @@ mod tests {
     }
 
     #[test]
-    fn round_trip() {
+    fn round_trip_with_named_anchor() {
         let c = Constrain {
             w: Some(1920),
             h: Some(1080),
             mode: String::from("fit_crop"),
             gravity: String::from("top_left"),
-            bgcolor: Some(String::from("white")),
+            gravity_x: None,
+            gravity_y: None,
+            canvas_color: Some(String::from("white")),
             down_filter: Some(String::from("lanczos")),
             up_filter: Some(String::from("ginseng")),
             scaling_colorspace: Some(String::from("linear")),
@@ -377,7 +428,9 @@ mod tests {
         assert_eq!(restored.h, Some(1080));
         assert_eq!(restored.mode, "fit_crop");
         assert_eq!(restored.gravity, "top_left");
-        assert_eq!(restored.bgcolor.as_deref(), Some("white"));
+        assert_eq!(restored.gravity_x, None);
+        assert_eq!(restored.gravity_y, None);
+        assert_eq!(restored.canvas_color.as_deref(), Some("white"));
         assert_eq!(restored.down_filter.as_deref(), Some("lanczos"));
         assert_eq!(restored.up_filter.as_deref(), Some("ginseng"));
         assert_eq!(restored.scaling_colorspace.as_deref(), Some("linear"));
@@ -388,6 +441,32 @@ mod tests {
     }
 
     #[test]
+    fn round_trip_with_percentage_gravity() {
+        let c = Constrain {
+            w: Some(800),
+            h: Some(600),
+            mode: String::from("fit_crop"),
+            gravity: String::from("center"), // ignored when gravity_x/y set
+            gravity_x: Some(0.33),
+            gravity_y: Some(0.0),
+            canvas_color: None,
+            down_filter: None,
+            up_filter: None,
+            scaling_colorspace: None,
+            sharpen: None,
+            lobe_ratio: None,
+            kernel_width_scale: None,
+            post_blur: None,
+        };
+        let params = c.to_params();
+        let node = CONSTRAIN_NODE.create(&params).unwrap();
+        let restored = node.as_any().downcast_ref::<Constrain>().unwrap();
+
+        assert_eq!(restored.gravity_x, Some(0.33));
+        assert_eq!(restored.gravity_y, Some(0.0));
+    }
+
+    #[test]
     fn downcast_default() {
         let node = CONSTRAIN_NODE.create_default().unwrap();
         let c = node.as_any().downcast_ref::<Constrain>().unwrap();
@@ -395,6 +474,9 @@ mod tests {
         assert_eq!(c.h, None);
         assert_eq!(c.mode, "within");
         assert_eq!(c.gravity, "center");
+        assert_eq!(c.gravity_x, None);
+        assert_eq!(c.gravity_y, None);
+        assert_eq!(c.canvas_color, None);
         assert_eq!(c.down_filter, None);
         assert_eq!(c.sharpen, None);
     }
