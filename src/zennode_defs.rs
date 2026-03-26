@@ -168,7 +168,7 @@ pub struct Constrain {
     /// Kernel width scale factor. None = auto (1.0).
     ///
     /// > 1.0 = softer (widens filter window), < 1.0 = sharper (aliasing risk).
-    /// Combined with blur. This is zero-cost (applied during weight computation).
+    /// > Combined with blur. This is zero-cost (applied during weight computation).
     #[param(range(0.1..=4.0), default = 1.0, step = 0.01)]
     #[param(section = "Advanced", label = "Kernel Width Scale")]
     pub kernel_width_scale: Option<f32>,
