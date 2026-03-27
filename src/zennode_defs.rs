@@ -203,13 +203,51 @@ impl Default for Constrain {
     }
 }
 
+/// Forced resize to exact dimensions (no layout planning).
+///
+/// Unlike [`Constrain`] which applies constraint modes (fit, crop, pad),
+/// this resizes unconditionally to the specified width × height. Used when
+/// the caller has already determined the target dimensions.
+///
+/// Skipped at compile time when input dimensions match target (identity resize).
+///
+/// JSON: `{ "w": 400, "h": 300, "filter": "robidoux" }`
+/// RIAPI: Not directly exposed — use Constrain for querystring-driven resize.
+#[derive(Node, Clone, Debug, Default)]
+#[node(id = "zenresize.resize", group = Geometry, role = Resize)]
+#[node(changes_dimensions)]
+#[node(tags("resize", "scale", "resample"))]
+pub struct Resize {
+    /// Target width in pixels.
+    #[param(range(1..=65535), default = 1, step = 1)]
+    #[param(unit = "px", section = "Dimensions", label = "Width")]
+    pub w: u32,
+
+    /// Target height in pixels.
+    #[param(range(1..=65535), default = 1, step = 1)]
+    #[param(unit = "px", section = "Dimensions", label = "Height")]
+    pub h: u32,
+
+    /// Resampling filter name (e.g., "robidoux", "lanczos", "mitchell").
+    /// Empty string = default (Robidoux).
+    #[param(default = "")]
+    #[param(section = "Quality", label = "Filter")]
+    pub filter: String,
+
+    /// Post-resize sharpening percentage (0–100). 0 = no sharpening.
+    #[param(range(0.0..=100.0), default = 0.0, step = 1.0)]
+    #[param(unit = "%", section = "Quality", label = "Sharpen")]
+    pub sharpen: f32,
+}
+
 /// Registration function for aggregating crates.
 pub fn register(registry: &mut NodeRegistry) {
     registry.register(&CONSTRAIN_NODE);
+    registry.register(&RESIZE_NODE);
 }
 
 /// All zenresize zennode definitions.
-pub static ALL: &[&dyn NodeDef] = &[&CONSTRAIN_NODE];
+pub static ALL: &[&dyn NodeDef] = &[&CONSTRAIN_NODE, &RESIZE_NODE];
 
 #[cfg(test)]
 mod tests {
