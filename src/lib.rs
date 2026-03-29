@@ -100,8 +100,8 @@ pub use resize::{
 pub use transfer::{Bt709, Hlg, NoTransfer, Pq, Srgb, TransferCurve};
 
 // zennode node definitions
-#[cfg(feature = "zennode")]
-pub mod zennode_defs;
+// #[cfg(feature = "zennode")]
+// pub mod zennode_defs;
 
 // Re-export whereat types for downstream consumers
 pub use whereat::{At, ResultAtExt};
