@@ -11,11 +11,11 @@ categories = ["graphics", "multimedia::images", "no-std"]
 
 [features]
 default = ["std", "layout"]
-std = ["archmage/std", "magetypes/std", "linear-srgb/std", "zenlayout?/std", "zenpixels/std", "whereat/std", "zenblend/std", "zennode?/std"]
+std = ["archmage/std", "magetypes/std", "linear-srgb/std", "zenlayout?/std", "zenpixels/std", "whereat/std", "zenblend/std"]
 avx512 = ["archmage/avx512"]
 layout = ["dep:zenlayout"]
 # zennode node definitions (Constrain schema with RIAPI keys)
-zennode = ["dep:zennode"]
+# zennode = ["dep:zennode"]
 # Enable SIMD features on pic-scale for benchmarks (default: scalar-only)
 bench-simd-competitors = ["pic-scale/sse", "pic-scale/avx", "pic-scale/rdm"]
 pretty-safe = []
@@ -36,7 +36,7 @@ rgb = { version = "0.8", default-features = false }
 whereat = { version = "0.1.4", default-features = false }
 zenblend = { version = "0.1.0", path = "../zenblend", default-features = false }
 # Self-documenting node definitions for pipeline integration
-zennode = { version = "0.1.0", path = "../zennode/zennode", default-features = false, features = ["derive"], optional = true }
+# zennode = { version = "0.1.0", path = "../zennode/zennode", default-features = false, features = ["derive"], optional = true }
 
 [dev-dependencies]
 tango-bench = "0.7"
