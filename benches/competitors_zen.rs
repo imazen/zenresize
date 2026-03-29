@@ -122,7 +122,9 @@ fn ps_srgb(src: &[u8], iw: u32, ih: u32, ow: u32, oh: u32) -> Vec<u8> {
     let dst_size = ImageSize::new(ow as usize, oh as usize);
     let store = ImageStore::<u8, 4>::from_slice(src, iw as usize, ih as usize).unwrap();
     let mut dst = ImageStoreMut::<u8, 4>::alloc(ow as usize, oh as usize);
-    let plan = scaler.plan_rgba_resampling(src_size, dst_size, true).unwrap();
+    let plan = scaler
+        .plan_rgba_resampling(src_size, dst_size, true)
+        .unwrap();
     plan.resample(&store, &mut dst).unwrap();
     dst.as_bytes().to_vec()
 }
@@ -135,7 +137,9 @@ fn ps_linear(src: &[u8], iw: u32, ih: u32, ow: u32, oh: u32) -> Vec<u8> {
     let dst_size = ImageSize::new(ow as usize, oh as usize);
     let store = ImageStore::<u8, 4>::from_slice(src, iw as usize, ih as usize).unwrap();
     let mut dst = ImageStoreMut::<u8, 4>::alloc(ow as usize, oh as usize);
-    let plan = scaler.plan_rgba_resampling(src_size, dst_size, true).unwrap();
+    let plan = scaler
+        .plan_rgba_resampling(src_size, dst_size, true)
+        .unwrap();
     plan.resample(&store, &mut dst).unwrap();
     dst.as_bytes().to_vec()
 }

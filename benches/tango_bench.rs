@@ -140,7 +140,9 @@ fn competitor_benchmarks() -> impl IntoBenchmarks {
                 )
                 .unwrap();
                 let mut dst = ImageStoreMut::<u8, 4>::alloc(512, 512);
-                let plan = scaler.plan_rgba_resampling(src_size, dst_size, true).unwrap();
+                let plan = scaler
+                    .plan_rgba_resampling(src_size, dst_size, true)
+                    .unwrap();
                 let _ = plan.resample(&store, &mut dst);
                 black_box(dst.as_bytes().to_vec())
             })
