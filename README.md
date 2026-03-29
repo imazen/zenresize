@@ -1,12 +1,11 @@
-# zenresize
+# zenresize ![ci](https://img.shields.io/github/actions/workflow/status/imazen/zenresize/ci.yml?branch=main&style=flat-square) ![crates.io](https://img.shields.io/crates/v/zenresize?style=flat-square) ![docs.rs](https://img.shields.io/docsrs/zenresize?style=flat-square) ![msrv](https://img.shields.io/badge/MSRV-1.93-blue?style=flat-square) ![license](https://img.shields.io/crates/l/zenresize?style=flat-square)
 
-[![crates.io](https://img.shields.io/crates/v/zenresize?style=for-the-badge)](https://crates.io/crates/zenresize)
-[![docs.rs](https://img.shields.io/docsrs/zenresize?style=for-the-badge)](https://docs.rs/zenresize)
-[![CI](https://img.shields.io/github/actions/workflow/status/imazen/zenresize/ci.yml?branch=main&style=for-the-badge)](https://github.com/imazen/zenresize/actions/workflows/ci.yml)
-[![MSRV](https://img.shields.io/badge/MSRV-1.93-blue?style=for-the-badge)](https://www.rust-lang.org)
-[![license](https://img.shields.io/crates/l/zenresize?style=for-the-badge)](https://github.com/imazen/zenresize/blob/main/LICENSE)
+zenresize is a SIMD-accelerated image resampling library with crop, resize, and canvas padding in streaming or fullframe modes.
 
-High-quality image resampling with crop, resize, and canvas padding -- streaming or fullframe, SIMD-accelerated.
+```toml
+[dependencies]
+zenresize = "0.1"
+```
 
 ## Quick Start
 
@@ -159,6 +158,53 @@ while let Some(out_row) = stream.next_output_row_f32() {
     // out_row is &[f32]
 }
 ```
+
+## Compositing
+
+Resize foreground images onto a background in a single pass. Compositing happens in premultiplied linear f32 space between the vertical filter and unpremultiply -- no extra buffer copy.
+
+```rust
+use zenresize::{StreamingResize, ResizeConfig, Filter, PixelDescriptor, SolidBackground, BlendMode};
+
+let config = ResizeConfig::builder(800, 600, 400, 300)
+    .filter(Filter::Lanczos)
+    .format(PixelDescriptor::RGBA8_SRGB)
+    .build();
+
+let bg = SolidBackground::white(PixelDescriptor::RGBA8_SRGB);
+let mut stream = StreamingResize::with_background(&config, bg)
+    .expect("compositing config")
+    .with_blend_mode(BlendMode::SrcOver); // default; 31 modes available
+
+for y in 0..600 {
+    stream.push_row(&input[y * 3200..(y + 1) * 3200]).unwrap();
+    while let Some(out) = stream.next_output_row() {
+        // composited output rows
+    }
+}
+```
+
+Background types: `SolidBackground` (constant color), `SliceBackground` (borrow a buffer), `StreamedBackground` (push rows), or implement the `Background` trait yourself. `NoBackground` (the default) eliminates all composite code at compile time.
+
+### Masking
+
+Apply per-pixel masks to control where the foreground is visible. Masks are applied between resize and compositing, so rounded corners over a white background produce white corners (not transparent-over-black).
+
+```rust
+use zenresize::{StreamingResize, ResizeConfig, PixelDescriptor, SolidBackground, RoundedRectMask};
+
+let config = ResizeConfig::builder(800, 600, 400, 300)
+    .format(PixelDescriptor::RGBA8_SRGB)
+    .build();
+
+let bg = SolidBackground::white(PixelDescriptor::RGBA8_SRGB);
+let mask = RoundedRectMask::new(400, 300, 20.0);
+let stream = StreamingResize::with_background(&config, bg)
+    .expect("compositing config")
+    .with_mask(mask);
+```
+
+Mask types re-exported from [zenblend](https://crates.io/crates/zenblend): `RoundedRectMask`, `LinearGradientMask`, `RadialGradientMask`, or implement `MaskSource`.
 
 ## Source Region (Crop)
 
@@ -448,11 +494,12 @@ The imgref functions override the config's dimensions, formats, and stride. Filt
 | `std` | yes | Enables std library. Disable for `no_std` + `alloc`. |
 | `layout` | yes | Layout negotiation and pipeline execution via [zenlayout](https://crates.io/crates/zenlayout). |
 | `avx512` | no | Native AVX-512 V-filter kernel (x86-64 only). |
+| `zennode` | no | Self-documenting node definitions for [zennode](https://crates.io/crates/zennode) pipeline integration. |
 | `pretty-safe` | no | Replaces bounds-checked indexing with `get_unchecked` in SIMD kernels where bounds are proven by prior guards. ~17% fewer instructions on x86-64. Introduces `unsafe`; the default build is `#![forbid(unsafe_code)]`. |
 
 ## Benchmarks
 
-The `benches/` directory contains 17 benchmark binaries covering throughput, precision, and profiling:
+The `benches/` directory contains 19 benchmark binaries covering throughput, precision, and profiling:
 
 | Benchmark | What it measures |
 |-----------|-----------------|
@@ -471,6 +518,13 @@ cargo bench --bench resize_bench    # full criterion suite (HTML reports in targ
 ```
 
 The `bench-simd-competitors` feature enables SIMD on pic-scale for fair comparison (off by default, so pic-scale runs scalar-only).
+
+## Limitations
+
+- No f16 channel type (f32 and u16 cover HDR use cases)
+- No narrow/video signal range -- full range only
+- Premultiplied input is incompatible with compositing (unpremultiply first, or the pipeline returns `CompositeError::PremultipliedInput`)
+- GrayAlpha and Oklab pixel layouts are not supported
 
 ## License
 
