@@ -232,6 +232,10 @@ impl Padding {
 pub struct ResizeConfig {
     /// Filter to use for resampling.
     pub filter: crate::filter::Filter,
+    /// Optional override filter for upscaling. When `None`, the `filter` field
+    /// is used for both up and down. When `Some`, this filter is used when
+    /// the output dimension exceeds the input dimension on a given axis.
+    pub up_filter: Option<crate::filter::Filter>,
     /// Input image width in pixels.
     pub in_width: u32,
     /// Input image height in pixels.
@@ -552,6 +556,7 @@ pub struct ResizeConfigBuilder {
     out_width: u32,
     out_height: u32,
     filter: crate::filter::Filter,
+    up_filter: Option<crate::filter::Filter>,
     input: PixelDescriptor,
     output: Option<PixelDescriptor>,
     post_sharpen: f32,
@@ -573,6 +578,7 @@ impl ResizeConfigBuilder {
             out_width,
             out_height,
             filter: crate::filter::Filter::default(),
+            up_filter: None,
             input: PixelDescriptor::RGBA8_SRGB,
             output: None,
             post_sharpen: 0.0,
@@ -590,6 +596,13 @@ impl ResizeConfigBuilder {
     /// Set the resampling filter.
     pub fn filter(mut self, filter: crate::filter::Filter) -> Self {
         self.filter = filter;
+        self
+    }
+
+    /// Set a separate filter for upscaling. By default, the main `filter`
+    /// is used for both up and down operations.
+    pub fn up_filter(mut self, filter: crate::filter::Filter) -> Self {
+        self.up_filter = Some(filter);
         self
     }
 
@@ -777,6 +790,7 @@ impl ResizeConfigBuilder {
         let output = self.output.unwrap_or(self.input);
         ResizeConfig {
             filter: self.filter,
+            up_filter: self.up_filter,
             in_width: self.in_width,
             in_height: self.in_height,
             out_width: self.out_width,

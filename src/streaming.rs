@@ -61,6 +61,41 @@ fn estimate_max_taps(in_size: u32, out_size: u32, filter: &InterpolationDetails)
     (2.0 * effective_window).ceil() as usize + 2
 }
 
+/// Create an `InterpolationDetails` from a filter enum, applying all config modifiers
+/// (kernel_width_scale and lobe_ratio).
+fn create_filter_details(
+    filter_enum: crate::filter::Filter,
+    config: &ResizeConfig,
+) -> InterpolationDetails {
+    let mut filter = InterpolationDetails::create(filter_enum);
+    if let Some(scale) = config.kernel_width_scale {
+        filter = filter.with_blur(scale);
+    }
+    match &config.lobe_ratio {
+        crate::pixel::LobeRatio::Natural => {}
+        crate::pixel::LobeRatio::Exact(r) => filter = filter.with_lobe_ratio(*r),
+        crate::pixel::LobeRatio::SharpenPercent(p) => filter = filter.with_sharpen_percent(*p),
+    }
+    filter
+}
+
+/// Select the appropriate filter for a given axis based on whether it is
+/// upscaling or downscaling.
+fn resolve_filter(
+    in_size: u32,
+    out_size: u32,
+    config: &ResizeConfig,
+) -> InterpolationDetails {
+    let filter_enum = if out_size > in_size {
+        // Upscaling — use up_filter if set, otherwise default filter
+        config.up_filter.unwrap_or(config.filter)
+    } else {
+        // Downscaling or identity — always use the main filter
+        config.filter
+    };
+    create_filter_details(filter_enum, config)
+}
+
 /// Post-resize orientation transform.
 ///
 /// Applied after resize completes. For streaming, this means the resizer
@@ -496,18 +531,9 @@ impl<B: Background> StreamingResize<B> {
     /// Reallocates ring buffer and weight tables for f32 operation.
     fn switch_to_f32_path(&mut self) {
         debug_assert_eq!(self.input_rows_received, 0);
-        let mut filter = InterpolationDetails::create(self.config.filter);
-        if let Some(scale) = self.config.kernel_width_scale {
-            filter = filter.with_blur(scale);
-        }
-        match &self.config.lobe_ratio {
-            crate::pixel::LobeRatio::Natural => {}
-            crate::pixel::LobeRatio::Exact(r) => filter = filter.with_lobe_ratio(*r),
-            crate::pixel::LobeRatio::SharpenPercent(p) => filter = filter.with_sharpen_percent(*p),
-        }
-
         let resize_in_w = self.config.resize_in_width();
-        let h_weights = F32WeightTable::new(resize_in_w, self.config.out_width, &filter);
+        let h_filter = resolve_filter(resize_in_w, self.config.out_width, &self.config);
+        let h_weights = F32WeightTable::new(resize_in_w, self.config.out_width, &h_filter);
         let h_padding = h_weights.max_taps * self.channels;
         let in_row_len = resize_in_w as usize * self.channels;
         let v_cache_row_len = in_row_len + h_padding;
@@ -570,20 +596,14 @@ impl<B: Background> StreamingResize<B> {
             config.linear = true;
         }
 
-        let mut filter = InterpolationDetails::create(config.filter);
-        if let Some(scale) = config.kernel_width_scale {
-            filter = filter.with_blur(scale);
-        }
-        match &config.lobe_ratio {
-            crate::pixel::LobeRatio::Natural => {}
-            crate::pixel::LobeRatio::Exact(r) => filter = filter.with_lobe_ratio(*r),
-            crate::pixel::LobeRatio::SharpenPercent(p) => filter = filter.with_sharpen_percent(*p),
-        }
-
         // Crop: use crop dimensions for weight tables
         let resize_in_w = config.resize_in_width();
         let resize_in_h = config.resize_in_height();
-        let v_weights = F32WeightTable::new(resize_in_h, config.out_height, &filter);
+
+        // Per-axis filter selection: use up_filter when that axis is upscaling
+        let v_filter = resolve_filter(resize_in_h, config.out_height, &config);
+        let h_filter = resolve_filter(resize_in_w, config.out_width, &config);
+        let v_weights = F32WeightTable::new(resize_in_h, config.out_height, &v_filter);
 
         let channels = config.channels();
         let needs_premul = config.needs_premultiply();
@@ -644,8 +664,8 @@ impl<B: Background> StreamingResize<B> {
         //   I16Linear: up to 43 u8 at 2x, use only for ≤2x downscale
         let path = match path {
             StreamingPath::I16Linear => {
-                let h_taps = estimate_max_taps(resize_in_w, config.out_width, &filter);
-                let v_taps = estimate_max_taps(resize_in_h, config.out_height, &filter);
+                let h_taps = estimate_max_taps(resize_in_w, config.out_width, &h_filter);
+                let v_taps = estimate_max_taps(resize_in_h, config.out_height, &v_filter);
                 // 14 taps ≈ Lanczos3 at 2.3x downscale
                 if h_taps.max(v_taps) > 14 {
                     StreamingPath::F32
@@ -654,8 +674,8 @@ impl<B: Background> StreamingResize<B> {
                 }
             }
             StreamingPath::I16Srgb => {
-                let h_taps = estimate_max_taps(resize_in_w, config.out_width, &filter);
-                let v_taps = estimate_max_taps(resize_in_h, config.out_height, &filter);
+                let h_taps = estimate_max_taps(resize_in_w, config.out_width, &h_filter);
+                let v_taps = estimate_max_taps(resize_in_h, config.out_height, &v_filter);
                 // 50 taps ≈ Lanczos3 at 8x downscale
                 if h_taps.max(v_taps) > 50 {
                     StreamingPath::F32
@@ -767,7 +787,7 @@ impl<B: Background> StreamingResize<B> {
 
         match path {
             StreamingPath::F32 => {
-                let h_weights = F32WeightTable::new(resize_in_w, config.out_width, &filter);
+                let h_weights = F32WeightTable::new(resize_in_w, config.out_width, &h_filter);
                 let h_padding = h_weights.max_taps * channels;
                 let v_cache_row_len = in_row_len + h_padding;
 
@@ -837,8 +857,8 @@ impl<B: Background> StreamingResize<B> {
                 }
             }
             StreamingPath::I16Srgb => {
-                let i16_h_weights = I16WeightTable::new(resize_in_w, config.out_width, &filter);
-                let i16_v_weights = I16WeightTable::new(resize_in_h, config.out_height, &filter);
+                let i16_h_weights = I16WeightTable::new(resize_in_w, config.out_width, &h_filter);
+                let i16_v_weights = I16WeightTable::new(resize_in_h, config.out_height, &v_filter);
 
                 // H-first: ring buffer stores H-filtered rows at out_width (not in_width)
                 let h_padding_bytes = i16_h_weights.groups4 * 16;
@@ -912,8 +932,8 @@ impl<B: Background> StreamingResize<B> {
                 }
             }
             StreamingPath::I16Linear => {
-                let i16_h_weights = I16WeightTable::new(resize_in_w, config.out_width, &filter);
-                let i16_v_weights = I16WeightTable::new(resize_in_h, config.out_height, &filter);
+                let i16_h_weights = I16WeightTable::new(resize_in_w, config.out_width, &h_filter);
+                let i16_v_weights = I16WeightTable::new(resize_in_h, config.out_height, &v_filter);
 
                 // H-first: ring buffer stores H-filtered rows at out_width
                 let h_padding_i16 = i16_h_weights.groups4 * 16;
