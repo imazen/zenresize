@@ -131,6 +131,8 @@ fn competitor_benchmarks() -> impl IntoBenchmarks {
                 use pic_scale::*;
                 let mut scaler = Scaler::new(ResamplingFunction::Lanczos3);
                 scaler.set_threading_policy(ThreadingPolicy::Single);
+                let src_size = ImageSize::new(img.width as usize, img.height as usize);
+                let dst_size = ImageSize::new(512, 512);
                 let store = ImageStore::<u8, 4>::from_slice(
                     &img.rgba,
                     img.width as usize,
@@ -138,7 +140,8 @@ fn competitor_benchmarks() -> impl IntoBenchmarks {
                 )
                 .unwrap();
                 let mut dst = ImageStoreMut::<u8, 4>::alloc(512, 512);
-                let _ = scaler.resize_rgba(&store, &mut dst, true);
+                let plan = scaler.plan_rgba_resampling(src_size, dst_size, true).unwrap();
+                let _ = plan.resample(&store, &mut dst);
                 black_box(dst.as_bytes().to_vec())
             })
         }),

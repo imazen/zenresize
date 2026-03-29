@@ -3050,7 +3050,7 @@ mod tests {
 
         let row = vec![128u8; 10 * 4];
         assert_eq!(
-            resizer.push_row(&row).unwrap_err().into_inner(),
+            resizer.push_row(&row).unwrap_err().decompose().0,
             StreamingError::AlreadyFinished
         );
     }
@@ -3062,7 +3062,7 @@ mod tests {
 
         let short_row = vec![128u8; 10]; // needs 10*4=40
         assert_eq!(
-            resizer.push_row(&short_row).unwrap_err().into_inner(),
+            resizer.push_row(&short_row).unwrap_err().decompose().0,
             StreamingError::InputTooShort
         );
     }

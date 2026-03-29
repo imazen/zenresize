@@ -118,9 +118,12 @@ fn ps_srgb(src: &[u8], iw: u32, ih: u32, ow: u32, oh: u32) -> Vec<u8> {
     use pic_scale::*;
     let mut scaler = Scaler::new(ResamplingFunction::Lanczos3);
     scaler.set_threading_policy(ThreadingPolicy::Single);
+    let src_size = ImageSize::new(iw as usize, ih as usize);
+    let dst_size = ImageSize::new(ow as usize, oh as usize);
     let store = ImageStore::<u8, 4>::from_slice(src, iw as usize, ih as usize).unwrap();
     let mut dst = ImageStoreMut::<u8, 4>::alloc(ow as usize, oh as usize);
-    scaler.resize_rgba(&store, &mut dst, true).unwrap();
+    let plan = scaler.plan_rgba_resampling(src_size, dst_size, true).unwrap();
+    plan.resample(&store, &mut dst).unwrap();
     dst.as_bytes().to_vec()
 }
 
@@ -128,9 +131,12 @@ fn ps_linear(src: &[u8], iw: u32, ih: u32, ow: u32, oh: u32) -> Vec<u8> {
     use pic_scale::*;
     let mut scaler = LinearScaler::new(ResamplingFunction::Lanczos3);
     scaler.set_threading_policy(ThreadingPolicy::Single);
+    let src_size = ImageSize::new(iw as usize, ih as usize);
+    let dst_size = ImageSize::new(ow as usize, oh as usize);
     let store = ImageStore::<u8, 4>::from_slice(src, iw as usize, ih as usize).unwrap();
     let mut dst = ImageStoreMut::<u8, 4>::alloc(ow as usize, oh as usize);
-    scaler.resize_rgba(&store, &mut dst, true).unwrap();
+    let plan = scaler.plan_rgba_resampling(src_size, dst_size, true).unwrap();
+    plan.resample(&store, &mut dst).unwrap();
     dst.as_bytes().to_vec()
 }
 
