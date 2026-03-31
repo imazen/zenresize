@@ -361,10 +361,23 @@ fn filter_h_u8_i16_4ch<T: magetypes::simd::backends::I32x4Backend>(
     #[allow(non_camel_case_types)]
     type i32x4<U> = GenericI32x4<U>;
 
+    let max_taps = weights.max_taps;
+
+    // Guard: if the input slice lacks the 4-byte padding that load_u8x4_as_i32x4
+    // requires past the last tap, fall back to the scalar path. This mirrors the
+    // `has_full_padding` check in the x86 kernel and is triggered only for
+    // right-edge output pixels on narrow images. Without this, NEON/wasm128 panic
+    // with an out-of-bounds index because max_taps pads past the actual tap count.
+    let in_pixels = input.len() / 4;
+    let max_left = weights.left.iter().copied().map(|l| l as usize).max().unwrap_or(0);
+    if max_left + max_taps > in_pixels {
+        filter_h_u8_i16_generic(input, output, weights, 4);
+        return;
+    }
+
     let half = i32x4::splat(token, 1 << (I16_PRECISION - 1));
     let zero = i32x4::splat(token, 0);
     let max = i32x4::splat(token, 255);
-    let max_taps = weights.max_taps;
 
     for out_x in 0..weights.len() {
         let left = weights.left[out_x] as usize;
@@ -443,8 +456,19 @@ fn filter_h_u8_to_i16_4ch<T: magetypes::simd::backends::I32x4Backend>(
     #[allow(non_camel_case_types)]
     type i32x4<U> = GenericI32x4<U>;
 
-    let half = i32x4::splat(token, 1 << (I16_PRECISION - 1));
     let max_taps = weights.max_taps;
+
+    // Same edge guard as filter_h_u8_i16_4ch: fall back to scalar when the
+    // right-edge output pixels would cause load_u8x4_as_i32x4 to read past
+    // the end of the input slice.
+    let in_pixels = input.len() / 4;
+    let max_left = weights.left.iter().copied().map(|l| l as usize).max().unwrap_or(0);
+    if max_left + max_taps > in_pixels {
+        filter_h_u8_to_i16_generic(input, output, weights, 4);
+        return;
+    }
+
+    let half = i32x4::splat(token, 1 << (I16_PRECISION - 1));
 
     for out_x in 0..weights.len() {
         let left = weights.left[out_x] as usize;
