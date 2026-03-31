@@ -29,7 +29,7 @@ magetypes = { version = "0.9.15", default-features = false }
 zenlayout = { version = "0.2", default-features = false, optional = true }
 linear-srgb = { version = "0.6.6", default-features = false, features = ["transfer"] }
 safe_unaligned_simd = "0.2.5"
-zenpixels = { version = "0.2.1", default-features = false }
+zenpixels = { version = "0.2.2", default-features = false }
 imgref = "1.12"
 libm = { version = "0.2", default-features = false }
 rgb = { version = "0.8", default-features = false }
