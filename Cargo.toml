@@ -24,32 +24,32 @@ pretty-safe = []
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512", "bench-simd-competitors", "pretty-safe"))'] }
 
 [dependencies]
-archmage = { version = "0.9.15", default-features = false, features = ["macros"] }
-magetypes = { version = "0.9.15", default-features = false }
-zenlayout = { version = "0.2", default-features = false, optional = true }
-linear-srgb = { version = "0.6.6", default-features = false, features = ["transfer"] }
+archmage = { version = "0.9.15", default-features = false, features = ["macros"] , path = "../../archmage" }
+magetypes = { version = "0.9.15", default-features = false , path = "../../archmage/magetypes" }
+zenlayout = { version = "0.2", default-features = false, optional = true , path = "../zenlayout" }
+linear-srgb = { version = "0.6.6", default-features = false, features = ["transfer"] , path = "../linear-srgb" }
 safe_unaligned_simd = "0.2.5"
-zenpixels = { version = "0.2.2", default-features = false }
+zenpixels = { version = "0.2.2", default-features = false , path = "../zenpixels/zenpixels" }
 imgref = "1.12"
 libm = { version = "0.2", default-features = false }
 rgb = { version = "0.8", default-features = false }
-whereat = { version = "0.1.5", default-features = false }
-zenblend = { version = "0.1.0", path = "../zenblend", default-features = false }
+whereat = { version = "0.1.5", default-features = false , path = "../whereat" }
+zenblend = { version = "0.1.0", default-features = false , path = "../zenblend" }
 # Self-documenting node definitions for pipeline integration
-# zennode = { version = "0.1.0", path = "../zennode/zennode", default-features = false, features = ["derive"], optional = true }
+# zennode = { version = "0.1.0", default-features = false, features = ["derive"], optional = true }
 
 [dev-dependencies]
 tango-bench = "0.7"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-linear-srgb = "0.6.6"
+linear-srgb = { version = "0.6.6" , path = "../linear-srgb" }
 colorutils-rs = "0.7"
 
 # Competitors (pic-scale: SIMD controlled by bench-simd-competitors feature)
 pic-scale = { version = "0.7", default-features = false, features = ["colorspaces"] }
 pic-scale-safe = "0.1"
 fast_image_resize = "6"
-zenbench = { version = "0.1.2", features = ["criterion-compat"] }
-zenblend = { version = "0.1.0", path = "../zenblend" }
+zenbench = { version = "0.1.2", features = ["criterion-compat"] , path = "../zenbench" }
+zenblend = { version = "0.1.0" , path = "../zenblend" }
 resize = "0.8"
 rgb = "0.8"
 palette = "0.7"
