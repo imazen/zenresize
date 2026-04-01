@@ -257,7 +257,166 @@ pub(crate) fn filter_h_u8_to_i16_wasm128(
     weights: &I16WeightTable,
     channels: usize,
 ) {
-    super::wide_kernels::filter_h_u8_to_i16_impl_wasm128(_token, input, output, weights, channels)
+    match channels {
+        4 => filter_h_u8_to_i16_4ch_intrinsic(_token, input, output, weights),
+        _ => super::wide_kernels::filter_h_u8_to_i16_impl_wasm128(
+            _token, input, output, weights, channels,
+        ),
+    }
+}
+
+/// 4-channel u8→i16 horizontal convolution using native wasm128 intrinsics.
+///
+/// Same `i32x4_dot_i16x8` paired multiply-add approach as the u8→u8 variant,
+/// but outputs unclamped i16 to preserve Lanczos ringing for the next filter stage.
+#[allow(clippy::needless_range_loop)]
+#[archmage::rite(import_intrinsics)]
+fn filter_h_u8_to_i16_4ch_intrinsic(
+    _token: Wasm128Token,
+    input: &[u8],
+    output: &mut [i16],
+    weights: &I16WeightTable,
+) {
+    let out_width = weights.len();
+    let groups4 = weights.groups4;
+    let in_pixels = input.len() / 4;
+
+    if in_pixels < 4 {
+        filter_h_u8_to_i16_4ch_scalar(input, output, weights);
+        return;
+    }
+
+    let max_left = weights.left.iter().map(|&l| l as usize).max().unwrap_or(0);
+    let has_full_padding = max_left + groups4 * 4 + 3 < in_pixels;
+
+    let half = i32x4_splat(1 << (I16_PRECISION - 1));
+    let ew_all = weights.expanded_4ch_all();
+    let (ew_chunks, _) = ew_all.as_chunks::<8>();
+
+    if has_full_padding {
+        for out_x in 0..out_width {
+            let left = weights.left[out_x] as usize;
+            let byte_start = left * 4;
+            let input_window = sub(input, byte_start..byte_start + groups4 * 16);
+            let (in_chunks, _) = input_window.as_chunks::<16>();
+            let ew_base = out_x * groups4 * 2;
+
+            let mut acc = i32x4_splat(0);
+
+            for (g, chunk) in in_chunks.iter().enumerate() {
+                let raw = v128_load(chunk);
+
+                let lo_i16 = u16x8_extend_low_u8x16(raw);
+                let lo_shuffled =
+                    i8x16_shuffle::<0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14, 15>(
+                        lo_i16, lo_i16,
+                    );
+                let w_lo = v128_load(&ew_chunks[ew_base + g * 2]);
+                acc = i32x4_add(acc, i32x4_dot_i16x8(lo_shuffled, w_lo));
+
+                let hi_i16 = u16x8_extend_high_u8x16(raw);
+                let hi_shuffled =
+                    i8x16_shuffle::<0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14, 15>(
+                        hi_i16, hi_i16,
+                    );
+                let w_hi = v128_load(&ew_chunks[ew_base + g * 2 + 1]);
+                acc = i32x4_add(acc, i32x4_dot_i16x8(hi_shuffled, w_hi));
+            }
+
+            // Round, shift — output i16 without clamping to [0,255]
+            let rounded = i32x4_shr(i32x4_add(acc, half), I16_PRECISION as u32);
+            let out_base = out_x * 4;
+            let arr: [i32; 4] = {
+                let mut a = [0i32; 4];
+                v128_store(&mut a, rounded);
+                a
+            };
+            output[out_base] = arr[0] as i16;
+            output[out_base + 1] = arr[1] as i16;
+            output[out_base + 2] = arr[2] as i16;
+            output[out_base + 3] = arr[3] as i16;
+        }
+    } else {
+        // Edge-aware: SIMD for interior, scalar for edges
+        let safe_end = (0..out_width)
+            .position(|x| (weights.left[x] as usize) + groups4 * 4 > in_pixels)
+            .unwrap_or(out_width);
+
+        for out_x in 0..safe_end {
+            let left = weights.left[out_x] as usize;
+            let byte_start = left * 4;
+            let input_window = &input[byte_start..byte_start + groups4 * 16];
+            let (in_chunks, _) = input_window.as_chunks::<16>();
+            let ew_base = out_x * groups4 * 2;
+
+            let mut acc = i32x4_splat(0);
+
+            for (g, chunk) in in_chunks.iter().enumerate() {
+                let raw = v128_load(chunk);
+
+                let lo_i16 = u16x8_extend_low_u8x16(raw);
+                let lo_shuffled =
+                    i8x16_shuffle::<0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14, 15>(
+                        lo_i16, lo_i16,
+                    );
+                let w_lo = v128_load(&ew_chunks[ew_base + g * 2]);
+                acc = i32x4_add(acc, i32x4_dot_i16x8(lo_shuffled, w_lo));
+
+                let hi_i16 = u16x8_extend_high_u8x16(raw);
+                let hi_shuffled =
+                    i8x16_shuffle::<0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14, 15>(
+                        hi_i16, hi_i16,
+                    );
+                let w_hi = v128_load(&ew_chunks[ew_base + g * 2 + 1]);
+                acc = i32x4_add(acc, i32x4_dot_i16x8(hi_shuffled, w_hi));
+            }
+
+            let rounded = i32x4_shr(i32x4_add(acc, half), I16_PRECISION as u32);
+            let out_base = out_x * 4;
+            let arr: [i32; 4] = {
+                let mut a = [0i32; 4];
+                v128_store(&mut a, rounded);
+                a
+            };
+            output[out_base] = arr[0] as i16;
+            output[out_base + 1] = arr[1] as i16;
+            output[out_base + 2] = arr[2] as i16;
+            output[out_base + 3] = arr[3] as i16;
+        }
+
+        // Scalar for edge pixels
+        for out_x in safe_end..out_width {
+            let left = weights.left[out_x] as usize;
+            let w = weights.weights(out_x);
+            let out_base = out_x * 4;
+            for c in 0..4 {
+                let mut acc: i32 = 0;
+                for (t, &weight) in w.iter().enumerate() {
+                    acc += input[(left + t) * 4 + c] as i32 * weight as i32;
+                }
+                let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+                output[out_base + c] = rounded as i16;
+            }
+        }
+    }
+}
+
+/// Scalar fallback for 4ch u8→i16 when input is too small for SIMD.
+#[inline(always)]
+fn filter_h_u8_to_i16_4ch_scalar(input: &[u8], output: &mut [i16], weights: &I16WeightTable) {
+    for out_x in 0..weights.len() {
+        let left = weights.left[out_x] as usize;
+        let w = weights.weights(out_x);
+        let out_base = out_x * 4;
+        for c in 0..4 {
+            let mut acc: i32 = 0;
+            for (t, &weight) in w.iter().enumerate() {
+                acc += input[(left + t) * 4 + c] as i32 * weight as i32;
+            }
+            let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+            output[out_base + c] = rounded as i16;
+        }
+    }
 }
 
 #[archmage::arcane]
@@ -389,7 +548,84 @@ pub(crate) fn filter_v_row_u8_i16_wasm128(
     output: &mut [u8],
     weights: &[i16],
 ) {
-    super::wide_kernels::filter_v_row_u8_i16_impl_wasm128(_token, rows, output, weights)
+    filter_v_row_u8_i16_intrinsic(_token, rows, output, weights)
+}
+
+/// Streaming V-filter: u8 rows → u8 output using native wasm128 intrinsics.
+///
+/// Processes 16 bytes per iteration using widening loads (`u16x8_extend_low/high_u8x16`)
+/// to go u8→i16→i32 for accumulation, then narrowing stores (`i16x8_narrow_i32x4` +
+/// `u8x16_narrow_i16x8`) to pack back to u8. This replaces the magetypes generic path
+/// which constructs i32x4 from scalar arrays (4 scalar loads per vector).
+#[archmage::rite(import_intrinsics)]
+fn filter_v_row_u8_i16_intrinsic(
+    _token: Wasm128Token,
+    rows: &[&[u8]],
+    output: &mut [u8],
+    weights: &[i16],
+) {
+    let width = output.len();
+    debug_assert_eq!(rows.len(), weights.len());
+
+    let half = i32x4_splat(1 << (I16_PRECISION - 1));
+
+    // Process 16 bytes at a time (4 × i32x4 accumulators)
+    let chunks16 = width / 16;
+
+    for chunk_idx in 0..chunks16 {
+        let x = chunk_idx * 16;
+        let mut acc0 = i32x4_splat(0);
+        let mut acc1 = i32x4_splat(0);
+        let mut acc2 = i32x4_splat(0);
+        let mut acc3 = i32x4_splat(0);
+
+        for (row, &weight) in rows.iter().zip(weights.iter()) {
+            let w = i32x4_splat(weight as i32);
+            // Load 16 bytes as u8x16
+            let raw: &[u8; 16] = row[x..x + 16].try_into().unwrap();
+            let bytes = v128_load(raw);
+
+            // Widen low 8 bytes: u8→u16
+            let lo16 = u16x8_extend_low_u8x16(bytes);
+            // Widen to i32: low 4 and high 4 of the low 8
+            let lo_lo32 = u32x4_extend_low_u16x8(lo16);
+            let lo_hi32 = u32x4_extend_high_u16x8(lo16);
+            acc0 = i32x4_add(acc0, i32x4_mul(lo_lo32, w));
+            acc1 = i32x4_add(acc1, i32x4_mul(lo_hi32, w));
+
+            // Widen high 8 bytes: u8→u16
+            let hi16 = u16x8_extend_high_u8x16(bytes);
+            let hi_lo32 = u32x4_extend_low_u16x8(hi16);
+            let hi_hi32 = u32x4_extend_high_u16x8(hi16);
+            acc2 = i32x4_add(acc2, i32x4_mul(hi_lo32, w));
+            acc3 = i32x4_add(acc3, i32x4_mul(hi_hi32, w));
+        }
+
+        // Round, shift, and pack to u8
+        let r0 = i32x4_shr(i32x4_add(acc0, half), I16_PRECISION as u32);
+        let r1 = i32x4_shr(i32x4_add(acc1, half), I16_PRECISION as u32);
+        let r2 = i32x4_shr(i32x4_add(acc2, half), I16_PRECISION as u32);
+        let r3 = i32x4_shr(i32x4_add(acc3, half), I16_PRECISION as u32);
+
+        // Narrow i32x4 → i16x8 (signed saturate), then i16x8 → u8x16 (unsigned saturate)
+        let lo16 = i16x8_narrow_i32x4(r0, r1);
+        let hi16 = i16x8_narrow_i32x4(r2, r3);
+        let packed = u8x16_narrow_i16x8(lo16, hi16);
+
+        let out_arr: &mut [u8; 16] = (&mut output[x..x + 16]).try_into().unwrap();
+        v128_store(out_arr, packed);
+    }
+
+    // Scalar tail for remaining bytes
+    let base16 = chunks16 * 16;
+    for x in base16..width {
+        let mut acc: i32 = 0;
+        for (row, &weight) in rows.iter().zip(weights.iter()) {
+            acc += row[x] as i32 * weight as i32;
+        }
+        let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+        output[x] = rounded.clamp(0, 255) as u8;
+    }
 }
 
 #[archmage::arcane]
@@ -399,7 +635,66 @@ pub(crate) fn filter_v_row_i16_wasm128(
     output: &mut [i16],
     weights: &[i16],
 ) {
-    super::wide_kernels::filter_v_row_i16_impl_wasm128(_token, rows, output, weights)
+    filter_v_row_i16_intrinsic(_token, rows, output, weights)
+}
+
+/// Streaming V-filter: i16 rows → i16 output using native wasm128 intrinsics.
+///
+/// Processes 8 i16 per iteration using widening loads (`i32x4_extend_low/high_i16x8`)
+/// for i16→i32 accumulation, then narrowing stores (`i16x8_narrow_i32x4`).
+#[archmage::rite(import_intrinsics)]
+fn filter_v_row_i16_intrinsic(
+    _token: Wasm128Token,
+    rows: &[&[i16]],
+    output: &mut [i16],
+    weights: &[i16],
+) {
+    let width = output.len();
+    debug_assert_eq!(rows.len(), weights.len());
+
+    let half = i32x4_splat(1 << (I16_PRECISION - 1));
+
+    // Process 8 i16 values at a time (2 × i32x4 accumulators)
+    let chunks8 = width / 8;
+
+    for chunk_idx in 0..chunks8 {
+        let x = chunk_idx * 8;
+        let mut acc0 = i32x4_splat(0);
+        let mut acc1 = i32x4_splat(0);
+
+        for (row, &weight) in rows.iter().zip(weights.iter()) {
+            let w = i32x4_splat(weight as i32);
+            // Load 8 i16 values
+            let vals: &[i16; 8] = row[x..x + 8].try_into().unwrap();
+            let v16 = v128_load(vals);
+
+            // Widen i16→i32
+            let lo32 = i32x4_extend_low_i16x8(v16);
+            let hi32 = i32x4_extend_high_i16x8(v16);
+            acc0 = i32x4_add(acc0, i32x4_mul(lo32, w));
+            acc1 = i32x4_add(acc1, i32x4_mul(hi32, w));
+        }
+
+        // Round, shift
+        let r0 = i32x4_shr(i32x4_add(acc0, half), I16_PRECISION as u32);
+        let r1 = i32x4_shr(i32x4_add(acc1, half), I16_PRECISION as u32);
+
+        // Narrow i32x4 → i16x8 (signed saturate)
+        let packed = i16x8_narrow_i32x4(r0, r1);
+        let out_arr: &mut [i16; 8] = (&mut output[x..x + 8]).try_into().unwrap();
+        v128_store(out_arr, packed);
+    }
+
+    // Scalar tail
+    let base8 = chunks8 * 8;
+    for x in base8..width {
+        let mut acc: i32 = 0;
+        for (row, &weight) in rows.iter().zip(weights.iter()) {
+            acc += row[x] as i32 * weight as i32;
+        }
+        let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+        output[x] = rounded as i16;
+    }
 }
 
 // =========================================================================
