@@ -369,7 +369,13 @@ fn filter_h_u8_i16_4ch<T: magetypes::simd::backends::I32x4Backend>(
     // right-edge output pixels on narrow images. Without this, NEON/wasm128 panic
     // with an out-of-bounds index because max_taps pads past the actual tap count.
     let in_pixels = input.len() / 4;
-    let max_left = weights.left.iter().copied().map(|l| l as usize).max().unwrap_or(0);
+    let max_left = weights
+        .left
+        .iter()
+        .copied()
+        .map(|l| l as usize)
+        .max()
+        .unwrap_or(0);
     if max_left + max_taps > in_pixels {
         filter_h_u8_i16_generic(input, output, weights, 4);
         return;
@@ -462,7 +468,13 @@ fn filter_h_u8_to_i16_4ch<T: magetypes::simd::backends::I32x4Backend>(
     // right-edge output pixels would cause load_u8x4_as_i32x4 to read past
     // the end of the input slice.
     let in_pixels = input.len() / 4;
-    let max_left = weights.left.iter().copied().map(|l| l as usize).max().unwrap_or(0);
+    let max_left = weights
+        .left
+        .iter()
+        .copied()
+        .map(|l| l as usize)
+        .max()
+        .unwrap_or(0);
     if max_left + max_taps > in_pixels {
         filter_h_u8_to_i16_generic(input, output, weights, 4);
         return;
