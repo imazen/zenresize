@@ -8,6 +8,20 @@ description = "High-quality image resampling with 31 filters, streaming API, and
 repository = "https://github.com/imazen/zenresize"
 keywords = ["image", "resize", "resampling", "simd", "lanczos"]
 categories = ["graphics", "multimedia::images", "no-std"]
+exclude = [
+    "CLAUDE.md",
+    "CONTEXT-HANDOFF.md",
+    "FEEDBACK.md",
+    ".claude/",
+    ".superwork/",
+    ".zenbench/",
+    "copter-report/",
+    ".github/",
+    "Cross.toml",
+    "justfile",
+    "Cargo.toml.original.txt",
+    "fuzz/",
+]
 
 [features]
 default = ["std", "layout"]
