@@ -48,6 +48,7 @@ jobs:
         run: |
           awk '
             /^\[dev-dependencies\]/ { skip=1; next }
+            /^\[target\..*dev-dependencies\]/ { skip=1; next }
             /^\[\[bench\]\]/ { skip=1; next }
             /bench-simd-competitors/ { next }
             skip && /^\[/ { skip=0 }
