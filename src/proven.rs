@@ -55,18 +55,8 @@ pub(crate) fn sub<T>(slice: &[T], range: Range<usize>) -> &[T] {
 }
 
 #[inline(always)]
-#[allow(clippy::uninit_vec)]
 pub(crate) fn alloc_output<T: Copy + Default>(len: usize) -> Vec<T> {
-    #[cfg(feature = "pretty-safe")]
-    {
-        let mut v = Vec::with_capacity(len);
-        // SAFETY: The caller guarantees all `len` elements will be fully written
-        // by resize_into before any are read. T: Copy means no Drop needed.
-        unsafe { v.set_len(len) };
-        v
-    }
-    #[cfg(not(feature = "pretty-safe"))]
-    {
-        vec![T::default(); len]
-    }
+    // vec![T::default(); len] is optimized to calloc for zero-initialized types
+    // (u8, i16, f32), so there is no performance benefit to the unsafe set_len trick.
+    vec![T::default(); len]
 }
