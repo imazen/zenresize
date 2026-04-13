@@ -74,8 +74,12 @@ pub use execute::{
 pub use filter::Filter;
 #[cfg(feature = "layout")]
 pub use layout::{
-    CanvasColor, Constraint, ConstraintMode, DecoderOffer, DecoderRequest, Gravity, IdealLayout,
-    Layout, LayoutError, LayoutPlan, Orientation, Pipeline, Rect, Size, SourceCrop,
+    Align, CanvasColor, Command, Constraint, ConstraintMode, DecoderOffer, DecoderRequest,
+    DimensionEffect, ExpandEffect, FlipAxis, Gravity, IdealLayout, Layout, LayoutError, LayoutPlan,
+    Orientation, OutputLimits, PadEffect, Pipeline, Rect, Region, RegionCoord, ResolutionPolicy,
+    ResolvedEffect, RotateEffect, RotateMode, Rotation, Size, SourceCrop, Subsampling, TrimEffect,
+    WarpEffect, compute_layout, compute_layout_sequential, expanded_canvas_dims,
+    expanded_canvas_inverse, inscribed_crop_dims, inscribed_crop_inverse, warp_output_dims,
 };
 pub use pixel::{Element, LobeRatio, Padding, ResizeConfig, ResizeConfigBuilder, SourceRegion};
 pub use plane::PlaneResizer;
