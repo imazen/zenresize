@@ -37,12 +37,8 @@ whereat::define_at_crate_info!();
 pub(crate) mod blur;
 pub(crate) mod color;
 pub mod composite;
-#[cfg(feature = "layout")]
-pub(crate) mod execute;
 #[doc(hidden)]
 pub mod filter;
-#[cfg(feature = "layout")]
-pub mod layout;
 pub(crate) mod pixel;
 pub mod plane;
 pub(crate) mod resize;
@@ -64,19 +60,7 @@ pub mod simd;
 pub use zenpixels::{AlphaMode, ChannelLayout, ChannelType, PixelDescriptor, TransferFunction};
 
 // Re-exports: minimal public API
-#[cfg(feature = "layout")]
-pub use execute::{
-    canvas_color_to_pixel, config_from_plan, execute, execute_layout,
-    execute_layout_with_background, execute_secondary, execute_secondary_with_background,
-    execute_with_background, execute_with_offer, fill_canvas, orient_image, place_on_canvas,
-    replicate_edges, streaming_from_plan, streaming_from_plan_batched,
-};
 pub use filter::Filter;
-#[cfg(feature = "layout")]
-pub use layout::{
-    CanvasColor, Constraint, ConstraintMode, DecoderOffer, DecoderRequest, Gravity, IdealLayout,
-    Layout, LayoutError, LayoutPlan, Orientation, Pipeline, Rect, Size, SourceCrop,
-};
 pub use pixel::{Element, LobeRatio, Padding, ResizeConfig, ResizeConfigBuilder, SourceRegion};
 pub use plane::PlaneResizer;
 pub use resize::Resizer;

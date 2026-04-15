@@ -24,10 +24,9 @@ exclude = [
 ]
 
 [features]
-default = ["std", "layout"]
-std = ["archmage/std", "magetypes/std", "linear-srgb/std", "zenlayout?/std", "zenpixels/std", "whereat/std", "zenblend/std"]
+default = ["std"]
+std = ["archmage/std", "magetypes/std", "linear-srgb/std", "zenpixels/std", "whereat/std", "zenblend/std"]
 avx512 = ["archmage/avx512"]
-layout = ["dep:zenlayout"]
 # zennode node definitions (Constrain schema with RIAPI keys)
 # zennode = ["dep:zennode"]
 # Enable SIMD features on pic-scale for benchmarks (default: scalar-only)
@@ -40,7 +39,6 @@ unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512",
 [dependencies]
 archmage = { version = "0.9.15", default-features = false, features = ["macros"] }
 magetypes = { version = "0.9.15", default-features = false }
-zenlayout = { version = "0.2", default-features = false, optional = true }
 linear-srgb = { version = "0.6.7", default-features = false, features = ["transfer"] }
 safe_unaligned_simd = "0.2.5"
 zenpixels = { version = "0.2.2", default-features = false }

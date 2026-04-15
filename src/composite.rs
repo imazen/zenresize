@@ -137,22 +137,6 @@ impl SolidBackground {
         }
     }
 
-    /// Create from a [`CanvasColor`](crate::layout::CanvasColor).
-    #[cfg(feature = "layout")]
-    pub fn from_canvas_color(color: &crate::layout::CanvasColor, desc: PixelDescriptor) -> Self {
-        match color {
-            crate::layout::CanvasColor::Transparent => Self::transparent(desc),
-            crate::layout::CanvasColor::Srgb { r, g, b, a } => {
-                Self::from_srgb_u8(*r, *g, *b, *a, desc)
-            }
-            crate::layout::CanvasColor::Linear { r, g, b, a } => {
-                Self::from_linear(*r, *g, *b, *a, desc)
-            }
-            // non_exhaustive fallback
-            _ => Self::transparent(desc),
-        }
-    }
-
     /// Fully transparent background (equivalent to [`NoBackground`] but as a concrete type).
     pub fn transparent(_desc: PixelDescriptor) -> Self {
         Self {

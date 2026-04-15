@@ -177,23 +177,6 @@ impl OrientOutput {
     }
 }
 
-#[cfg(feature = "layout")]
-impl From<crate::layout::Orientation> for OrientOutput {
-    fn from(o: crate::layout::Orientation) -> Self {
-        match o {
-            crate::layout::Orientation::Identity => Self::Identity,
-            crate::layout::Orientation::FlipH => Self::FlipH,
-            crate::layout::Orientation::Rotate180 => Self::Rotate180,
-            crate::layout::Orientation::FlipV => Self::FlipV,
-            crate::layout::Orientation::Transpose => Self::Transpose,
-            crate::layout::Orientation::Rotate90 => Self::Rotate90,
-            crate::layout::Orientation::Transverse => Self::Transverse,
-            crate::layout::Orientation::Rotate270 => Self::Rotate270,
-            _ => Self::Identity, // non_exhaustive fallback
-        }
-    }
-}
-
 /// Build V-filter row references from a ring buffer cache.
 ///
 /// Uses a 128-slot stack array for the common case (up to ~21× downscale with
