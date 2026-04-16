@@ -67,6 +67,9 @@ zenbench = { version = "0.1.2", features = ["criterion-compat"] }
 resize = "0.8"
 palette = "0.7"
 
+[patch.crates-io]
+linear-srgb = { path = "../linear-srgb" }
+
 [[bench]]
 name = "resize_bench"
 harness = false

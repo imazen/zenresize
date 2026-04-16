@@ -47,6 +47,7 @@ use crate::transfer::{Bt709, Hlg, Pq, Srgb, TransferCurve};
 use crate::weights::{F32WeightTable, I16WeightTable};
 use whereat::{At, ResultAtExt, at};
 use zenpixels::{AlphaMode, ChannelType, TransferFunction};
+use linear_srgb;
 
 /// Estimate the maximum filter tap count for a given dimension and filter.
 ///
@@ -1243,55 +1244,65 @@ impl<B: Background> StreamingResize<B> {
         }
 
         // F32 path: linearize + premultiply → cache f32
-        match self.config.effective_input_transfer() {
-            TransferFunction::Srgb => {
-                color::srgb_u8_to_linear_f32(
-                    pixel_data,
-                    &mut self.temp_input_f32[..pixel_len],
-                    self.channels,
-                    self.alpha_is_last,
-                );
+        // Fused path: sRGB u8 → linear premultiplied f32 in a single pass
+        // when channels == 4, needs_premul, and sRGB transfer.
+        let tf = self.config.effective_input_transfer();
+        if tf == TransferFunction::Srgb && self.needs_premul && self.channels == 4 {
+            linear_srgb::default::srgb_u8_to_linear_premultiply_rgba_slice(
+                pixel_data,
+                &mut self.temp_input_f32[..pixel_len],
+            );
+        } else {
+            match tf {
+                TransferFunction::Srgb => {
+                    color::srgb_u8_to_linear_f32(
+                        pixel_data,
+                        &mut self.temp_input_f32[..pixel_len],
+                        self.channels,
+                        self.alpha_is_last,
+                    );
+                }
+                TransferFunction::Linear => {
+                    simd::u8_to_f32_row(pixel_data, &mut self.temp_input_f32[..pixel_len]);
+                }
+                TransferFunction::Bt709 => {
+                    Bt709.u8_to_linear_f32(
+                        pixel_data,
+                        &mut self.temp_input_f32[..pixel_len],
+                        &(),
+                        self.channels,
+                        self.alpha_is_last,
+                        false,
+                    );
+                }
+                TransferFunction::Pq => {
+                    Pq.u8_to_linear_f32(
+                        pixel_data,
+                        &mut self.temp_input_f32[..pixel_len],
+                        &(),
+                        self.channels,
+                        self.alpha_is_last,
+                        false,
+                    );
+                }
+                TransferFunction::Hlg => {
+                    Hlg.u8_to_linear_f32(
+                        pixel_data,
+                        &mut self.temp_input_f32[..pixel_len],
+                        &(),
+                        self.channels,
+                        self.alpha_is_last,
+                        false,
+                    );
+                }
+                _ => {
+                    simd::u8_to_f32_row(pixel_data, &mut self.temp_input_f32[..pixel_len]);
+                }
             }
-            TransferFunction::Linear => {
-                simd::u8_to_f32_row(pixel_data, &mut self.temp_input_f32[..pixel_len]);
-            }
-            TransferFunction::Bt709 => {
-                Bt709.u8_to_linear_f32(
-                    pixel_data,
-                    &mut self.temp_input_f32[..pixel_len],
-                    &(),
-                    self.channels,
-                    self.alpha_is_last,
-                    false,
-                );
-            }
-            TransferFunction::Pq => {
-                Pq.u8_to_linear_f32(
-                    pixel_data,
-                    &mut self.temp_input_f32[..pixel_len],
-                    &(),
-                    self.channels,
-                    self.alpha_is_last,
-                    false,
-                );
-            }
-            TransferFunction::Hlg => {
-                Hlg.u8_to_linear_f32(
-                    pixel_data,
-                    &mut self.temp_input_f32[..pixel_len],
-                    &(),
-                    self.channels,
-                    self.alpha_is_last,
-                    false,
-                );
-            }
-            _ => {
-                simd::u8_to_f32_row(pixel_data, &mut self.temp_input_f32[..pixel_len]);
-            }
-        }
 
-        if self.needs_premul {
-            simd::premultiply_alpha_row(&mut self.temp_input_f32[..pixel_len]);
+            if self.needs_premul {
+                simd::premultiply_alpha_row(&mut self.temp_input_f32[..pixel_len]);
+            }
         }
 
         self.push_row_internal().at()
@@ -2136,18 +2147,14 @@ impl<B: Background> StreamingResize<B> {
             );
         }
 
-        // Unpremultiply
-        if self.needs_premul {
-            simd::unpremultiply_alpha_row(&mut self.temp_output_f32[..row_len]);
-        }
-
-        // Encode to u8
-        Self::encode_output_u8(
-            &self.temp_output_f32[..row_len],
+        // Fused unpremultiply + encode
+        Self::unpremul_and_encode_u8(
+            &mut self.temp_output_f32[..row_len],
             &mut self.output_buf_u8[..row_len],
             self.config.effective_output_transfer(),
             self.channels,
             self.alpha_is_last,
+            self.needs_premul,
         );
         Some(&self.output_buf_u8[..row_len])
     }
@@ -2170,13 +2177,14 @@ impl<B: Background> StreamingResize<B> {
                 self.output_buf_u8 = tmp;
             }
             StreamingPath::F32 => {
-                self.produce_next_f32();
-                Self::encode_output_u8(
-                    &self.temp_output_f32[..row_len],
+                self.produce_next_f32_composited();
+                Self::unpremul_and_encode_u8(
+                    &mut self.temp_output_f32[..row_len],
                     &mut self.output_buf_u8[..row_len],
                     self.config.effective_output_transfer(),
                     self.channels,
                     self.alpha_is_last,
+                    self.needs_premul,
                 );
             }
         }
@@ -2192,13 +2200,14 @@ impl<B: Background> StreamingResize<B> {
             StreamingPath::I16Srgb => self.produce_next_i16_srgb(&mut dst[..row_len]),
             StreamingPath::I16Linear => self.produce_next_i16_linear(&mut dst[..row_len]),
             StreamingPath::F32 => {
-                self.produce_next_f32();
-                Self::encode_output_u8(
-                    &self.temp_output_f32[..row_len],
+                self.produce_next_f32_composited();
+                Self::unpremul_and_encode_u8(
+                    &mut self.temp_output_f32[..row_len],
                     &mut dst[..row_len],
                     self.config.effective_output_transfer(),
                     self.channels,
                     self.alpha_is_last,
+                    self.needs_premul,
                 );
             }
         }
@@ -2208,6 +2217,30 @@ impl<B: Background> StreamingResize<B> {
     // =========================================================================
     // Internal
     // =========================================================================
+
+    /// Fused unpremultiply + sRGB encode when possible, otherwise separate passes.
+    fn unpremul_and_encode_u8(
+        src: &mut [f32],
+        dst: &mut [u8],
+        tf: TransferFunction,
+        channels: usize,
+        alpha_is_last: bool,
+        needs_premul: bool,
+    ) {
+        // Fused path: unpremultiply + sRGB LUT encode in a single pass.
+        // Now safe because linear-srgb uses the same 1/1024 alpha threshold
+        // as zenresize's SIMD unpremultiply.
+        if needs_premul && tf == TransferFunction::Srgb && channels == 4 {
+            linear_srgb::default::unpremultiply_linear_to_srgb_u8_rgba_slice(src, dst);
+            return;
+        }
+
+        // Fallback: separate unpremultiply + encode
+        if needs_premul {
+            simd::unpremultiply_alpha_row(src);
+        }
+        Self::encode_output_u8(src, dst, tf, channels, alpha_is_last);
+    }
 
     /// Encode linear f32 to u8 using the specified transfer function.
     fn encode_output_u8(
@@ -2346,7 +2379,19 @@ impl<B: Background> StreamingResize<B> {
     /// - Composite-only (JPEG): no mask → composite over bg → opaque output
     /// - Mask + composite (rounded corners on white → JPEG): mask cuts corners
     ///   to transparent → composite fills transparent with bg → white corners
+    /// Produce one f32 output row: V-filter → H-filter → mask → composite → unpremultiply.
     fn produce_next_f32(&mut self) {
+        self.produce_next_f32_composited();
+
+        if self.needs_premul {
+            let out_row_len = self.config.out_width as usize * self.channels;
+            simd::unpremultiply_alpha_row(&mut self.temp_output_f32[..out_row_len]);
+        }
+    }
+
+    /// Produce one f32 output row through composite, but skip unpremultiply.
+    /// Used by callers that fuse unpremultiply with encoding.
+    fn produce_next_f32_composited(&mut self) {
         self.produce_next_f32_raw();
 
         let out_y = self.output_rows_produced - 1; // raw already incremented
@@ -2373,10 +2418,6 @@ impl<B: Background> StreamingResize<B> {
             self.channels as u8,
             self.blend_mode,
         );
-
-        if self.needs_premul {
-            simd::unpremultiply_alpha_row(&mut self.temp_output_f32[..out_row_len]);
-        }
     }
 
     /// Produce one output row via the I16Srgb H-first path.
