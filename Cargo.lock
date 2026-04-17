@@ -1641,9 +1641,9 @@ dependencies = [
 
 [[package]]
 name = "zenpixels"
-version = "0.2.3"
+version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94439a80006e7c0667781a60ebb73145db6e6792e546f187933bcc472b36dece"
+checksum = "f5b1f3d117906a196be9b5cfcddb7dd6d79e81e521d2258c31a55a51ea198abe"
 dependencies = [
  "bytemuck",
  "whereat",

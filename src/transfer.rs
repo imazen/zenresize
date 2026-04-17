@@ -1459,8 +1459,11 @@ mod tests {
             TransferFunction::from_cicp(1),
             Some(TransferFunction::Bt709)
         );
-        // TC=6 (BT.601) is not mapped by zenpixels
-        assert_eq!(TransferFunction::from_cicp(6), None);
+        // TC=6 (SMPTE 170M / BT.601) uses the BT.709 OETF — zenpixels maps it since 0.2.4
+        assert_eq!(
+            TransferFunction::from_cicp(6),
+            Some(TransferFunction::Bt709)
+        );
         assert_eq!(
             TransferFunction::from_cicp(8),
             Some(TransferFunction::Linear)
