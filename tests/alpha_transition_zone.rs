@@ -18,7 +18,10 @@ fn create_vertical_edge(width: u32, height: u32) -> Vec<u8> {
         for x in 0..width {
             let idx = ((y * width + x) * 4) as usize;
             if x < edge {
-                data[idx] = 255; data[idx+1] = 255; data[idx+2] = 255; data[idx+3] = 255;
+                data[idx] = 255;
+                data[idx + 1] = 255;
+                data[idx + 2] = 255;
+                data[idx + 3] = 255;
             }
         }
     }
@@ -27,7 +30,12 @@ fn create_vertical_edge(width: u32, height: u32) -> Vec<u8> {
 
 /// Resize to premultiplied linear f32
 fn resize_premul(
-    input: &[u8], in_w: u32, in_h: u32, out_w: u32, out_h: u32, filter: Filter,
+    input: &[u8],
+    in_w: u32,
+    in_h: u32,
+    out_w: u32,
+    out_h: u32,
+    filter: Filter,
 ) -> Vec<f32> {
     let config = ResizeConfig::builder(in_w, in_h, out_w, out_h)
         .filter(filter)
@@ -87,26 +95,26 @@ fn analyze_edge_row(premul_row: &[f32], out_w: u32) -> Vec<(u32, f32, u8, f32, b
 #[test]
 fn analyze_transition_zones() {
     let filters: &[(&str, Filter)] = &[
-        ("Lanczos3",      Filter::Lanczos),
-        ("LanczosSharp",  Filter::LanczosSharp),
-        ("Lanczos2",      Filter::Lanczos2),
-        ("Ginseng",       Filter::Ginseng),
-        ("Robidoux",      Filter::Robidoux),
+        ("Lanczos3", Filter::Lanczos),
+        ("LanczosSharp", Filter::LanczosSharp),
+        ("Lanczos2", Filter::Lanczos2),
+        ("Ginseng", Filter::Ginseng),
+        ("Robidoux", Filter::Robidoux),
         ("RobidouxSharp", Filter::RobidouxSharp),
-        ("Mitchell",      Filter::Mitchell),
-        ("CatmullRom",    Filter::CatmullRom),
-        ("CubicBSpline",  Filter::CubicBSpline),
-        ("Hermite",       Filter::Hermite),
-        ("Triangle",      Filter::Triangle),
-        ("Box",           Filter::Box),
+        ("Mitchell", Filter::Mitchell),
+        ("CatmullRom", Filter::CatmullRom),
+        ("CubicBSpline", Filter::CubicBSpline),
+        ("Hermite", Filter::Hermite),
+        ("Triangle", Filter::Triangle),
+        ("Box", Filter::Box),
     ];
 
     let scale_factors: &[(f32, &str)] = &[
-        (0.5,    "2x_down"),
-        (0.333,  "3x_down"),
-        (0.25,   "4x_down"),
-        (0.125,  "8x_down"),
-        (2.0,    "2x_up"),
+        (0.5, "2x_down"),
+        (0.333, "3x_down"),
+        (0.25, "4x_down"),
+        (0.125, "8x_down"),
+        (2.0, "2x_up"),
     ];
 
     let in_w = 400u32;
@@ -118,10 +126,15 @@ fn analyze_transition_zones() {
     for &(scale, scale_name) in scale_factors {
         let out_w = (in_w as f32 * scale).round() as u32;
         let out_h = (in_h as f32 * scale).round() as u32;
-        if out_w == 0 || out_h == 0 { continue; }
+        if out_w == 0 || out_h == 0 {
+            continue;
+        }
 
         println!("============================================================");
-        println!("Scale: {} ({}x{} → {}x{})", scale_name, in_w, in_h, out_w, out_h);
+        println!(
+            "Scale: {} ({}x{} → {}x{})",
+            scale_name, in_w, in_h, out_w, out_h
+        );
         println!("============================================================");
 
         for &(filter_name, filter) in filters {
@@ -141,11 +154,17 @@ fn analyze_transition_zones() {
             let mut total_partially_visible = 0u32; // alpha_u8 in [1, 254]
             let mut barely_visible = 0u32; // alpha_u8 in [1, 5]
 
-            for &(_, a, alpha_u8, _, is_neg) in &pixels {
+            for &(_, _a, alpha_u8, _, is_neg) in &pixels {
                 alpha_histogram[alpha_u8 as usize] += 1;
-                if is_neg { neg_count += 1; }
-                if alpha_u8 >= 1 && alpha_u8 <= 254 { total_partially_visible += 1; }
-                if alpha_u8 >= 1 && alpha_u8 <= 5 { barely_visible += 1; }
+                if is_neg {
+                    neg_count += 1;
+                }
+                if (1..=254).contains(&alpha_u8) {
+                    total_partially_visible += 1;
+                }
+                if (1..=5).contains(&alpha_u8) {
+                    barely_visible += 1;
+                }
             }
 
             // Find transition zone width (first and last pixel with 0 < alpha_u8 < 255)
@@ -157,18 +176,28 @@ fn analyze_transition_zones() {
             };
 
             // Print summary line
-            println!("{:<14} zone={:>2}px  partial={:>2}  barely(1-5)={:>2}  a_u8=0={:>2}  neg={}",
-                filter_name, zone_width, total_partially_visible, barely_visible,
-                alpha_histogram[0], neg_count);
+            println!(
+                "{:<14} zone={:>2}px  partial={:>2}  barely(1-5)={:>2}  a_u8=0={:>2}  neg={}",
+                filter_name,
+                zone_width,
+                total_partially_visible,
+                barely_visible,
+                alpha_histogram[0],
+                neg_count
+            );
 
             // Print per-pixel detail for this filter
             if !pixels.is_empty() {
                 print!("  pixels: ");
                 for &(x, a, alpha_u8, brightness, is_neg) in &pixels {
-                    if alpha_u8 == 0 && !is_neg { continue; } // skip boring transparent pixels
+                    if alpha_u8 == 0 && !is_neg {
+                        continue;
+                    } // skip boring transparent pixels
                     let neg_marker = if is_neg { "!" } else { "" };
-                    print!("x{}:a={}{:.4}(u8={})br={:.2}  ",
-                        x, neg_marker, a, alpha_u8, brightness);
+                    print!(
+                        "x{}:a={}{:.4}(u8={})br={:.2}  ",
+                        x, neg_marker, a, alpha_u8, brightness
+                    );
                 }
                 println!();
             }
@@ -181,8 +210,10 @@ fn analyze_transition_zones() {
     println!("============================================================");
     println!("AGGREGATE: alpha_u8=1 pixel colors (the barely-visible fringe)");
     println!("============================================================");
-    println!("{:<14} {:>6} {:>10} {:>10} {:>10}",
-        "filter", "count", "min_br", "avg_br", "max_br");
+    println!(
+        "{:<14} {:>6} {:>10} {:>10} {:>10}",
+        "filter", "count", "min_br", "avg_br", "max_br"
+    );
     println!("{}", "-".repeat(56));
 
     for &(filter_name, filter) in filters {
@@ -191,7 +222,9 @@ fn analyze_transition_zones() {
         for &(scale, _) in scale_factors {
             let out_w = (in_w as f32 * scale).round() as u32;
             let out_h = (in_h as f32 * scale).round() as u32;
-            if out_w == 0 || out_h == 0 { continue; }
+            if out_w == 0 || out_h == 0 {
+                continue;
+            }
 
             let premul = resize_premul(&input, in_w, in_h, out_w, out_h, filter);
 
@@ -205,8 +238,8 @@ fn analyze_transition_zones() {
                     if alpha_u8 == 1 && a > 0.0 {
                         let inv_a = 1.0 / a;
                         let r = (premul[idx] * inv_a).clamp(0.0, 1.0);
-                        let g = (premul[idx+1] * inv_a).clamp(0.0, 1.0);
-                        let b = (premul[idx+2] * inv_a).clamp(0.0, 1.0);
+                        let g = (premul[idx + 1] * inv_a).clamp(0.0, 1.0);
+                        let b = (premul[idx + 2] * inv_a).clamp(0.0, 1.0);
                         a1_brightnesses.push((r + g + b) / 3.0);
                     }
                 }
@@ -214,13 +247,22 @@ fn analyze_transition_zones() {
         }
 
         if a1_brightnesses.is_empty() {
-            println!("{:<14} {:>6} {:>10} {:>10} {:>10}", filter_name, 0, "-", "-", "-");
+            println!(
+                "{:<14} {:>6} {:>10} {:>10} {:>10}",
+                filter_name, 0, "-", "-", "-"
+            );
         } else {
             let min = a1_brightnesses.iter().cloned().fold(f32::MAX, f32::min);
             let max = a1_brightnesses.iter().cloned().fold(f32::MIN, f32::max);
             let avg: f32 = a1_brightnesses.iter().sum::<f32>() / a1_brightnesses.len() as f32;
-            println!("{:<14} {:>6} {:>10.4} {:>10.4} {:>10.4}",
-                filter_name, a1_brightnesses.len(), min, avg, max);
+            println!(
+                "{:<14} {:>6} {:>10.4} {:>10.4} {:>10.4}",
+                filter_name,
+                a1_brightnesses.len(),
+                min,
+                avg,
+                max
+            );
         }
     }
 }

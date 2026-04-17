@@ -1,5 +1,6 @@
 /test_outputs
 .claude/worktrees/
+.workongoing
 
 # === Standard exclusions (do not depend on user ~/.gitignore) ===
 

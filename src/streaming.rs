@@ -47,7 +47,6 @@ use crate::transfer::{Bt709, Hlg, Pq, Srgb, TransferCurve};
 use crate::weights::{F32WeightTable, I16WeightTable};
 use whereat::{At, ResultAtExt, at};
 use zenpixels::{AlphaMode, ChannelType, TransferFunction};
-use linear_srgb;
 
 /// Estimate the maximum filter tap count for a given dimension and filter.
 ///
@@ -2379,6 +2378,7 @@ impl<B: Background> StreamingResize<B> {
     /// - Composite-only (JPEG): no mask → composite over bg → opaque output
     /// - Mask + composite (rounded corners on white → JPEG): mask cuts corners
     ///   to transparent → composite fills transparent with bg → white corners
+    ///
     /// Produce one f32 output row: V-filter → H-filter → mask → composite → unpremultiply.
     fn produce_next_f32(&mut self) {
         self.produce_next_f32_composited();
