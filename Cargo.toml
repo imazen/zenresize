@@ -1,6 +1,6 @@
 [package]
 name = "zenresize"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.93"
 license = "AGPL-3.0-only OR LicenseRef-Imazen-Commercial"
@@ -53,9 +53,6 @@ fast_image_resize = "6"
 zenbench = { version = "0.1.2", features = ["criterion-compat"] }
 resize = "0.8"
 palette = "0.7"
-
-[patch.crates-io]
-linear-srgb = { path = "../linear-srgb" }
 
 [[bench]]
 name = "resize_bench"
