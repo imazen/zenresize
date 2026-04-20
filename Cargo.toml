@@ -28,7 +28,7 @@ archmage = { version = "0.9.15", default-features = false, features = ["macros"]
 magetypes = { version = "0.9.15", default-features = false }
 linear-srgb = { version = "0.6.11", default-features = false, features = ["transfer"] }
 safe_unaligned_simd = "0.2.5"
-zenpixels = { version = "0.2.2", default-features = false }
+zenpixels = { version = "0.2.10", default-features = false }
 imgref = "1.12"
 libm = { version = "0.2", default-features = false }
 rgb = { version = "0.8", default-features = false }
