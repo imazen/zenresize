@@ -282,7 +282,10 @@ mod tests {
 
     #[test]
     fn cover_source_crop_exact_aspect() {
-        assert_eq!(fit_cover_source_crop(1000, 500, 800, 400), (0, 0, 1000, 500));
+        assert_eq!(
+            fit_cover_source_crop(1000, 500, 800, 400),
+            (0, 0, 1000, 500)
+        );
     }
 
     #[test]

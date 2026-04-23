@@ -30,8 +30,10 @@ All operations work in the streaming API. Crop and padding also work independent
 | Operation | What it does | Builder method |
 |-----------|-------------|----------------|
 | **Resize** | Resample to new dimensions with a choice of 31 filters | `.filter(Filter::Lanczos)` |
+| **Fit** | Aspect-preserving resize to a target box | `.fit(FitMode::Fit, max_w, max_h)` |
 | **Crop** | Extract a rectangular region from the input | `.crop(x, y, w, h)` |
 | **Pad** | Add solid-color border around the output | `.padding(top, right, bottom, left)` |
+| **Orient** | Apply EXIF orientation (rotate/flip) post-resize | `stream.with_orientation(OrientOutput::Rotate90)` |
 | **Crop + Resize** | Extract region, then resize it | `.crop(...)` on a config with different output dims |
 | **Resize + Pad** | Resize, then add padding | `.padding(...)` on a config with different input/output dims |
 | **Crop + Resize + Pad** | All three in sequence | `.crop(...)` + `.padding(...)` |
@@ -240,6 +242,80 @@ let config = ResizeConfig::builder(1000, 800, 400, 300)
     .crop(100, 50, 400, 300)
     .build();
 ```
+
+## Fit Modes (Aspect-Ratio Constraints)
+
+Four common ways to fit an input into a target box, preserving aspect ratio
+where appropriate. One call sets `out_width`/`out_height` (and, for `Cover`,
+a center-anchored source crop) without reaching for a separate layout crate.
+
+| Mode | Behavior | Typical use |
+|------|----------|-------------|
+| `FitMode::Fit` | Aspect-preserving, fit entirely inside bounds. Output `≤` bounds on both axes, `==` on one. May up- or down-scale. | Thumbnail letterbox |
+| `FitMode::Within` | Like `Fit`, but never upscales past input size. | Thumbnails that stay sharp when source is small |
+| `FitMode::Cover` | Aspect-preserving, fills the bounds exactly. Source is center-cropped to target aspect, then resized. Output is exactly `max_w × max_h`. | Hero images, cover art, imageflow `fit=crop` |
+| `FitMode::Stretch` | Ignores aspect, stretches to exact bounds. | Non-photo UI assets |
+
+```rust
+use zenresize::{FitMode, ResizeConfig, Filter, PixelDescriptor};
+
+// 1600×900 source, fit into 800×600 letterbox → 800×450, no crop.
+let config = ResizeConfig::builder(1600, 900, 0, 0)
+    .filter(Filter::Lanczos)
+    .format(PixelDescriptor::RGBA8_SRGB)
+    .fit(FitMode::Fit, 800, 600)
+    .build();
+assert_eq!((config.out_width, config.out_height), (800, 450));
+
+// Same source, Cover: center-cropped to 4:3, output exactly 800×600.
+let config = ResizeConfig::builder(1600, 900, 0, 0)
+    .format(PixelDescriptor::RGBA8_SRGB)
+    .fit(FitMode::Cover, 800, 600)
+    .build();
+assert_eq!((config.out_width, config.out_height), (800, 600));
+// `.fit(Cover, ...)` also sets `source_region` for the crop — no extra call.
+```
+
+For raw dimension math without the builder:
+
+```rust
+use zenresize::{FitMode, fit_dims, fit_cover_source_crop};
+
+// What output dims would FitMode produce?
+assert_eq!(fit_dims(1600, 900, 800, 600, FitMode::Fit),   (800, 450));
+assert_eq!(fit_dims(1600, 900, 800, 600, FitMode::Cover), (800, 600));
+assert_eq!(fit_dims(400, 300,  800, 600, FitMode::Within), (400, 300));
+
+// What source crop does Cover apply?
+// Target 4:3 from 16:9 source → crop to 1200×900 centered.
+assert_eq!(fit_cover_source_crop(1600, 900, 800, 600), (200, 0, 1200, 900));
+```
+
+The math is a port of [`zenlayout`](https://crates.io/crates/zenlayout)'s
+`fit_inside` / `crop_to_aspect` including snap-to-target rounding — verified
+byte-identical across a ~6M-case brute-force sweep
+(`tests/vs_zenlayout.rs`). Callers migrating from `zenlayout` for simple
+fit/within/cover cases see no pixel-level drift.
+
+## EXIF Orientation
+
+`OrientOutput` is the 8-element D4 dihedral group (EXIF orientations 1–8),
+applied post-resize by the streaming pipeline. If you already hold a
+[`zenpixels::Orientation`](https://crates.io/crates/zenpixels) from metadata
+parsing, it converts directly:
+
+```rust
+use zenresize::{OrientOutput, Orientation, StreamingResize};
+
+let exif_tag: u8 = 6;  // Rotate 90° CW
+let orient = Orientation::from_exif(exif_tag).unwrap_or_default();
+let mut resizer = StreamingResize::new(&config).with_orientation(orient.into());
+```
+
+`Orientation` (re-exported from `zenpixels`) has the full group algebra —
+`compose`, `inverse`, `from_exif`, `to_exif`, `swaps_axes` — so you can
+build up composed transforms (e.g. EXIF orient + explicit 180°) and hand
+the result to zenresize with one `.into()`.
 
 ## Output Padding
 

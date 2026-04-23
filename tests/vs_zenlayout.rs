@@ -21,15 +21,19 @@ use zenresize::{FitMode, fit_cover_source_crop, fit_dims};
 /// aspect ratios, matched aspects, round numbers, odd numbers, edges.
 fn sweep_sizes() -> Vec<u32> {
     vec![
-        1, 2, 3, 5, 7, 8, 9, 10, 15, 16, 17,
-        32, 33, 64, 99, 100, 101, 127, 128, 129,
-        250, 256, 257, 300, 333, 400, 401, 499, 500, 501,
-        600, 750, 800, 801, 1000, 1023, 1024, 1025,
-        1200, 1366, 1600, 1920, 2048, 2560, 3000, 3840, 4096, 7681,
+        1, 2, 3, 5, 7, 8, 9, 10, 15, 16, 17, 32, 33, 64, 99, 100, 101, 127, 128, 129, 250, 256,
+        257, 300, 333, 400, 401, 499, 500, 501, 600, 750, 800, 801, 1000, 1023, 1024, 1025, 1200,
+        1366, 1600, 1920, 2048, 2560, 3000, 3840, 4096, 7681,
     ]
 }
 
-fn zenlayout_dims(in_w: u32, in_h: u32, max_w: u32, max_h: u32, mode: ConstraintMode) -> (u32, u32) {
+fn zenlayout_dims(
+    in_w: u32,
+    in_h: u32,
+    max_w: u32,
+    max_h: u32,
+    mode: ConstraintMode,
+) -> (u32, u32) {
     let layout = Constraint::new(mode, max_w, max_h)
         .compute(in_w, in_h)
         .expect("zenlayout compute failed on non-zero input");

@@ -58,7 +58,9 @@ mod proven;
 pub mod simd;
 
 // Re-exports from zenpixels
-pub use zenpixels::{AlphaMode, ChannelLayout, ChannelType, Orientation, PixelDescriptor, TransferFunction};
+pub use zenpixels::{
+    AlphaMode, ChannelLayout, ChannelType, Orientation, PixelDescriptor, TransferFunction,
+};
 
 // Re-exports: minimal public API
 pub use filter::Filter;
