@@ -785,6 +785,53 @@ impl ResizeConfigBuilder {
         self
     }
 
+    /// Set output dimensions by fitting the input into a target box.
+    ///
+    /// Shorthand that calls [`fit_dims`](crate::fit_dims) and sets
+    /// `out_width`/`out_height`. See [`FitMode`](crate::FitMode) for
+    /// mode semantics.
+    ///
+    /// For [`FitMode::Cover`], this ALSO sets a center-anchored source
+    /// region crop (via [`fit_cover_source_crop`](crate::fit_cover_source_crop))
+    /// so the final output is `(max_w, max_h)` exactly — imageflow-style
+    /// "fit=crop" behavior. Any previously-configured `source_region` is
+    /// overwritten. Use [`fit_dims`](crate::fit_dims) directly if you want
+    /// raw dimensions without the crop.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use zenresize::{FitMode, PixelDescriptor, ResizeConfig};
+    ///
+    /// // 1600x900 source, fit into 800x600 letterbox (450 tall, no crop).
+    /// let cfg = ResizeConfig::builder(1600, 900, 0, 0)
+    ///     .format(PixelDescriptor::RGBA8_SRGB)
+    ///     .fit(FitMode::Fit, 800, 600)
+    ///     .build();
+    /// assert_eq!((cfg.out_width, cfg.out_height), (800, 450));
+    /// ```
+    pub fn fit(mut self, mode: crate::fit::FitMode, max_w: u32, max_h: u32) -> Self {
+        if matches!(mode, crate::fit::FitMode::Cover) {
+            let (cx, cy, cw, ch) =
+                crate::fit::fit_cover_source_crop(self.in_width, self.in_height, max_w, max_h);
+            if cw > 0 && ch > 0 {
+                self.source_region = Some(SourceRegion {
+                    x: cx,
+                    y: cy,
+                    width: cw,
+                    height: ch,
+                });
+                self.out_width = max_w;
+                self.out_height = max_h;
+                return self;
+            }
+        }
+        let (w, h) = crate::fit::fit_dims(self.in_width, self.in_height, max_w, max_h, mode);
+        self.out_width = w;
+        self.out_height = h;
+        self
+    }
+
     /// Build the configuration.
     pub fn build(self) -> ResizeConfig {
         let output = self.output.unwrap_or(self.input);

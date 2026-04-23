@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+- `FitMode` enum + `fit_dims()` / `fit_cover_source_crop()` free functions —
+  aspect-ratio constraint solver so callers don't re-import `zenlayout` just
+  for fit/within/cover math. Ported from zenlayout's `fit_inside` /
+  `proportional` / `crop_to_aspect` including the snap-to-target rounding
+  logic; brute-force parity verified (`tests/vs_zenlayout.rs`, ~6.25M cases
+  per mode, bit-identical output).
+- `ResizeConfigBuilder::fit(mode, max_w, max_h)` — shorthand that sets
+  `out_width`/`out_height` (and, for `FitMode::Cover`, a center-anchored
+  source region) in one call.
+- `From<zenpixels::Orientation> for OrientOutput` — variant-wise 1:1
+  conversion so callers holding a `zenpixels::Orientation` can feed it
+  straight to `StreamingResize::with_orientation(...)` without manual
+  matching.
+- Re-export `zenpixels::Orientation` at `zenresize::Orientation` for
+  convenience.
+
 ## [0.3.0] - 2026-04-17
 
 ### Changed

@@ -39,6 +39,7 @@ pub(crate) mod color;
 pub mod composite;
 #[doc(hidden)]
 pub mod filter;
+pub mod fit;
 pub(crate) mod pixel;
 pub mod plane;
 pub(crate) mod resize;
@@ -57,10 +58,11 @@ mod proven;
 pub mod simd;
 
 // Re-exports from zenpixels
-pub use zenpixels::{AlphaMode, ChannelLayout, ChannelType, PixelDescriptor, TransferFunction};
+pub use zenpixels::{AlphaMode, ChannelLayout, ChannelType, Orientation, PixelDescriptor, TransferFunction};
 
 // Re-exports: minimal public API
 pub use filter::Filter;
+pub use fit::{FitMode, fit_cover_source_crop, fit_dims};
 pub use pixel::{Element, LobeRatio, Padding, ResizeConfig, ResizeConfigBuilder, SourceRegion};
 pub use plane::PlaneResizer;
 pub use resize::Resizer;

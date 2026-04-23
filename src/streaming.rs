@@ -177,6 +177,28 @@ impl OrientOutput {
     }
 }
 
+impl From<zenpixels::Orientation> for OrientOutput {
+    /// Variants are 1:1 with `zenpixels::Orientation` (same EXIF semantics).
+    ///
+    /// `zenpixels::Orientation` is `#[non_exhaustive]`; any future variant
+    /// that isn't yet mapped here falls back to [`Identity`](Self::Identity)
+    /// — the safe no-op. If you grow a new variant upstream, also grow
+    /// `OrientOutput` and update this match.
+    fn from(o: zenpixels::Orientation) -> Self {
+        match o {
+            zenpixels::Orientation::Identity => Self::Identity,
+            zenpixels::Orientation::FlipH => Self::FlipH,
+            zenpixels::Orientation::Rotate180 => Self::Rotate180,
+            zenpixels::Orientation::FlipV => Self::FlipV,
+            zenpixels::Orientation::Transpose => Self::Transpose,
+            zenpixels::Orientation::Rotate90 => Self::Rotate90,
+            zenpixels::Orientation::Transverse => Self::Transverse,
+            zenpixels::Orientation::Rotate270 => Self::Rotate270,
+            _ => Self::Identity,
+        }
+    }
+}
+
 /// Build V-filter row references from a ring buffer cache.
 ///
 /// Uses a 128-slot stack array for the common case (up to ~21× downscale with

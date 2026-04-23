@@ -43,6 +43,10 @@ linear-srgb = { version = "0.6.11" }
 colorutils-rs = "0.7"
 zenblend = { version = "0.1.0" }
 rgb = "0.8"
+# Reference implementation for fit/within/cover constraint-solver parity tests
+# (tests/vs_zenlayout.rs). zenresize is a planned replacement for zenlayout's
+# constraint solver — brute-force testing guarantees we match bit-for-bit.
+zenlayout = "0.2"
 
 # Native-only: benchmark dependencies that don't compile for wasm32
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
