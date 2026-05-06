@@ -63,7 +63,10 @@ impl PlaneResizer {
         let h_weights = I16WeightTable::new(src_w, dst_w, &details);
         let v_weights = I16WeightTable::new(src_h, dst_h, &details);
 
-        let intermediate = vec![0i16; src_h as usize * dst_w as usize];
+        let intermediate_len = (src_h as usize)
+            .checked_mul(dst_w as usize)
+            .expect("PlaneResizer::new: src_h * dst_w overflows usize");
+        let intermediate = vec![0i16; intermediate_len];
 
         Self {
             h_weights,

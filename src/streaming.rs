@@ -491,7 +491,11 @@ impl<B: Background> StreamingResize<B> {
         self.oriented_w = ow;
         self.oriented_h = oh;
         if !orient.is_row_local() {
-            self.orient_buf = vec![0u8; ow as usize * oh as usize * self.channels];
+            let len = (ow as usize)
+                .checked_mul(oh as usize)
+                .and_then(|v| v.checked_mul(self.channels))
+                .expect("with_orientation: oriented buffer size overflows usize");
+            self.orient_buf = vec![0u8; len];
         }
         self.orient = orient;
         self
@@ -2851,13 +2855,20 @@ impl<B: Background> StreamingResize<B> {
         let src_h = self.config.total_output_height();
         let src_w = self.config.total_output_width();
         let ch = self.channels;
-        let src_stride = src_w as usize * ch;
+        let src_stride = (src_w as usize)
+            .checked_mul(ch)
+            .expect("apply_orient_transform: src_stride overflows usize");
         let dst_w = self.oriented_w;
-        let dst_stride = dst_w as usize * ch;
+        let dst_stride = (dst_w as usize)
+            .checked_mul(ch)
+            .expect("apply_orient_transform: dst_stride overflows usize");
 
         // For non-row-local orientations, scatter source pixels to destination.
         // We need a separate destination buffer to avoid aliasing.
-        let mut dst = vec![0u8; dst_stride * self.oriented_h as usize];
+        let dst_len = dst_stride
+            .checked_mul(self.oriented_h as usize)
+            .expect("apply_orient_transform: dst buffer overflows usize");
+        let mut dst = vec![0u8; dst_len];
 
         for sy in 0..src_h {
             for sx in 0..src_w {

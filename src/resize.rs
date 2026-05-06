@@ -781,9 +781,12 @@ mod imgref_impl {
         let mut resizer = StreamingResize::new(&cfg);
 
         let w = img.width();
-        let mut row_buf = vec![0u8; w * 4];
+        let mut row_buf = vec![0u8; w.checked_mul(4).expect("resize_4ch: row_buf size overflow")];
         let out_row_len = cfg.output_row_len();
-        let mut out_pixels = Vec::with_capacity(out_width as usize * out_height as usize);
+        let out_pixel_count = (out_width as usize)
+            .checked_mul(out_height as usize)
+            .expect("resize_4ch: out_width * out_height overflows usize");
+        let mut out_pixels = Vec::with_capacity(out_pixel_count);
         for row in img.rows() {
             for (px, chunk) in row.iter().zip(row_buf.chunks_exact_mut(4)) {
                 chunk.copy_from_slice(px.as_slice());
@@ -835,9 +838,12 @@ mod imgref_impl {
         let mut resizer = StreamingResize::new(&cfg);
 
         let w = img.width();
-        let mut row_buf = vec![0u8; w * 3];
+        let mut row_buf = vec![0u8; w.checked_mul(3).expect("resize_3ch: row_buf size overflow")];
         let out_row_len = cfg.output_row_len();
-        let mut out_pixels = Vec::with_capacity(out_width as usize * out_height as usize);
+        let out_pixel_count = (out_width as usize)
+            .checked_mul(out_height as usize)
+            .expect("resize_3ch: out_width * out_height overflows usize");
+        let mut out_pixels = Vec::with_capacity(out_pixel_count);
         for row in img.rows() {
             for (px, chunk) in row.iter().zip(row_buf.chunks_exact_mut(3)) {
                 chunk.copy_from_slice(px.as_slice());
@@ -883,7 +889,10 @@ mod imgref_impl {
 
         let mut resizer = StreamingResize::new(&cfg);
 
-        let mut out_buf = Vec::with_capacity(out_width as usize * out_height as usize);
+        let out_pixel_count = (out_width as usize)
+            .checked_mul(out_height as usize)
+            .expect("resize_gray8: out_width * out_height overflows usize");
+        let mut out_buf = Vec::with_capacity(out_pixel_count);
         for row in img.rows() {
             resizer.push_row(row).unwrap();
             while let Some(out_row) = resizer.next_output_row() {
@@ -979,8 +988,7 @@ pub fn resize_hfirst_streaming(
         let row_off = y
             .checked_mul(in_row_len)
             .ok_or("row offset overflows usize")?;
-        let in_row =
-            &input[row_off..row_off + padded_len.min(input.len() - row_off)];
+        let in_row = &input[row_off..row_off + padded_len.min(input.len() - row_off)];
         simd::filter_h_u8_i16(in_row, &mut ring[slot], &h_weights, channels);
         input_rows_pushed += 1;
 
