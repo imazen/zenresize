@@ -1188,10 +1188,13 @@ impl<B: Background> StreamingResize<B> {
             return Err(at!(StreamingError::AlreadyFinished));
         }
 
-        // Validate against full source width
+        // The row must hold the entire packed pixel data (source_row_len).
+        // Earlier code used `source_row_len.min(stride)`, which let a
+        // user-supplied `in_stride` smaller than `source_row_len` (e.g.,
+        // `in_stride = 1`) bypass the bounds check entirely and trigger a
+        // panic on the subsequent slice into the row.
         let source_row_len = self.source_in_width as usize * self.channels;
-        let stride = self.config.effective_in_stride();
-        if row.len() < source_row_len.min(stride) {
+        if row.len() < source_row_len {
             return Err(at!(StreamingError::InputTooShort));
         }
 
@@ -1352,17 +1355,26 @@ impl<B: Background> StreamingResize<B> {
         stride: usize,
         count: u32,
     ) -> Result<u32, At<StreamingError>> {
-        let source_row_len = self.source_in_width as usize * self.channels;
+        let source_row_len = self
+            .source_in_width
+            .checked_mul(self.channels as u32)
+            .ok_or(at!(StreamingError::InputTooShort))? as usize;
         let expected_len = if count == 0 {
             0
         } else {
-            stride * (count as usize - 1) + source_row_len
+            stride
+                .checked_mul((count as usize).saturating_sub(1))
+                .and_then(|v| v.checked_add(source_row_len))
+                .ok_or(at!(StreamingError::InputTooShort))?
         };
         if buf.len() < expected_len {
             return Err(at!(StreamingError::InputTooShort));
         }
         for i in 0..count as usize {
-            self.push_row(&buf[i * stride..]).at()?;
+            let off = i
+                .checked_mul(stride)
+                .ok_or(at!(StreamingError::InputTooShort))?;
+            self.push_row(&buf[off..]).at()?;
         }
         Ok(self.output_rows_available())
     }
@@ -1468,9 +1480,10 @@ impl<B: Background> StreamingResize<B> {
         if self.finished {
             return Err(at!(StreamingError::AlreadyFinished));
         }
+        // See the note in `push_row`: enforce the full source width strictly,
+        // never `min(stride)`, so a small `in_stride` cannot bypass the check.
         let source_row_len = self.source_in_width as usize * self.channels;
-        let stride = self.config.effective_in_stride();
-        if row.len() < source_row_len.min(stride) {
+        if row.len() < source_row_len {
             return Err(at!(StreamingError::InputTooShort));
         }
 
@@ -4699,5 +4712,53 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// H3: a small `in_stride` (e.g., 1) must not let an undersized row
+    /// bypass the length check. Earlier code used `min(stride, source_row_len)`
+    /// and would panic on the subsequent slice.
+    #[test]
+    fn push_row_rejects_short_row_with_small_stride() {
+        let mut config = make_config(8, 4, 4, 2);
+        config.in_stride = 1; // smaller than source_row_len = 32
+        let mut resizer = StreamingResize::new(&config);
+        // Row of length 2: shorter than source_row_len = 32. Must error,
+        // not panic.
+        let short_row = vec![0u8; 2];
+        let err = resizer.push_row(&short_row);
+        assert!(matches!(
+            err.as_ref().map_err(|e| e.error()),
+            Err(&StreamingError::InputTooShort)
+        ));
+    }
+
+    #[test]
+    fn push_row_u16_rejects_short_row_with_small_stride() {
+        let mut config = ResizeConfig::builder(8, 4, 4, 2)
+            .format(PixelDescriptor::RGBA16_SRGB)
+            .srgb()
+            .build();
+        config.in_stride = 1;
+        let mut resizer = StreamingResize::new(&config);
+        let short_row = vec![0u16; 2];
+        let err = resizer.push_row_u16(&short_row);
+        assert!(matches!(
+            err.as_ref().map_err(|e| e.error()),
+            Err(&StreamingError::InputTooShort)
+        ));
+    }
+
+    #[test]
+    fn push_rows_overflow_in_arithmetic_returns_error() {
+        let config = make_config(8, 4, 4, 2);
+        let mut resizer = StreamingResize::new(&config);
+        // count != 0, stride = usize::MAX would overflow `stride * (count-1) + ...`.
+        // Empty slice with usize::MAX stride must return InputTooShort, not panic.
+        let buf: &[u8] = &[];
+        let err = resizer.push_rows(buf, usize::MAX, 2);
+        assert!(matches!(
+            err.as_ref().map_err(|e| e.error()),
+            Err(&StreamingError::InputTooShort)
+        ));
     }
 }
