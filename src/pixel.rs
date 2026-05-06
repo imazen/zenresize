@@ -317,6 +317,83 @@ impl ResizeConfig {
         if self.out_width == 0 || self.out_height == 0 {
             return Err("output dimensions must be positive");
         }
+
+        // Bound the resulting weight-table size.
+        //
+        // The weight-table allocation is `out_size * max_taps` per axis, where
+        // `max_taps ≈ 2 * window * in_size / out_size + 2` for downscales.
+        // Adversarial inputs (e.g., `in_width = u32::MAX`, `out_width = 1`)
+        // would request tens of GB from a tiny container header.
+        //
+        // We cap the total weight-table elements per axis at
+        // MAX_WEIGHT_TABLE_ELEMENTS (~256 MB at f32). For `out_size = 1` this
+        // means `max_taps` can be up to ~64M, but `max_taps` itself never
+        // exceeds `2 * MAX_FILTER_WINDOW * in_size + 2`, which for
+        // `in_size = u32::MAX` is `~2^36` — well beyond the cap. So the
+        // element-count cap is the binding constraint.
+        //
+        // The largest legitimate filter window in this crate is `Ginseng` at
+        // 6.0 input pixels (half-width); we use 8.0 as an upper bound.
+        const MAX_WEIGHT_TABLE_ELEMENTS: u64 = 64 * 1024 * 1024; // ~256 MB at f32
+        const MAX_FILTER_WINDOW: u64 = 8;
+
+        let estimate_axis = |in_size: u32, out_size: u32| -> Result<u64, &'static str> {
+            let in_size = in_size as u64;
+            let out_size = out_size as u64;
+            // max_taps ≈ 2 * window * ceil(in_size / out_size) + 2 (downscale)
+            //          ≈ 2 * window + 2                            (upscale, taps fixed)
+            let downscale = in_size.div_ceil(out_size).max(1);
+            let scale_for_window = MAX_FILTER_WINDOW.saturating_mul(2);
+            let max_taps_estimate = scale_for_window
+                .checked_mul(downscale)
+                .and_then(|v| v.checked_add(2))
+                .ok_or("weight table size overflows u64")?;
+            let elements = out_size
+                .checked_mul(max_taps_estimate)
+                .ok_or("weight table size overflows u64")?;
+            if elements > MAX_WEIGHT_TABLE_ELEMENTS {
+                return Err("weight table size exceeds memory cap (~256 MB)");
+            }
+            Ok(elements)
+        };
+
+        let h_axis = estimate_axis(self.in_width, self.out_width)?;
+        let v_axis = estimate_axis(self.in_height, self.out_height)?;
+        if h_axis
+            .checked_add(v_axis)
+            .is_none_or(|sum| sum > MAX_WEIGHT_TABLE_ELEMENTS)
+        {
+            return Err("combined weight table size exceeds memory cap");
+        }
+
+        // Reject non-finite (NaN / infinity) numeric configuration. These
+        // values flow into weight calculations and would produce NaN-poisoned
+        // weight tables, all-zero outputs, or infinite loops in normalization.
+        // Zero post_sharpen / post_blur_sigma is allowed (means "no-op").
+        if !self.post_sharpen.is_finite() || self.post_sharpen < 0.0 {
+            return Err("post_sharpen must be finite and non-negative");
+        }
+        if !self.post_blur_sigma.is_finite() || self.post_blur_sigma < 0.0 {
+            return Err("post_blur_sigma must be finite and non-negative");
+        }
+        if let Some(scale) = self.kernel_width_scale
+            && (!scale.is_finite() || scale <= 0.0)
+        {
+            return Err("kernel_width_scale must be finite and positive");
+        }
+        match self.lobe_ratio {
+            LobeRatio::Natural => {}
+            LobeRatio::Exact(r) => {
+                if !r.is_finite() || !(0.0..1.0).contains(&r) {
+                    return Err("lobe_ratio Exact value must be finite and in [0.0, 1.0)");
+                }
+            }
+            LobeRatio::SharpenPercent(p) => {
+                if !p.is_finite() || !(0.0..=100.0).contains(&p) {
+                    return Err("lobe_ratio SharpenPercent must be finite and in [0.0, 100.0]");
+                }
+            }
+        }
         // Channel count must match between input and output
         if self.input.channels() != self.output.channels() {
             return Err("input and output must have the same number of channels");
@@ -854,5 +931,141 @@ impl ResizeConfigBuilder {
             source_region: self.source_region,
             padding: self.padding,
         }
+    }
+}
+
+#[cfg(test)]
+mod validate_tests {
+    use super::*;
+
+    fn base_config() -> ResizeConfig {
+        ResizeConfig::builder(4, 4, 2, 2)
+            .filter(crate::filter::Filter::Lanczos)
+            .format(zenpixels::PixelDescriptor::RGBA8_SRGB)
+            .build()
+    }
+
+    #[test]
+    fn rejects_extreme_downscale_ratio() {
+        // Adversarial in_size = u32::MAX, out_size = 1 would allocate ~24 GB.
+        let mut cfg = base_config();
+        cfg.in_width = u32::MAX;
+        cfg.in_height = 4;
+        cfg.out_width = 1;
+        cfg.out_height = 2;
+        assert!(
+            cfg.validate().is_err(),
+            "extreme downscale must be rejected"
+        );
+    }
+
+    #[test]
+    fn rejects_extreme_downscale_height() {
+        let mut cfg = base_config();
+        cfg.in_width = 4;
+        cfg.in_height = u32::MAX;
+        cfg.out_width = 2;
+        cfg.out_height = 1;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn accepts_realistic_large_downscale() {
+        // 16k -> 64 px is a realistic thumbnail scenario, must succeed.
+        let mut cfg = base_config();
+        cfg.in_width = 16384;
+        cfg.in_height = 16384;
+        cfg.out_width = 64;
+        cfg.out_height = 64;
+        assert!(
+            cfg.validate().is_ok(),
+            "realistic downscale must succeed: {:?}",
+            cfg.validate()
+        );
+    }
+
+    #[test]
+    fn rejects_nan_post_sharpen() {
+        let mut cfg = base_config();
+        cfg.post_sharpen = f32::NAN;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_inf_post_blur_sigma() {
+        let mut cfg = base_config();
+        cfg.post_blur_sigma = f32::INFINITY;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_negative_post_sharpen() {
+        let mut cfg = base_config();
+        cfg.post_sharpen = -1.0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_nan_kernel_width_scale() {
+        let mut cfg = base_config();
+        cfg.kernel_width_scale = Some(f64::NAN);
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_zero_kernel_width_scale() {
+        let mut cfg = base_config();
+        cfg.kernel_width_scale = Some(0.0);
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_inf_kernel_width_scale() {
+        let mut cfg = base_config();
+        cfg.kernel_width_scale = Some(f64::INFINITY);
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_nan_lobe_ratio_exact() {
+        let mut cfg = base_config();
+        cfg.lobe_ratio = LobeRatio::Exact(f32::NAN);
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_lobe_ratio_exact_one_or_more() {
+        let mut cfg = base_config();
+        cfg.lobe_ratio = LobeRatio::Exact(1.0);
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_nan_sharpen_percent() {
+        let mut cfg = base_config();
+        cfg.lobe_ratio = LobeRatio::SharpenPercent(f32::NAN);
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_inf_sharpen_percent() {
+        let mut cfg = base_config();
+        cfg.lobe_ratio = LobeRatio::SharpenPercent(f32::INFINITY);
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn accepts_zero_post_sharpen() {
+        let mut cfg = base_config();
+        cfg.post_sharpen = 0.0;
+        cfg.post_blur_sigma = 0.0;
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn accepts_natural_lobe_ratio() {
+        let mut cfg = base_config();
+        cfg.lobe_ratio = LobeRatio::Natural;
+        assert!(cfg.validate().is_ok());
     }
 }
