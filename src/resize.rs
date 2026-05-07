@@ -940,14 +940,43 @@ pub fn resize_hfirst_streaming(
     input: &[u8],
 ) -> Result<Vec<u8>, &'static str> {
     config.validate()?;
-
-    let channels = config.channels();
-    assert_eq!(channels, 4, "H-first streaming only supports 4ch");
+    assert_eq!(config.channels(), 4, "H-first streaming only supports 4ch");
 
     let filter = InterpolationDetails::create(config.filter);
-    let h_weights = I16WeightTable::new(config.in_width, config.out_width, &filter);
     let v_weights = I16WeightTable::new(config.in_height, config.out_height, &filter);
+    let h_weights = I16WeightTable::new(config.in_width, config.out_width, &filter);
 
+    // Dispatch on `v_weights.max_taps` once at function entry. Each tier picks
+    // a stack-array size N tuned to the actual workload: bilinear/bicubic at
+    // upscale fits N=8, Lanczos at modest downscale fits N=16, Lanczos-3 at 4×
+    // downscale fits N=32, and extreme downscales fall through to the heap path.
+    //
+    // Compared to a single per-iteration `if tap_count <= 32` branch, this:
+    // - sizes the stack array to the actual need (8/16/32 = 128/256/512 bytes)
+    // - lifts the branch out of the inner loop entirely
+    // - lets the compiler specialize gather-loop unrolling per N
+    let max_taps = v_weights.max_taps;
+    if max_taps <= 8 {
+        resize_hfirst_streaming_inner::<8>(config, input, h_weights, v_weights)
+    } else if max_taps <= 16 {
+        resize_hfirst_streaming_inner::<16>(config, input, h_weights, v_weights)
+    } else if max_taps <= 32 {
+        resize_hfirst_streaming_inner::<32>(config, input, h_weights, v_weights)
+    } else {
+        resize_hfirst_streaming_heap(config, input, h_weights, v_weights)
+    }
+}
+
+/// Inner implementation generic over the stack-array size `N`. Caller must
+/// guarantee `v_weights.max_taps <= N` so every per-row `tap_count <= N` slice
+/// fits in the stack buffer.
+fn resize_hfirst_streaming_inner<const N: usize>(
+    config: &ResizeConfig,
+    input: &[u8],
+    h_weights: I16WeightTable,
+    v_weights: I16WeightTable,
+) -> Result<Vec<u8>, &'static str> {
+    let channels = config.channels();
     let in_w = config.in_width as usize;
     let in_h = config.in_height as usize;
     let out_w = config.out_width as usize;
@@ -959,7 +988,6 @@ pub fn resize_hfirst_streaming(
         .checked_mul(channels)
         .ok_or("output row length overflows usize")?;
 
-    // Ring buffer: stores H-filtered rows, each out_row_len wide.
     let cache_size = v_weights
         .max_taps
         .checked_add(2)
@@ -973,7 +1001,6 @@ pub fn resize_hfirst_streaming(
     let mut input_rows_pushed = 0u32;
     let mut output_rows_produced = 0u32;
 
-    // Temp buffer for rows with SIMD padding
     let h_padding = h_weights
         .groups4
         .checked_mul(16)
@@ -983,7 +1010,6 @@ pub fn resize_hfirst_streaming(
         .ok_or("padded row length overflows usize")?;
 
     for y in 0..in_h {
-        // H-filter this input row → ring buffer slot
         let slot = y % cache_size;
         let row_off = y
             .checked_mul(in_row_len)
@@ -992,7 +1018,6 @@ pub fn resize_hfirst_streaming(
         simd::filter_h_u8_i16(in_row, &mut ring[slot], &h_weights, channels);
         input_rows_pushed += 1;
 
-        // Produce output rows when possible
         loop {
             if output_rows_produced >= out_h as u32 {
                 break;
@@ -1002,47 +1027,31 @@ pub fn resize_hfirst_streaming(
             let tap_count = v_weights.tap_count(out_y);
             let weights = v_weights.weights(out_y);
 
-            // Check if all needed input rows are available
             let last_needed = (left + tap_count as i32 - 1).clamp(0, in_h as i32 - 1) as u32;
             if last_needed >= input_rows_pushed {
                 break;
             }
 
-            // Gather row references. Stack array for the common case
-            // (tap_count <= MAX_STACK_TAPS_U8) keeps the hot path allocation-
-            // free; heap fallback for extreme downscales (Lanczos-3 at >8×)
-            // where the per-row alloc cost is dwarfed by SIMD work anyway.
-            //
-            // The conditional is important on Windows where HeapAlloc/
-            // HeapFree round-trips run 200-500ns under load (vs 10-50ns on
-            // Linux glibc small-bins). At 2k+ rows per typical decode, that
-            // translates to multi-percent regressions on Windows; trivial on
-            // Linux. The stack path eliminates it on both.
             let out_start = out_y
                 .checked_mul(out_row_len)
                 .ok_or("output offset overflows usize")?;
-            let out_slice = &mut output[out_start..out_start + out_row_len];
-            if tap_count <= MAX_STACK_TAPS_U8 {
-                let empty: &[u8] = &[];
-                let mut stack_refs: [&[u8]; MAX_STACK_TAPS_U8] = [empty; MAX_STACK_TAPS_U8];
-                for t in 0..tap_count {
-                    let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                    stack_refs[t] = &ring[in_y % cache_size];
-                }
-                simd::filter_v_row_u8_i16(&stack_refs[..tap_count], out_slice, weights);
-            } else {
-                let mut row_refs: Vec<&[u8]> = Vec::with_capacity(tap_count);
-                for t in 0..tap_count {
-                    let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                    row_refs.push(&ring[in_y % cache_size]);
-                }
-                simd::filter_v_row_u8_i16(&row_refs, out_slice, weights);
+            // Caller's dispatch guarantees `tap_count <= N`. Stack array
+            // sized to N is allocation-free per inner iteration.
+            let empty: &[u8] = &[];
+            let mut stack_refs: [&[u8]; N] = [empty; N];
+            for t in 0..tap_count {
+                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+                stack_refs[t] = &ring[in_y % cache_size];
             }
+            simd::filter_v_row_u8_i16(
+                &stack_refs[..tap_count],
+                &mut output[out_start..out_start + out_row_len],
+                weights,
+            );
             output_rows_produced += 1;
         }
     }
 
-    // Produce remaining output rows (edge clamping)
     while (output_rows_produced as usize) < out_h {
         let out_y = output_rows_produced as usize;
         let left = v_weights.left[out_y];
@@ -1052,41 +1061,130 @@ pub fn resize_hfirst_streaming(
         let out_start = out_y
             .checked_mul(out_row_len)
             .ok_or("output offset overflows usize")?;
-        let out_slice = &mut output[out_start..out_start + out_row_len];
-        if tap_count <= MAX_STACK_TAPS_U8 {
-            let empty: &[u8] = &[];
-            let mut stack_refs: [&[u8]; MAX_STACK_TAPS_U8] = [empty; MAX_STACK_TAPS_U8];
-            for t in 0..tap_count {
-                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                stack_refs[t] = &ring[in_y % cache_size];
-            }
-            simd::filter_v_row_u8_i16(&stack_refs[..tap_count], out_slice, weights);
-        } else {
-            let mut row_refs: Vec<&[u8]> = Vec::with_capacity(tap_count);
-            for t in 0..tap_count {
-                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                row_refs.push(&ring[in_y % cache_size]);
-            }
-            simd::filter_v_row_u8_i16(&row_refs, out_slice, weights);
+        let empty: &[u8] = &[];
+        let mut stack_refs: [&[u8]; N] = [empty; N];
+        for t in 0..tap_count {
+            let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+            stack_refs[t] = &ring[in_y % cache_size];
         }
+        simd::filter_v_row_u8_i16(
+            &stack_refs[..tap_count],
+            &mut output[out_start..out_start + out_row_len],
+            weights,
+        );
         output_rows_produced += 1;
     }
 
     Ok(output)
 }
 
-/// Stack-vs-heap threshold for u8 tap-reference scratch.
-///
-/// Sized to cover Lanczos-3 at typical 4× downscales (~25 taps with margin).
-/// `tap_count > MAX_STACK_TAPS_U8` falls back to heap allocation; this happens
-/// for extreme downscales (8×+) where the per-row alloc is in the noise.
-///
-/// 32 fat pointers = 512 bytes of stack write per inner-loop iteration.
-const MAX_STACK_TAPS_U8: usize = 32;
+/// Heap-fallback implementation for extreme downscales where `max_taps > 32`
+/// (Lanczos-3 at 8×+ downscale, etc.). At these tap counts the per-row
+/// allocation cost is dwarfed by the SIMD work, so we accept it rather than
+/// burning kilobytes of stack on the rare extreme path.
+fn resize_hfirst_streaming_heap(
+    config: &ResizeConfig,
+    input: &[u8],
+    h_weights: I16WeightTable,
+    v_weights: I16WeightTable,
+) -> Result<Vec<u8>, &'static str> {
+    let channels = config.channels();
+    let in_w = config.in_width as usize;
+    let in_h = config.in_height as usize;
+    let out_w = config.out_width as usize;
+    let out_h = config.out_height as usize;
+    let in_row_len = in_w
+        .checked_mul(channels)
+        .ok_or("input row length overflows usize")?;
+    let out_row_len = out_w
+        .checked_mul(channels)
+        .ok_or("output row length overflows usize")?;
 
-/// Stack-vs-heap threshold for f16 (u16-stored) tap-reference scratch in the
-/// f32-pipeline V-filter. Same rationale as `MAX_STACK_TAPS_U8`.
-const MAX_STACK_TAPS_F16: usize = 32;
+    let cache_size = v_weights
+        .max_taps
+        .checked_add(2)
+        .ok_or("v_weights cache size overflows usize")?;
+    let mut ring: Vec<Vec<u8>> = (0..cache_size).map(|_| vec![0u8; out_row_len]).collect();
+
+    let total_output = out_row_len
+        .checked_mul(out_h)
+        .ok_or("output buffer size overflows usize")?;
+    let mut output = vec![0u8; total_output];
+    let mut input_rows_pushed = 0u32;
+    let mut output_rows_produced = 0u32;
+
+    let h_padding = h_weights
+        .groups4
+        .checked_mul(16)
+        .ok_or("h_padding overflows usize")?;
+    let padded_len = in_row_len
+        .checked_add(h_padding)
+        .ok_or("padded row length overflows usize")?;
+
+    for y in 0..in_h {
+        let slot = y % cache_size;
+        let row_off = y
+            .checked_mul(in_row_len)
+            .ok_or("row offset overflows usize")?;
+        let in_row = &input[row_off..row_off + padded_len.min(input.len() - row_off)];
+        simd::filter_h_u8_i16(in_row, &mut ring[slot], &h_weights, channels);
+        input_rows_pushed += 1;
+
+        loop {
+            if output_rows_produced >= out_h as u32 {
+                break;
+            }
+            let out_y = output_rows_produced as usize;
+            let left = v_weights.left[out_y];
+            let tap_count = v_weights.tap_count(out_y);
+            let weights = v_weights.weights(out_y);
+
+            let last_needed = (left + tap_count as i32 - 1).clamp(0, in_h as i32 - 1) as u32;
+            if last_needed >= input_rows_pushed {
+                break;
+            }
+
+            let out_start = out_y
+                .checked_mul(out_row_len)
+                .ok_or("output offset overflows usize")?;
+            let mut row_refs: Vec<&[u8]> = Vec::with_capacity(tap_count);
+            for t in 0..tap_count {
+                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+                row_refs.push(&ring[in_y % cache_size]);
+            }
+            simd::filter_v_row_u8_i16(
+                &row_refs,
+                &mut output[out_start..out_start + out_row_len],
+                weights,
+            );
+            output_rows_produced += 1;
+        }
+    }
+
+    while (output_rows_produced as usize) < out_h {
+        let out_y = output_rows_produced as usize;
+        let left = v_weights.left[out_y];
+        let tap_count = v_weights.tap_count(out_y);
+        let weights = v_weights.weights(out_y);
+
+        let out_start = out_y
+            .checked_mul(out_row_len)
+            .ok_or("output offset overflows usize")?;
+        let mut row_refs: Vec<&[u8]> = Vec::with_capacity(tap_count);
+        for t in 0..tap_count {
+            let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+            row_refs.push(&ring[in_y % cache_size]);
+        }
+        simd::filter_v_row_u8_i16(
+            &row_refs,
+            &mut output[out_start..out_start + out_row_len],
+            weights,
+        );
+        output_rows_produced += 1;
+    }
+
+    Ok(output)
+}
 
 /// H-first streaming resize for the f32 path (any channel count).
 ///
@@ -1106,11 +1204,31 @@ pub fn resize_hfirst_streaming_f32(
 ) -> Result<Vec<u8>, &'static str> {
     config.validate()?;
 
-    let channels = config.channels();
     let filter = InterpolationDetails::create(config.filter);
     let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
     let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
 
+    // Same const-generic dispatch shape as the u8 path. See
+    // `resize_hfirst_streaming` for rationale.
+    let max_taps = v_weights.max_taps;
+    if max_taps <= 8 {
+        resize_hfirst_streaming_f32_inner::<8>(config, input, h_weights, v_weights)
+    } else if max_taps <= 16 {
+        resize_hfirst_streaming_f32_inner::<16>(config, input, h_weights, v_weights)
+    } else if max_taps <= 32 {
+        resize_hfirst_streaming_f32_inner::<32>(config, input, h_weights, v_weights)
+    } else {
+        resize_hfirst_streaming_f32_heap(config, input, h_weights, v_weights)
+    }
+}
+
+fn resize_hfirst_streaming_f32_inner<const N: usize>(
+    config: &ResizeConfig,
+    input: &[u8],
+    h_weights: F32WeightTable,
+    v_weights: F32WeightTable,
+) -> Result<Vec<u8>, &'static str> {
+    let channels = config.channels();
     let in_w = config.in_width as usize;
     let in_h = config.in_height as usize;
     let out_w = config.out_width as usize;
@@ -1126,14 +1244,12 @@ pub fn resize_hfirst_streaming_f32(
     let has_alpha = config.input.has_alpha();
     let needs_premul = config.needs_premultiply();
 
-    // Ring buffer: stores H-filtered f16 rows, each out_row_len wide.
     let cache_size = v_weights
         .max_taps
         .checked_add(2)
         .ok_or("v_weights cache size overflows usize")?;
     let mut ring: Vec<Vec<u16>> = (0..cache_size).map(|_| vec![0u16; out_row_len]).collect();
 
-    // Temp buffers
     let h_pad = h_weights
         .max_taps
         .checked_mul(channels)
@@ -1152,7 +1268,6 @@ pub fn resize_hfirst_streaming_f32(
     let mut output_rows_produced = 0u32;
 
     for y in 0..in_h {
-        // Decode input row to f32
         let row_off = y
             .checked_mul(in_row_len)
             .ok_or("row offset overflows usize")?;
@@ -1171,12 +1286,10 @@ pub fn resize_hfirst_streaming_f32(
             simd::premultiply_alpha_row(&mut temp_f32[..in_row_len]);
         }
 
-        // H-filter f32 → f16 into ring buffer slot
         let slot = y % cache_size;
         simd::filter_h_row_f32_to_f16(&temp_f32, &mut ring[slot], &h_weights, channels);
         input_rows_pushed += 1;
 
-        // Produce output rows
         loop {
             if output_rows_produced >= out_h as u32 {
                 break;
@@ -1191,30 +1304,18 @@ pub fn resize_hfirst_streaming_f32(
                 break;
             }
 
-            // Gather row references. Stack array fast path; heap fallback for
-            // extreme downscales. See `MAX_STACK_TAPS_U8` doc for rationale.
-            if tap_count <= MAX_STACK_TAPS_F16 {
-                let empty: &[u16] = &[];
-                let mut stack_refs: [&[u16]; MAX_STACK_TAPS_F16] = [empty; MAX_STACK_TAPS_F16];
-                for t in 0..tap_count {
-                    let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                    stack_refs[t] = &ring[in_y % cache_size];
-                }
-                simd::filter_v_row_f16(&stack_refs[..tap_count], &mut temp_output, weights);
-            } else {
-                let mut row_refs: Vec<&[u16]> = Vec::with_capacity(tap_count);
-                for t in 0..tap_count {
-                    let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                    row_refs.push(&ring[in_y % cache_size]);
-                }
-                simd::filter_v_row_f16(&row_refs, &mut temp_output, weights);
+            let empty: &[u16] = &[];
+            let mut stack_refs: [&[u16]; N] = [empty; N];
+            for t in 0..tap_count {
+                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+                stack_refs[t] = &ring[in_y % cache_size];
             }
+            simd::filter_v_row_f16(&stack_refs[..tap_count], &mut temp_output, weights);
 
             if needs_premul {
                 simd::unpremultiply_alpha_row(&mut temp_output);
             }
 
-            // Encode f32 → u8
             let out_start = out_y
                 .checked_mul(out_row_len)
                 .ok_or("output offset overflows usize")?;
@@ -1229,29 +1330,157 @@ pub fn resize_hfirst_streaming_f32(
         }
     }
 
-    // Remaining output rows
     while (output_rows_produced as usize) < out_h {
         let out_y = output_rows_produced as usize;
         let left = v_weights.left[out_y];
         let tap_count = v_weights.tap_count(out_y);
         let weights = v_weights.weights(out_y);
 
-        if tap_count <= MAX_STACK_TAPS_F16 {
-            let empty: &[u16] = &[];
-            let mut stack_refs: [&[u16]; MAX_STACK_TAPS_F16] = [empty; MAX_STACK_TAPS_F16];
-            for t in 0..tap_count {
-                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                stack_refs[t] = &ring[in_y % cache_size];
+        let empty: &[u16] = &[];
+        let mut stack_refs: [&[u16]; N] = [empty; N];
+        for t in 0..tap_count {
+            let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+            stack_refs[t] = &ring[in_y % cache_size];
+        }
+        simd::filter_v_row_f16(&stack_refs[..tap_count], &mut temp_output, weights);
+        if needs_premul {
+            simd::unpremultiply_alpha_row(&mut temp_output);
+        }
+        let out_start = out_y
+            .checked_mul(out_row_len)
+            .ok_or("output offset overflows usize")?;
+        encode_u8_row(
+            &temp_output,
+            &mut output[out_start..out_start + out_row_len],
+            output_tf,
+            channels,
+            has_alpha,
+        );
+        output_rows_produced += 1;
+    }
+
+    Ok(output)
+}
+
+fn resize_hfirst_streaming_f32_heap(
+    config: &ResizeConfig,
+    input: &[u8],
+    h_weights: F32WeightTable,
+    v_weights: F32WeightTable,
+) -> Result<Vec<u8>, &'static str> {
+    let channels = config.channels();
+    let in_w = config.in_width as usize;
+    let in_h = config.in_height as usize;
+    let out_w = config.out_width as usize;
+    let out_h = config.out_height as usize;
+    let in_row_len = in_w
+        .checked_mul(channels)
+        .ok_or("input row length overflows usize")?;
+    let out_row_len = out_w
+        .checked_mul(channels)
+        .ok_or("output row length overflows usize")?;
+    let input_tf = config.effective_input_transfer();
+    let output_tf = config.effective_output_transfer();
+    let has_alpha = config.input.has_alpha();
+    let needs_premul = config.needs_premultiply();
+
+    let cache_size = v_weights
+        .max_taps
+        .checked_add(2)
+        .ok_or("v_weights cache size overflows usize")?;
+    let mut ring: Vec<Vec<u16>> = (0..cache_size).map(|_| vec![0u16; out_row_len]).collect();
+
+    let h_pad = h_weights
+        .max_taps
+        .checked_mul(channels)
+        .ok_or("h_weights padding overflows usize")?;
+    let temp_f32_len = in_row_len
+        .checked_add(h_pad)
+        .ok_or("temp_f32 size overflows usize")?;
+    let mut temp_f32 = vec![0.0f32; temp_f32_len];
+    let mut temp_output = vec![0.0f32; out_row_len];
+    let total_output = out_row_len
+        .checked_mul(out_h)
+        .ok_or("output buffer size overflows usize")?;
+    let mut output = vec![0u8; total_output];
+
+    let mut input_rows_pushed = 0u32;
+    let mut output_rows_produced = 0u32;
+
+    for y in 0..in_h {
+        let row_off = y
+            .checked_mul(in_row_len)
+            .ok_or("row offset overflows usize")?;
+        let row_end = row_off
+            .checked_add(in_row_len)
+            .ok_or("row end overflows usize")?;
+        let in_row = &input[row_off..row_end];
+        decode_u8_row(
+            in_row,
+            &mut temp_f32[..in_row_len],
+            input_tf,
+            channels,
+            has_alpha,
+        );
+        if needs_premul {
+            simd::premultiply_alpha_row(&mut temp_f32[..in_row_len]);
+        }
+
+        let slot = y % cache_size;
+        simd::filter_h_row_f32_to_f16(&temp_f32, &mut ring[slot], &h_weights, channels);
+        input_rows_pushed += 1;
+
+        loop {
+            if output_rows_produced >= out_h as u32 {
+                break;
             }
-            simd::filter_v_row_f16(&stack_refs[..tap_count], &mut temp_output, weights);
-        } else {
+            let out_y = output_rows_produced as usize;
+            let left = v_weights.left[out_y];
+            let tap_count = v_weights.tap_count(out_y);
+            let weights = v_weights.weights(out_y);
+
+            let last_needed = (left + tap_count as i32 - 1).clamp(0, in_h as i32 - 1) as u32;
+            if last_needed >= input_rows_pushed {
+                break;
+            }
+
             let mut row_refs: Vec<&[u16]> = Vec::with_capacity(tap_count);
             for t in 0..tap_count {
                 let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
                 row_refs.push(&ring[in_y % cache_size]);
             }
             simd::filter_v_row_f16(&row_refs, &mut temp_output, weights);
+
+            if needs_premul {
+                simd::unpremultiply_alpha_row(&mut temp_output);
+            }
+
+            let out_start = out_y
+                .checked_mul(out_row_len)
+                .ok_or("output offset overflows usize")?;
+            encode_u8_row(
+                &temp_output,
+                &mut output[out_start..out_start + out_row_len],
+                output_tf,
+                channels,
+                has_alpha,
+            );
+            output_rows_produced += 1;
         }
+    }
+
+    while (output_rows_produced as usize) < out_h {
+        let out_y = output_rows_produced as usize;
+        let left = v_weights.left[out_y];
+        let tap_count = v_weights.tap_count(out_y);
+        let weights = v_weights.weights(out_y);
+
+        let mut row_refs: Vec<&[u16]> = Vec::with_capacity(tap_count);
+        for t in 0..tap_count {
+            let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+            row_refs.push(&ring[in_y % cache_size]);
+        }
+        simd::filter_v_row_f16(&row_refs, &mut temp_output, weights);
         if needs_premul {
             simd::unpremultiply_alpha_row(&mut temp_output);
         }
