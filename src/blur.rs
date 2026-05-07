@@ -136,7 +136,10 @@ pub(crate) fn blur_u8(data: &mut [u8], width: u32, height: u32, channels: usize,
     if sigma <= 0.0 || width == 0 || height == 0 {
         return;
     }
-    let len = width as usize * height as usize * channels;
+    let len = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|v| v.checked_mul(channels))
+        .expect("blur_u8: width * height * channels overflows usize");
 
     // Convert u8 → f32
     let mut f32_buf = vec![0.0f32; len];
@@ -167,7 +170,10 @@ pub(crate) fn unsharp_mask_u8(
     if amount <= 0.0 || sigma <= 0.0 || width == 0 || height == 0 {
         return;
     }
-    let len = width as usize * height as usize * channels;
+    let len = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|v| v.checked_mul(channels))
+        .expect("unsharp_mask_u8: width * height * channels overflows usize");
 
     // Convert u8 → f32
     let mut original = vec![0.0f32; len];
@@ -201,7 +207,10 @@ pub(crate) fn unsharp_mask_f32(
     if amount <= 0.0 || sigma <= 0.0 || width == 0 || height == 0 {
         return;
     }
-    let len = width as usize * height as usize * channels;
+    let len = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|v| v.checked_mul(channels))
+        .expect("unsharp_mask_f32: width * height * channels overflows usize");
 
     // Blur a copy
     let mut blurred = data[..len].to_vec();

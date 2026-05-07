@@ -52,9 +52,9 @@ fn streaming_resize(config: &zenresize::ResizeConfig, input: &[u8]) -> Vec<u8> {
 fn hfirst_resize(config: &zenresize::ResizeConfig, input: &[u8]) -> Vec<u8> {
     let ch = config.input.channels();
     if ch == 4 {
-        zenresize::resize_hfirst_streaming(config, input)
+        zenresize::resize_hfirst_streaming(config, input).expect("hfirst streaming failed")
     } else {
-        zenresize::resize_hfirst_streaming_f32(config, input)
+        zenresize::resize_hfirst_streaming_f32(config, input).expect("hfirst streaming f32 failed")
     }
 }
 

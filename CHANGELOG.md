@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### QUEUED BREAKING CHANGES
+<!-- Breaking changes that will ship together in the next major (or minor for 0.x) release. -->
+- `resize_hfirst_streaming` and `resize_hfirst_streaming_f32` now return
+  `Result<Vec<u8>, &'static str>` instead of `Vec<u8>`. They previously
+  panicked on adversarial inputs; they now validate and surface errors.
+
+### Fixed
+- Bound weight-table allocation in `ResizeConfig::validate()` so adversarial
+  `in_size`/`out_size` ratios cannot trigger multi-GB allocations from a
+  few-byte container header. Cap is ~256 MB worth of f32 entries per axis.
+- Reject NaN, infinity, and out-of-range numeric resize-config fields:
+  `post_sharpen`, `post_blur_sigma`, `kernel_width_scale`, `LobeRatio::Exact`,
+  `LobeRatio::SharpenPercent`. Previously these flowed into weight
+  computation and produced NaN-poisoned outputs or infinite loops.
+- `StreamingResize::push_row` and `push_row_u16` now require `row.len() >=
+  source_row_len` strictly. The prior `min(stride, source_row_len)` check
+  let any `in_stride` smaller than the row length (e.g., `in_stride=1`)
+  bypass the check and panic on the subsequent slice.
+- `StreamingResize::push_rows` uses checked arithmetic throughout to avoid
+  panicking on adversarial `stride`/`count` combinations.
+- `resize_hfirst_streaming` and `_f32` now run `validate()` and use checked
+  arithmetic for all buffer allocations. Tap-reference buffers are
+  heap-allocated, removing the prior 128-tap stack ceiling that would
+  panic on large downscale ratios.
+
 ## [0.3.1] - 2026-04-23
 
 ### Added

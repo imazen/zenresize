@@ -781,9 +781,12 @@ mod imgref_impl {
         let mut resizer = StreamingResize::new(&cfg);
 
         let w = img.width();
-        let mut row_buf = vec![0u8; w * 4];
+        let mut row_buf = vec![0u8; w.checked_mul(4).expect("resize_4ch: row_buf size overflow")];
         let out_row_len = cfg.output_row_len();
-        let mut out_pixels = Vec::with_capacity(out_width as usize * out_height as usize);
+        let out_pixel_count = (out_width as usize)
+            .checked_mul(out_height as usize)
+            .expect("resize_4ch: out_width * out_height overflows usize");
+        let mut out_pixels = Vec::with_capacity(out_pixel_count);
         for row in img.rows() {
             for (px, chunk) in row.iter().zip(row_buf.chunks_exact_mut(4)) {
                 chunk.copy_from_slice(px.as_slice());
@@ -835,9 +838,12 @@ mod imgref_impl {
         let mut resizer = StreamingResize::new(&cfg);
 
         let w = img.width();
-        let mut row_buf = vec![0u8; w * 3];
+        let mut row_buf = vec![0u8; w.checked_mul(3).expect("resize_3ch: row_buf size overflow")];
         let out_row_len = cfg.output_row_len();
-        let mut out_pixels = Vec::with_capacity(out_width as usize * out_height as usize);
+        let out_pixel_count = (out_width as usize)
+            .checked_mul(out_height as usize)
+            .expect("resize_3ch: out_width * out_height overflows usize");
+        let mut out_pixels = Vec::with_capacity(out_pixel_count);
         for row in img.rows() {
             for (px, chunk) in row.iter().zip(row_buf.chunks_exact_mut(3)) {
                 chunk.copy_from_slice(px.as_slice());
@@ -883,7 +889,10 @@ mod imgref_impl {
 
         let mut resizer = StreamingResize::new(&cfg);
 
-        let mut out_buf = Vec::with_capacity(out_width as usize * out_height as usize);
+        let out_pixel_count = (out_width as usize)
+            .checked_mul(out_height as usize)
+            .expect("resize_gray8: out_width * out_height overflows usize");
+        let mut out_buf = Vec::with_capacity(out_pixel_count);
         for row in img.rows() {
             resizer.push_row(row).unwrap();
             while let Some(out_row) = resizer.next_output_row() {
@@ -916,7 +925,22 @@ pub use imgref_impl::{resize_3ch, resize_4ch, resize_gray8};
 ///
 /// This is a proof-of-concept for benchmarking. It only supports:
 /// - u8 RGBA/RGBX 4ch, sRGB, no linearization, no compositing, no crop, no padding.
-pub fn resize_hfirst_streaming(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
+///
+/// # Errors
+///
+/// Returns an error if the configuration fails [`ResizeConfig::validate`], the
+/// input is too small, or buffer arithmetic would overflow `usize`.
+///
+/// # Panics
+///
+/// Panics if the channel count is not 4 or if the input slice is shorter than
+/// `in_width * in_height * 4`.
+pub fn resize_hfirst_streaming(
+    config: &ResizeConfig,
+    input: &[u8],
+) -> Result<Vec<u8>, &'static str> {
+    config.validate()?;
+
     let channels = config.channels();
     assert_eq!(channels, 4, "H-first streaming only supports 4ch");
 
@@ -928,26 +952,43 @@ pub fn resize_hfirst_streaming(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
     let in_h = config.in_height as usize;
     let out_w = config.out_width as usize;
     let out_h = config.out_height as usize;
-    let in_row_len = in_w * channels;
-    let out_row_len = out_w * channels;
+    let in_row_len = in_w
+        .checked_mul(channels)
+        .ok_or("input row length overflows usize")?;
+    let out_row_len = out_w
+        .checked_mul(channels)
+        .ok_or("output row length overflows usize")?;
 
     // Ring buffer: stores H-filtered rows, each out_row_len wide.
-    let cache_size = v_weights.max_taps + 2;
+    let cache_size = v_weights
+        .max_taps
+        .checked_add(2)
+        .ok_or("v_weights cache size overflows usize")?;
     let mut ring: Vec<Vec<u8>> = (0..cache_size).map(|_| vec![0u8; out_row_len]).collect();
 
-    let mut output = vec![0u8; out_row_len * out_h];
+    let total_output = out_row_len
+        .checked_mul(out_h)
+        .ok_or("output buffer size overflows usize")?;
+    let mut output = vec![0u8; total_output];
     let mut input_rows_pushed = 0u32;
     let mut output_rows_produced = 0u32;
 
     // Temp buffer for rows with SIMD padding
-    let h_padding = h_weights.groups4 * 16;
-    let padded_len = in_row_len + h_padding;
+    let h_padding = h_weights
+        .groups4
+        .checked_mul(16)
+        .ok_or("h_padding overflows usize")?;
+    let padded_len = in_row_len
+        .checked_add(h_padding)
+        .ok_or("padded row length overflows usize")?;
 
     for y in 0..in_h {
         // H-filter this input row → ring buffer slot
         let slot = y % cache_size;
-        let in_row =
-            &input[y * in_row_len..y * in_row_len + padded_len.min(input.len() - y * in_row_len)];
+        let row_off = y
+            .checked_mul(in_row_len)
+            .ok_or("row offset overflows usize")?;
+        let in_row = &input[row_off..row_off + padded_len.min(input.len() - row_off)];
         simd::filter_h_u8_i16(in_row, &mut ring[slot], &h_weights, channels);
         input_rows_pushed += 1;
 
@@ -967,15 +1008,20 @@ pub fn resize_hfirst_streaming(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
                 break;
             }
 
-            // Gather row references from ring buffer
-            let mut row_refs: [&[u8]; 128] = [&[]; 128];
-            for (t, slot) in row_refs.iter_mut().enumerate().take(tap_count) {
+            // Gather row references from ring buffer. Heap-allocated to remove
+            // the prior 128-tap stack ceiling that would panic for very large
+            // downscales. Local to the loop body so the immutable borrow
+            // doesn't conflict with the mutable ring borrow above.
+            let mut row_refs: Vec<&[u8]> = Vec::with_capacity(tap_count);
+            for t in 0..tap_count {
                 let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                *slot = &ring[in_y % cache_size];
+                row_refs.push(&ring[in_y % cache_size]);
             }
 
             // V-filter directly to output (no temp buffer needed!)
-            let out_start = out_y * out_row_len;
+            let out_start = out_y
+                .checked_mul(out_row_len)
+                .ok_or("output offset overflows usize")?;
             simd::filter_v_row_u8_i16(
                 &row_refs[..tap_count],
                 &mut output[out_start..out_start + out_row_len],
@@ -992,13 +1038,15 @@ pub fn resize_hfirst_streaming(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
         let tap_count = v_weights.tap_count(out_y);
         let weights = v_weights.weights(out_y);
 
-        let mut row_refs: [&[u8]; 128] = [&[]; 128];
-        for (t, slot) in row_refs.iter_mut().enumerate().take(tap_count) {
+        let mut row_refs: Vec<&[u8]> = Vec::with_capacity(tap_count);
+        for t in 0..tap_count {
             let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-            *slot = &ring[in_y % cache_size];
+            row_refs.push(&ring[in_y % cache_size]);
         }
 
-        let out_start = out_y * out_row_len;
+        let out_start = out_y
+            .checked_mul(out_row_len)
+            .ok_or("output offset overflows usize")?;
         simd::filter_v_row_u8_i16(
             &row_refs[..tap_count],
             &mut output[out_start..out_start + out_row_len],
@@ -1007,7 +1055,7 @@ pub fn resize_hfirst_streaming(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
         output_rows_produced += 1;
     }
 
-    output
+    Ok(output)
 }
 
 /// H-first streaming resize for the f32 path (any channel count).
@@ -1017,7 +1065,17 @@ pub fn resize_hfirst_streaming(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
 ///
 /// For heavy downscale, this processes 1/N the data in the V-filter compared
 /// to V-first streaming, where N = in_width / out_width.
-pub fn resize_hfirst_streaming_f32(config: &ResizeConfig, input: &[u8]) -> Vec<u8> {
+///
+/// # Errors
+///
+/// Returns an error if the configuration fails [`ResizeConfig::validate`] or
+/// buffer arithmetic would overflow `usize`.
+pub fn resize_hfirst_streaming_f32(
+    config: &ResizeConfig,
+    input: &[u8],
+) -> Result<Vec<u8>, &'static str> {
+    config.validate()?;
+
     let channels = config.channels();
     let filter = InterpolationDetails::create(config.filter);
     let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
@@ -1027,28 +1085,51 @@ pub fn resize_hfirst_streaming_f32(config: &ResizeConfig, input: &[u8]) -> Vec<u
     let in_h = config.in_height as usize;
     let out_w = config.out_width as usize;
     let out_h = config.out_height as usize;
-    let in_row_len = in_w * channels;
-    let out_row_len = out_w * channels;
+    let in_row_len = in_w
+        .checked_mul(channels)
+        .ok_or("input row length overflows usize")?;
+    let out_row_len = out_w
+        .checked_mul(channels)
+        .ok_or("output row length overflows usize")?;
     let input_tf = config.effective_input_transfer();
     let output_tf = config.effective_output_transfer();
     let has_alpha = config.input.has_alpha();
     let needs_premul = config.needs_premultiply();
 
     // Ring buffer: stores H-filtered f16 rows, each out_row_len wide.
-    let cache_size = v_weights.max_taps + 2;
+    let cache_size = v_weights
+        .max_taps
+        .checked_add(2)
+        .ok_or("v_weights cache size overflows usize")?;
     let mut ring: Vec<Vec<u16>> = (0..cache_size).map(|_| vec![0u16; out_row_len]).collect();
 
     // Temp buffers
-    let mut temp_f32 = vec![0.0f32; in_row_len + h_weights.max_taps * channels];
+    let h_pad = h_weights
+        .max_taps
+        .checked_mul(channels)
+        .ok_or("h_weights padding overflows usize")?;
+    let temp_f32_len = in_row_len
+        .checked_add(h_pad)
+        .ok_or("temp_f32 size overflows usize")?;
+    let mut temp_f32 = vec![0.0f32; temp_f32_len];
     let mut temp_output = vec![0.0f32; out_row_len];
-    let mut output = vec![0u8; out_row_len * out_h];
+    let total_output = out_row_len
+        .checked_mul(out_h)
+        .ok_or("output buffer size overflows usize")?;
+    let mut output = vec![0u8; total_output];
 
     let mut input_rows_pushed = 0u32;
     let mut output_rows_produced = 0u32;
 
     for y in 0..in_h {
         // Decode input row to f32
-        let in_row = &input[y * in_row_len..(y + 1) * in_row_len];
+        let row_off = y
+            .checked_mul(in_row_len)
+            .ok_or("row offset overflows usize")?;
+        let row_end = row_off
+            .checked_add(in_row_len)
+            .ok_or("row end overflows usize")?;
+        let in_row = &input[row_off..row_end];
         decode_u8_row(
             in_row,
             &mut temp_f32[..in_row_len],
@@ -1080,11 +1161,13 @@ pub fn resize_hfirst_streaming_f32(config: &ResizeConfig, input: &[u8]) -> Vec<u
                 break;
             }
 
-            // Gather row references from ring buffer
-            let mut row_refs: [&[u16]; 128] = [&[]; 128];
-            for (t, slot) in row_refs.iter_mut().enumerate().take(tap_count) {
+            // Gather row references from ring buffer. Heap-allocated to remove
+            // the prior 128-tap stack ceiling. Local to the loop body so the
+            // immutable borrow doesn't conflict with the mutable ring borrow.
+            let mut row_refs: Vec<&[u16]> = Vec::with_capacity(tap_count);
+            for t in 0..tap_count {
                 let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                *slot = &ring[in_y % cache_size];
+                row_refs.push(&ring[in_y % cache_size]);
             }
 
             // V-filter f16 → f32
@@ -1095,7 +1178,9 @@ pub fn resize_hfirst_streaming_f32(config: &ResizeConfig, input: &[u8]) -> Vec<u
             }
 
             // Encode f32 → u8
-            let out_start = out_y * out_row_len;
+            let out_start = out_y
+                .checked_mul(out_row_len)
+                .ok_or("output offset overflows usize")?;
             encode_u8_row(
                 &temp_output,
                 &mut output[out_start..out_start + out_row_len],
@@ -1114,17 +1199,19 @@ pub fn resize_hfirst_streaming_f32(config: &ResizeConfig, input: &[u8]) -> Vec<u
         let tap_count = v_weights.tap_count(out_y);
         let weights = v_weights.weights(out_y);
 
-        let mut row_refs: [&[u16]; 128] = [&[]; 128];
-        for (t, slot) in row_refs.iter_mut().enumerate().take(tap_count) {
+        let mut row_refs: Vec<&[u16]> = Vec::with_capacity(tap_count);
+        for t in 0..tap_count {
             let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-            *slot = &ring[in_y % cache_size];
+            row_refs.push(&ring[in_y % cache_size]);
         }
 
         simd::filter_v_row_f16(&row_refs[..tap_count], &mut temp_output, weights);
         if needs_premul {
             simd::unpremultiply_alpha_row(&mut temp_output);
         }
-        let out_start = out_y * out_row_len;
+        let out_start = out_y
+            .checked_mul(out_row_len)
+            .ok_or("output offset overflows usize")?;
         encode_u8_row(
             &temp_output,
             &mut output[out_start..out_start + out_row_len],
@@ -1135,7 +1222,7 @@ pub fn resize_hfirst_streaming_f32(config: &ResizeConfig, input: &[u8]) -> Vec<u
         output_rows_produced += 1;
     }
 
-    output
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -1563,5 +1650,45 @@ mod tests {
         for &v in &output {
             assert!((v as i32 - 50000).unsigned_abs() <= 200, "Gray off: {}", v);
         }
+    }
+
+    /// H4: resize_hfirst_streaming must reject adversarial configs through
+    /// validate() instead of allocating tens of GB.
+    #[test]
+    fn hfirst_streaming_rejects_adversarial_size() {
+        let mut cfg = test_config(4, 4, 2, 2);
+        cfg.in_width = u32::MAX;
+        cfg.in_height = 4;
+        cfg.out_width = 1;
+        cfg.out_height = 2;
+        let input = vec![0u8; 16];
+        assert!(resize_hfirst_streaming(&cfg, &input).is_err());
+    }
+
+    #[test]
+    fn hfirst_streaming_f32_rejects_adversarial_size() {
+        let mut cfg = ResizeConfig::builder(4, 4, 2, 2)
+            .filter(Filter::Lanczos)
+            .format(PixelDescriptor::RGB8_SRGB)
+            .srgb()
+            .build();
+        cfg.in_width = u32::MAX;
+        cfg.out_width = 1;
+        let input = vec![0u8; 16];
+        assert!(resize_hfirst_streaming_f32(&cfg, &input).is_err());
+    }
+
+    #[test]
+    fn hfirst_streaming_succeeds_on_normal_input() {
+        let cfg = test_config(20, 20, 10, 10);
+        let mut input = vec![0u8; 20 * 20 * 4];
+        for px in input.chunks_exact_mut(4) {
+            px[0] = 100;
+            px[1] = 100;
+            px[2] = 100;
+            px[3] = 255;
+        }
+        let output = resize_hfirst_streaming(&cfg, &input).expect("normal resize must succeed");
+        assert_eq!(output.len(), 10 * 10 * 4);
     }
 }

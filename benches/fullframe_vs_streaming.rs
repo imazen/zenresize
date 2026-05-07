@@ -97,10 +97,10 @@ fn hfirst_streaming_resize(config: &zenresize::ResizeConfig, input: &[u8]) -> Ve
     let ch = config.input.channels();
     if ch == 4 {
         // Use i16 path for 4ch sRGB
-        zenresize::resize_hfirst_streaming(config, input)
+        zenresize::resize_hfirst_streaming(config, input).expect("hfirst streaming failed")
     } else {
         // Use f32 path for 3ch / other
-        zenresize::resize_hfirst_streaming_f32(config, input)
+        zenresize::resize_hfirst_streaming_f32(config, input).expect("hfirst streaming f32 failed")
     }
 }
 
