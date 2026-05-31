@@ -330,6 +330,74 @@ fn load_i16x4_as_i32x4<T: magetypes::simd::backends::I32x4Backend>(
     )
 }
 
+/// Branchless, bit-exact f16 (IEEE 754 half) → f32 conversion for a 4-lane
+/// vector, expressed entirely in magetypes generic SIMD.
+///
+/// Targets that lack a hardware f16 type in the magetypes generic API (NEON,
+/// WASM128) previously decoded f16 via the scalar `f16_to_f32_soft` routine —
+/// a branchy bit-twiddle (subnormal normalization loop + Inf/NaN branches) that
+/// LLVM cannot auto-vectorize. In the f32 resize path the V-filter calls that
+/// per element per tap, so it dominated the profile (~73 % on Neoverse-N1).
+///
+/// This uses Fabian Giesen's magic-multiply method: shift the 15 magnitude bits
+/// into the f32 mantissa/exponent field, reinterpret as f32, and multiply by
+/// 2^112 to rescale the exponent (and correctly denormalize subnormals in the
+/// same step). Inf/NaN are fixed up with a branchless select. The result is
+/// **bit-identical** to `f16_to_f32_soft` for every finite/subnormal input
+/// (verified exhaustively over all 65 536 f16 values); NaN inputs map to a NaN
+/// (payload may differ, which never occurs in resize intermediates).
+#[inline(always)]
+fn f16x4_to_f32x4<T: magetypes::simd::backends::F32x4Convert>(
+    token: T,
+    h: GenericI32x4<T>,
+) -> GenericF32x4<T> {
+    #[allow(non_camel_case_types)]
+    type i32x4<U> = GenericI32x4<U>;
+
+    // 2^112 as f32 bits — rescales the magic-shifted exponent.
+    let magic = GenericF32x4::splat(token, f32::from_bits(0x7780_0000));
+
+    let mask_sign = i32x4::splat(token, 0x8000);
+    let mask_mag = i32x4::splat(token, 0x7fff);
+    let mask_expmant = i32x4::splat(token, 0x007f_ffff);
+    let inf_exp = i32x4::splat(token, 0x7f80_0000);
+    let f16_expmask = i32x4::splat(token, 0x7c00);
+
+    // sign bit moved to f32 position
+    let sign = (h & mask_sign).shl_const::<16>();
+
+    // exp+mant shifted into f32 [exp|mant] field, then magic-multiply rescales.
+    let mag = (h & mask_mag).shl_const::<13>();
+    let scaled = (mag.bitcast_f32x4() * magic).bitcast_i32x4();
+
+    // Inf/NaN fixup: where f16 exponent == 0x1f, force f32 exponent = 0xff and
+    // keep the mantissa from `scaled`.
+    let is_inf_nan = (h & f16_expmask).simd_eq(f16_expmask);
+    let infnan_bits = (scaled & mask_expmant) | inf_exp;
+    let body = i32x4::blend(is_inf_nan, infnan_bits, scaled);
+
+    (body | sign).bitcast_f32x4()
+}
+
+/// Load 4 contiguous f16 (u16) values as an f32x4 via the branchless converter.
+#[inline(always)]
+fn load_f16x4_as_f32x4<T: magetypes::simd::backends::F32x4Convert>(
+    token: T,
+    slice: &[u16],
+    offset: usize,
+) -> GenericF32x4<T> {
+    let h = GenericI32x4::from_array(
+        token,
+        [
+            slice[offset] as i32,
+            slice[offset + 1] as i32,
+            slice[offset + 2] as i32,
+            slice[offset + 3] as i32,
+        ],
+    );
+    f16x4_to_f32x4(token, h)
+}
+
 /// Integer horizontal convolution — dispatch by channel count.
 #[magetypes(neon, wasm128)]
 #[inline(always)]
@@ -1253,12 +1321,23 @@ pub(super) fn f32_to_f16_row_impl(_token: Token, input: &[f32], output: &mut [u1
     }
 }
 
-/// Bulk convert f16 → f32 row (scalar, uses software conversion).
+/// Bulk convert f16 → f32 row using the branchless SIMD converter.
+///
+/// Bit-identical to the scalar `f16_to_f32_soft` path (verified exhaustively).
 #[magetypes(neon, wasm128)]
 #[inline(always)]
-pub(super) fn f16_to_f32_row_impl(_token: Token, input: &[u16], output: &mut [f32]) {
+pub(super) fn f16_to_f32_row_impl(token: Token, input: &[u16], output: &mut [f32]) {
     debug_assert_eq!(input.len(), output.len());
-    for (inp, out) in input.iter().zip(output.iter_mut()) {
+    let (in_chunks, in_tail) = input.as_chunks::<4>();
+    let (out_chunks, out_tail) = output.as_chunks_mut::<4>();
+    for (inp, out) in in_chunks.iter().zip(out_chunks.iter_mut()) {
+        let h = GenericI32x4::from_array(
+            token,
+            [inp[0] as i32, inp[1] as i32, inp[2] as i32, inp[3] as i32],
+        );
+        *out = f16x4_to_f32x4(token, h).to_array();
+    }
+    for (inp, out) in in_tail.iter().zip(out_tail.iter_mut()) {
         *out = super::scalar::f16_to_f32_soft(*inp);
     }
 }
@@ -1290,26 +1369,70 @@ pub(super) fn filter_h_row_f32_to_f16_impl(
 }
 
 /// Streaming V-filter: f16 rows → f32 output via f32 weights.
+///
+/// Processes 16 lanes (4 × f32x4) per inner iteration with 4 accumulators for
+/// ILP, decoding each tap row's f16 → f32 with the branchless SIMD converter
+/// (`f16x4_to_f32x4`) instead of the scalar `f16_to_f32_soft`. The decode is
+/// bit-identical to the scalar path, so output is byte-for-byte unchanged.
 #[magetypes(neon, wasm128)]
 #[inline(always)]
 pub(super) fn filter_v_row_f16_impl(
-    _token: Token,
+    token: Token,
     rows: &[&[u16]],
     output: &mut [f32],
     weights: &[f32],
 ) {
-    let width = output.len();
+    #[allow(non_camel_case_types)]
+    type f32x4<U> = GenericF32x4<U>;
+
     debug_assert_eq!(rows.len(), weights.len());
 
-    for v in output.iter_mut() {
-        *v = 0.0;
+    // Process 16 elements (4 × f32x4) per chunk with 4 accumulators for ILP.
+    let (out_chunks16, out_rem16) = output.as_chunks_mut::<16>();
+
+    for (ci, out_chunk) in out_chunks16.iter_mut().enumerate() {
+        let base = ci * 16;
+        let mut acc0 = f32x4::zero(token);
+        let mut acc1 = f32x4::zero(token);
+        let mut acc2 = f32x4::zero(token);
+        let mut acc3 = f32x4::zero(token);
+
+        for (row, &weight) in rows.iter().zip(weights.iter()) {
+            debug_assert!(row.len() >= base + 16);
+            let wv = f32x4::splat(token, weight);
+            acc0 += load_f16x4_as_f32x4(token, row, base) * wv;
+            acc1 += load_f16x4_as_f32x4(token, row, base + 4) * wv;
+            acc2 += load_f16x4_as_f32x4(token, row, base + 8) * wv;
+            acc3 += load_f16x4_as_f32x4(token, row, base + 12) * wv;
+        }
+
+        out_chunk[0..4].copy_from_slice(&acc0.to_array());
+        out_chunk[4..8].copy_from_slice(&acc1.to_array());
+        out_chunk[8..12].copy_from_slice(&acc2.to_array());
+        out_chunk[12..16].copy_from_slice(&acc3.to_array());
     }
 
-    for (row, &weight) in rows.iter().zip(weights.iter()) {
-        debug_assert!(row.len() >= width);
-        for x in 0..width {
-            output[x] += super::scalar::f16_to_f32_soft(row[x]) * weight;
+    // Remainder: 4 lanes at a time.
+    let base16 = out_chunks16.len() * 16;
+    let (rem_chunks4, rem_tail) = out_rem16.as_chunks_mut::<4>();
+
+    for (ci, out_chunk) in rem_chunks4.iter_mut().enumerate() {
+        let base = base16 + ci * 4;
+        let mut acc = f32x4::zero(token);
+        for (row, &weight) in rows.iter().zip(weights.iter()) {
+            acc += load_f16x4_as_f32x4(token, row, base) * f32x4::splat(token, weight);
         }
+        *out_chunk = acc.to_array();
+    }
+
+    // Scalar tail (0-3 elements) — same bit-exact converter, scalar form.
+    let base_scalar = base16 + rem_chunks4.len() * 4;
+    for (x, out) in rem_tail.iter_mut().enumerate() {
+        let mut sum = 0.0f32;
+        for (row, &weight) in rows.iter().zip(weights.iter()) {
+            sum += super::scalar::f16_to_f32_soft(row[base_scalar + x]) * weight;
+        }
+        *out = sum;
     }
 }
 

@@ -1,0 +1,206 @@
+[1m[92m   Compiling[0m zenresize v0.3.1 (/home/ubuntu/work/zen/zenresize)
+[1m[33mwarning[0m[1m: unused variable: `width`[0m
+    [1m[94m--> [0msrc/simd/wide_kernels.rs:1388:9
+     [1m[94m|[0m
+[1m[94m1388[0m [1m[94m|[0m     let width = output.len();
+     [1m[94m|[0m         [1m[33m^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_width`[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mnote[0m: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: function `idx` is never used[0m
+  [1m[94m--> [0msrc/proven.rs:13:15
+   [1m[94m|[0m
+[1m[94m13[0m [1m[94m|[0m pub(crate) fn idx<T>(slice: &[T], i: usize) -> &T {
+   [1m[94m|[0m               [1m[33m^^^[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: function `idx_mut` is never used[0m
+  [1m[94m--> [0msrc/proven.rs:26:15
+   [1m[94m|[0m
+[1m[94m26[0m [1m[94m|[0m pub(crate) fn idx_mut<T>(slice: &mut [T], i: usize) -> &mut T {
+   [1m[94m|[0m               [1m[33m^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: function `sub` is never used[0m
+  [1m[94m--> [0msrc/proven.rs:39:15
+   [1m[94m|[0m
+[1m[94m39[0m [1m[94m|[0m pub(crate) fn sub<T>(slice: &[T], range: Range<usize>) -> &[T] {
+   [1m[94m|[0m               [1m[33m^^^[0m
+
+[1m[33mwarning[0m: `zenresize` (lib) generated 4 warnings (run `cargo fix --lib -p zenresize` to apply 1 suggestion)
+[1m[92m    Finished[0m `bench` profile [optimized] target(s) in 21.00s
+[1m[92m     Running[0m benches/competitors_zen.rs (target/release/deps/competitors_zen-1586e02ab6467570)
+[zenbench] calibration: int=0.66ns/iter mem_bw=31.4GiB/s mem_lat=72.0ns
+[zenbench] timer resolution: 40ns, loop overhead: 0.34ns/iter, TSC: 0.025 ticks/ns (invariant)
+[zenbench] results → /tmp/zenbench/zenbench-1780258964-199fc.txt
+[zenbench] warning: could not acquire process lock: Permission denied (os error 13)
+
+═══════════════════════════════════════════════════════════════
+  zenbench  1780258964-199fc
+═══════════════════════════════════════════════════════════════
+
+  srgb_1024_2x_down  30 rounds × 1 calls
+                         mean ±mad ms  95% CI vs base     iB/s
+  ├─ zenresize_srgb       32.8 ±0.3ms  [32.6–32.9]ms      122M
+  ├─ zenresize_srgb_i16   35.2 ±0.3ms  [+7.1%–+7.6%]      114M
+  ├─ zen_stream_srgb      32.7 ±0.3ms  [-0.6%–-0.1%]      122M [1]
+  ├─ ps_scalar_srgb        7.9 ±0.2ms  [-76.3%–-75.6%]    509M
+  ├─ pss_srgb              9.8 ±0.1ms  [-70.3%–-69.8%]    408M
+  ├─ fir_srgb             10.1 ±0.3ms  [-69.5%–-68.7%]    395M
+  ╰─ resize_crate          9.2 ±1.0ms  [-73.0%–-70.7%]    434M
+
+  ps_scalar_srgb      ████████████████████████████████████████████████ 509 MiB/s
+  resize_crate        █████████████████████████████████████████ 434 MiB/s
+  pss_srgb            ██████████████████████████████████████ 408 MiB/s
+  fir_srgb            █████████████████████████████████████ 395 MiB/s
+  zen_stream_srgb     ████████████ 122 MiB/s
+  zenresize_srgb      ████████████ 122 MiB/s
+  zenresize_srgb_i16  ███████████ 114 MiB/s
+  [1] CI crosses zero
+
+  linear_1024_2x_down  30 rounds × 1 calls
+                           mean ±mad ms  95% CI vs base      iB/s
+  ├─ zenresize_linear       56.2 ±0.3ms  [56.1–56.5]ms      71.1M
+  ├─ zenresize_linear_i16   32.7 ±0.1ms  [-41.9%–-41.6%]     122M
+  ├─ ps_scalar_linear       33.9 ±0.8ms  [-40.1%–-39.1%]     118M
+  ╰─ fir_linear             35.8 ±0.2ms  [-36.4%–-36.0%]     112M
+
+  zenresize_linear_i16  █████████████████████████████████████████████ 122 MiB/s
+  ps_scalar_linear      ███████████████████████████████████████████ 118 MiB/s
+  fir_linear            █████████████████████████████████████████ 112 MiB/s
+  zenresize_linear      ██████████████████████████ 71.1 MiB/s
+
+  f32_1024_2x_down  30 rounds × 1 calls
+                    mean ±mad ms  95% CI vs base     iB/s
+  ├─ zenresize_f32   50.4 ±0.3ms  [50.2–50.8]ms      317M
+  ╰─ fir_f32         23.8 ±0.3ms  [-52.8%–-52.5%]    672M
+
+  fir_f32        █████████████████████████████████████████████████████ 672 MiB/s
+  zenresize_f32  █████████████████████████ 317 MiB/s
+
+  srgb_4k_2x_down  9 rounds × 1 calls ⚠ only 9 rounds
+                          mean ±mad ms  95% CI vs base     iB/s
+  ├─ zenresize_srgb       252.2 ±1.1ms  [251.0–253.6]ms    125M
+  ├─ zenresize_srgb_i16   272.5 ±3.2ms  [+7.2%–+8.9%]      116M
+  ├─ zen_stream_srgb      253.0 ±2.0ms  [-0.4%–+1.1%]      125M [1]
+  ├─ ps_scalar_srgb        77.1 ±3.1ms  [-70.1%–-68.7%]    411M
+  ├─ pss_srgb              95.4 ±1.8ms  [-62.8%–-61.5%]    332M
+  ├─ fir_srgb              90.6 ±0.3ms  [-64.6%–-63.6%]    349M
+  ╰─ resize_crate          73.5 ±7.3ms  [-72.7%–-68.6%]    431M
+
+  resize_crate        ████████████████████████████████████████████████ 431 MiB/s
+  ps_scalar_srgb      ██████████████████████████████████████████████ 411 MiB/s
+  fir_srgb            ███████████████████████████████████████ 349 MiB/s
+  pss_srgb            █████████████████████████████████████ 332 MiB/s
+  zenresize_srgb      ██████████████ 125 MiB/s
+  zen_stream_srgb     ██████████████ 125 MiB/s
+  zenresize_srgb_i16  █████████████ 116 MiB/s
+  [1] CI crosses zero
+
+  linear_4k_2x_down  8 rounds × 1 calls ⚠ only 8 rounds
+                            mean ±mad ms  95% CI vs base      iB/s
+  ├─ zenresize_linear       438.2 ±2.3ms  [436.0–440.0]ms    72.2M
+  ├─ zenresize_linear_i16   254.9 ±2.8ms  [-42.4%–-41.3%]     124M
+  ├─ ps_scalar_linear       224.3 ±1.2ms  [-49.4%–-48.2%]     141M
+  ╰─ fir_linear             322.7 ±5.0ms  [-27.3%–-25.4%]    98.1M
+
+  ps_scalar_linear      █████████████████████████████████████████████ 141 MiB/s
+  zenresize_linear_i16  ████████████████████████████████████████ 124 MiB/s
+  fir_linear            ███████████████████████████████ 98.1 MiB/s
+  zenresize_linear      ███████████████████████ 72.2 MiB/s
+
+  f32_4k_2x_down  12 rounds × 1 calls
+                     mean ±mad ms  95% CI vs base     iB/s
+  ├─ zenresize_f32   408.7 ±0.9ms  [403.5–414.9]ms    310M
+  ╰─ fir_f32         286.8 ±4.8ms  [-30.3%–-28.2%]    441M
+
+  fir_f32        █████████████████████████████████████████████████████ 441 MiB/s
+  zenresize_f32  █████████████████████████████████████ 310 MiB/s
+
+  srgb_4k_10x_down  5 rounds × 1 calls ⚠ only 5 rounds
+                           mean ±mad ms  95% CI vs base       iB/s
+  ├─ zenresize_srgb       966.2 ±40.7ms  [899.5–1064.3]ms    47.4M
+  ├─ zenresize_srgb_i16   930.3 ±35.4ms  [-2.8%–+0.4%]       49.2M [1]
+  ├─ zen_stream_srgb      978.4 ±33.9ms  [-2.6%–+5.9%]       46.8M [2]
+  ├─ ps_scalar_srgb        167.0 ±9.8ms  [-85.1%–-78.2%]      274M
+  ├─ pss_srgb              177.6 ±4.2ms  [-84.2%–-77.4%]      258M [3]
+  ├─ fir_srgb               94.7 ±0.1ms  [-93.0%–-85.8%]      484M [4]
+  ╰─ resize_crate           49.8 ±0.4ms  [-97.8%–-90.7%]      919M [5]
+
+  resize_crate        ███████████████████████████████████████████████ 919 MiB/s
+  fir_srgb            █████████████████████████ 484 MiB/s
+  ps_scalar_srgb      ██████████████ 274 MiB/s
+  pss_srgb            █████████████ 258 MiB/s
+  zenresize_srgb_i16  ███ 49.2 MiB/s
+  zenresize_srgb      ██ 47.4 MiB/s
+  zen_stream_srgb     ██ 46.8 MiB/s
+  [1] CI crosses zero
+  [2] CI crosses zero
+  [3] drift r=0.80 — later rounds slower
+  [4] drift r=0.80 — later rounds slower
+  [5] drift r=0.80 — later rounds slower
+
+  linear_4k_10x_down  5 rounds × 1 calls ⚠ only 5 rounds
+                              mean ±mad ms  95% CI vs base       iB/s
+  ├─ zenresize_linear        953.3 ±41.5ms  [911.2–1010.4]ms    48.0M
+  ├─ zenresize_linear_i16   942.6 ±111.2ms  [-7.2%–+4.4%]       48.6M [1]
+  ├─ ps_scalar_linear         434.5 ±3.6ms  [-55.8%–-51.6%]      105M
+  ╰─ fir_linear               338.3 ±4.7ms  [-66.5%–-61.3%]      135M
+
+  fir_linear            █████████████████████████████████████████████ 135 MiB/s
+  ps_scalar_linear      ███████████████████████████████████ 105 MiB/s
+  zenresize_linear_i16  ████████████████ 48.6 MiB/s
+  zenresize_linear      ████████████████ 48.0 MiB/s
+  [1] CI crosses zero
+
+  f32_4k_10x_down  8 rounds × 1 calls ⚠ only 8 rounds
+                      mean ±mad ms  95% CI vs base     iB/s
+  ├─ zenresize_f32   890.7 ±37.2ms  [865.6–915.3]ms    206M
+  ╰─ fir_f32          292.6 ±2.7ms  [-69.7%–-64.4%]    626M [1]
+
+  fir_f32        █████████████████████████████████████████████████████ 626 MiB/s
+  zenresize_f32  █████████████████ 206 MiB/s
+  [1] drift r=-0.64 — later rounds faster
+
+  srgb_576_2x_up  30 rounds × 1 calls
+                         mean ±mad ms  95% CI vs base      iB/s
+  ├─ zenresize_srgb       43.0 ±0.1ms  [42.9–43.1]ms      29.4M
+  ├─ zenresize_srgb_i16   46.0 ±0.1ms  [+7.1%–+7.3%]      27.5M
+  ├─ zen_stream_srgb      43.0 ±0.1ms  [-0.2%–+0.1%]      29.4M [1]
+  ├─ ps_scalar_srgb       10.4 ±0.1ms  [-75.9%–-75.6%]     121M
+  ├─ pss_srgb             12.5 ±0.1ms  [-70.9%–-70.8%]     101M
+  ├─ fir_srgb             14.6 ±0.1ms  [-66.2%–-65.9%]    86.4M
+  ╰─ resize_crate         11.0 ±0.7ms  [-75.5%–-74.3%]     115M
+
+  ps_scalar_srgb      ███████████████████████████████████████████████ 121 MiB/s
+  resize_crate        █████████████████████████████████████████████ 115 MiB/s
+  pss_srgb            ███████████████████████████████████████ 101 MiB/s
+  fir_srgb            █████████████████████████████████ 86.4 MiB/s
+  zenresize_srgb      ███████████ 29.4 MiB/s
+  zen_stream_srgb     ███████████ 29.4 MiB/s
+  zenresize_srgb_i16  ███████████ 27.5 MiB/s
+  [1] CI crosses zero
+
+  linear_576_2x_up  30 rounds × 1 calls
+                           mean ±mad ms  95% CI vs base      iB/s
+  ├─ zenresize_linear       49.4 ±0.2ms  [49.3–49.6]ms      25.6M
+  ├─ zenresize_linear_i16   45.1 ±0.2ms  [-8.9%–-8.6%]      28.1M
+  ├─ ps_scalar_linear       16.4 ±0.2ms  [-67.0%–-66.6%]    77.2M
+  ╰─ fir_linear             47.6 ±0.2ms  [-3.7%–-3.3%]      26.6M
+
+  ps_scalar_linear      █████████████████████████████████████████████ 77.2 MiB/s
+  zenresize_linear_i16  ████████████████ 28.1 MiB/s
+  fir_linear            ███████████████ 26.6 MiB/s
+  zenresize_linear      ███████████████ 25.6 MiB/s
+
+  f32_576_2x_up  30 rounds × 1 calls
+                    mean ±mad ms  95% CI vs base     iB/s
+  ├─ zenresize_f32   38.0 ±0.1ms  [37.9–38.0]ms      133M
+  ╰─ fir_f32         26.3 ±0.2ms  [-30.9%–-30.6%]    193M
+
+  fir_f32        █████████████████████████████████████████████████████ 193 MiB/s
+  zenresize_f32  █████████████████████████████████████ 133 MiB/s
+
+  total: 144.4s  (227 noisy rounds)
+═══════════════════════════════════════════════════════════════
+  filter: cargo bench -- --group=NAME  format: --format=llm|csv|md|json

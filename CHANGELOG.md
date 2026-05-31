@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Performance
+- AArch64/WASM: branchless SIMD f16→f32 decode in the f32 resize path's
+  V-filter (`filter_v_row_f16`) and bulk f16→f32, replacing a scalar software
+  conversion that LLVM could not auto-vectorize. The f16↔f32 software path
+  dominated ~90% of the f32 pipeline on ARM (no hardware f16 in the magetypes
+  generic SIMD API, unlike x86's F16C). Measured **+40% to +59%** on the f32
+  and linear-light f32 resize paths across 2x–6x downscale and upscale on
+  Neoverse-N1 (+4% even at 10x), no regression. The decode is bit-identical to
+  the scalar path (verified exhaustively over all 65 536 f16 values), so output
+  is byte-for-byte unchanged. Full numbers + methodology:
+  `benchmarks/arm_neoverse_n1_baseline_2026-05-31.md`.
+
 ### QUEUED BREAKING CHANGES
 <!-- Breaking changes that will ship together in the next major (or minor for 0.x) release. -->
 - `resize_hfirst_streaming` and `resize_hfirst_streaming_f32` now return
