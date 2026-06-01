@@ -4,7 +4,7 @@ zenresize is a SIMD-accelerated image resampling library with crop, resize, and 
 
 ```toml
 [dependencies]
-zenresize = "0.1"
+zenresize = "0.3"
 ```
 
 ## Quick Start
@@ -567,11 +567,10 @@ The imgref functions override the config's dimensions, formats, and stride. Filt
 
 | Feature | Default | Description |
 |---------|---------|-------------|
-| `std` | yes | Enables std library. Disable for `no_std` + `alloc`. |
-| `layout` | yes | Layout negotiation and pipeline execution via [zenlayout](https://crates.io/crates/zenlayout). |
+| `std` | yes | Enables the std library. Disable for `no_std` + `alloc`. |
 | `avx512` | no | Native AVX-512 V-filter kernel (x86-64 only). |
-| `zennode` | no | Self-documenting node definitions for [zennode](https://crates.io/crates/zennode) pipeline integration. |
 | `pretty-safe` | no | Replaces bounds-checked indexing with `get_unchecked` in SIMD kernels where bounds are proven by prior guards. ~17% fewer instructions on x86-64. Introduces `unsafe`; the default build is `#![forbid(unsafe_code)]`. |
+| `bench-simd-competitors` | no | Enables SIMD on pic-scale for the benchmark comparison (off by default, so pic-scale runs scalar-only). |
 
 ## Benchmarks
 
