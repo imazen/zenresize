@@ -8,6 +8,9 @@
   `Result<Vec<u8>, &'static str>` instead of `Vec<u8>`. They previously
   panicked on adversarial inputs; they now validate and surface errors.
 
+### Changed
+- Exclude `tests/` (405 KB of weights fixtures) and `benches/` from published package tarball; local targets unaffected (declarations kept, `benches/` dir present → `cargo bench`/`cargo test` work as before).
+
 ### Fixed
 - Bound weight-table allocation in `ResizeConfig::validate()` so adversarial
   `in_size`/`out_size` ratios cannot trigger multi-GB allocations from a
