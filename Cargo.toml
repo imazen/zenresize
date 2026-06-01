@@ -24,8 +24,10 @@ pretty-safe = []
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512", "bench-simd-competitors", "pretty-safe"))'] }
 
 [dependencies]
-archmage = { version = "0.9.15", default-features = false, features = ["macros"] }
-magetypes = { version = "0.9.15", default-features = false }
+archmage = { version = "0.9.25", default-features = false, features = ["macros"] }
+# 0.9.25 adds the F16Convert trait (hardware f16<->f32 slice converters:
+# F16C on x86-64-v3, NEON-fp16 on aarch64, branchless software elsewhere).
+magetypes = { version = "0.9.25", default-features = false }
 linear-srgb = { version = "0.6.11", default-features = false, features = ["transfer"] }
 safe_unaligned_simd = "0.2.5"
 zenpixels = { version = "0.2.10", default-features = false }

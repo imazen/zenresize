@@ -84,19 +84,20 @@ dependencies = [
 
 [[package]]
 name = "archmage"
-version = "0.9.20"
+version = "0.9.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07b8feacd003460f123e3c5f5e0d57170c1588a2def12c7ab0ca7a8343ebaef1"
+checksum = "e8d00bc6d5f1d92714eb8933a82b02af6ae9b0d27fedad2ee81e9d21e5a10ef7"
 dependencies = [
  "archmage-macros",
  "safe_unaligned_simd",
+ "winarm-cpufeatures",
 ]
 
 [[package]]
 name = "archmage-macros"
-version = "0.9.20"
+version = "0.9.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7eaf39cf41e7b39d7a0b366f362065d149eb8b219fd5fd5a1e4854ca20fc6043"
+checksum = "729f04d20d46413f844f084c0f0e2ecfe10fcafd29d93afcc200c47657560009"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -582,11 +583,12 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "magetypes"
-version = "0.9.20"
+version = "0.9.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d19364760df2c08b9c7c9a6c78a8437cd37d16f3d88c98af304c2adf70f772e"
+checksum = "082262d8d5bb9a4d42144f4203113202b258ab9732e53ebc01856efc3216fce9"
 dependencies = [
  "archmage",
+ "rustversion",
 ]
 
 [[package]]
@@ -923,6 +925,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustversion"
+version = "1.0.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
+
+[[package]]
 name = "safe_unaligned_simd"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1244,6 +1252,12 @@ name = "winapi-x86_64-pc-windows-gnu"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
+
+[[package]]
+name = "winarm-cpufeatures"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d107c80dd656e1a2c254dfb1d57ece73b7f515b8a8684c270c23cab68f4a440d"
 
 [[package]]
 name = "windows"

@@ -15,6 +15,10 @@ use crate::weights::{F32WeightTable, I16_PRECISION, I16WeightTable};
 
 use magetypes::simd::generic::f32x4 as GenericF32x4;
 use magetypes::simd::generic::i32x4 as GenericI32x4;
+// Hardware-accelerated f16<->f32 slice converters (F16C on x86-64-v3,
+// NEON-fp16 on aarch64, branchless software kernel otherwise). The backend
+// `Token` injected by `#[magetypes(...)]` implements this sealed trait.
+use magetypes::simd::F16Convert;
 
 // ============================================================================
 // f32 path
@@ -1240,60 +1244,98 @@ pub(super) fn filter_v_row_u8_i16_impl(
 }
 
 // ============================================================================
-// f16 (half-precision) support — scalar-style (no portable SIMD f16 convert)
+// f16 (half-precision) support — magetypes F16Convert (HW f16<->f32)
 // ============================================================================
+//
+// The bulk row converters delegate straight to the token's `F16Convert` slice
+// methods, which use native F16C (x86-64-v3) / NEON-fp16 (aarch64) when the
+// running CPU has them and a branchless vectorized software kernel otherwise —
+// replacing the former element-by-element `scalar::*_soft` decode. The fused
+// filter kernels below decode their f16 inputs to an f32 scratch via the same
+// slice API once per row, then run the existing f32 accumulation.
 
-/// Bulk convert f32 → f16 row (scalar, uses software conversion).
+/// Bulk convert f32 → f16 row.
 #[magetypes(neon, wasm128)]
 #[inline(always)]
-pub(super) fn f32_to_f16_row_impl(_token: Token, input: &[f32], output: &mut [u16]) {
+pub(super) fn f32_to_f16_row_impl(token: Token, input: &[f32], output: &mut [u16]) {
     debug_assert_eq!(input.len(), output.len());
-    for (inp, out) in input.iter().zip(output.iter_mut()) {
-        *out = super::scalar::f32_to_f16_soft(*inp);
-    }
+    token.f32_to_f16_slice(input, output);
 }
 
-/// Bulk convert f16 → f32 row (scalar, uses software conversion).
+/// Bulk convert f16 → f32 row.
 #[magetypes(neon, wasm128)]
 #[inline(always)]
-pub(super) fn f16_to_f32_row_impl(_token: Token, input: &[u16], output: &mut [f32]) {
+pub(super) fn f16_to_f32_row_impl(token: Token, input: &[u16], output: &mut [f32]) {
     debug_assert_eq!(input.len(), output.len());
-    for (inp, out) in input.iter().zip(output.iter_mut()) {
-        *out = super::scalar::f16_to_f32_soft(*inp);
-    }
+    token.f16_to_f32_slice(input, output);
 }
 
 /// Horizontal f32 convolution with f16 output — dispatch by channel count.
+///
+/// The convolution accumulators are computed scalar-exactly (unchanged
+/// arithmetic, so golden outputs are preserved), gathered into a contiguous
+/// f32 staging buffer, then **encoded to f16 four at a time** with the
+/// register-level [`f32x4::to_f16`] (NEON-fp16 HW on aarch64) instead of the
+/// per-element `f32_to_f16_soft`. The encode is bit-identical to the soft path
+/// for every finite/inf value. Scalar tail for the final < 4 outputs.
 #[magetypes(neon, wasm128)]
 #[inline(always)]
 pub(super) fn filter_h_row_f32_to_f16_impl(
-    _token: Token,
+    token: Token,
     input: &[f32],
     output: &mut [u16],
     weights: &F32WeightTable,
     channels: usize,
 ) {
     let out_width = weights.len();
-    for out_x in 0..out_width {
+    let total = out_width * channels;
+
+    // Compute one convolution accumulator for the flat output position `i`
+    // (i = out_x * channels + c), with the exact scalar arithmetic.
+    let acc_at = |i: usize| -> f32 {
+        let out_x = i / channels;
+        let c = i % channels;
         let left = weights.left[out_x] as usize;
         let w = weights.weights(out_x);
-        let out_offset = out_x * channels;
-
-        for c in 0..channels {
-            let mut acc = 0.0f32;
-            for (t, &weight) in w.iter().enumerate() {
-                acc += input[(left + t) * channels + c] * weight;
-            }
-            output[out_offset + c] = super::scalar::f32_to_f16_soft(acc);
+        let mut acc = 0.0f32;
+        for (t, &weight) in w.iter().enumerate() {
+            acc += input[(left + t) * channels + c] * weight;
         }
+        acc
+    };
+
+    let chunks = total / 4;
+    for ch in 0..chunks {
+        let i = ch * 4;
+        let accs = GenericF32x4::from_array(
+            token,
+            [acc_at(i), acc_at(i + 1), acc_at(i + 2), acc_at(i + 3)],
+        );
+        // Encode 4 f32 -> 4 f16 bit patterns (low 16 bits of each i32 lane).
+        let packed = accs.to_f16().to_array();
+        output[i] = packed[0] as u16;
+        output[i + 1] = packed[1] as u16;
+        output[i + 2] = packed[2] as u16;
+        output[i + 3] = packed[3] as u16;
+    }
+    for i in (chunks * 4)..total {
+        output[i] = super::scalar::f32_to_f16_soft(acc_at(i));
     }
 }
 
 /// Streaming V-filter: f16 rows → f32 output via f32 weights.
+///
+/// Decodes 4 f16 inputs at a time with the register-level
+/// [`i32x4::f16_to_f32`] (NEON-fp16 / WASM software, branchless) then a
+/// separate multiply + add, scalar tail for the remainder. The decode is
+/// bit-identical to `f16_to_f32_soft` for finite inputs, and the arithmetic is
+/// a non-fused `v * weight` then `+=` exactly like the scalar path (NOT
+/// `mul_add` — an FMA would round once and diverge from the golden outputs),
+/// so the f32 result is bit-identical.
 #[magetypes(neon, wasm128)]
 #[inline(always)]
 pub(super) fn filter_v_row_f16_impl(
-    _token: Token,
+    token: Token,
     rows: &[&[u16]],
     output: &mut [f32],
     weights: &[f32],
@@ -1305,19 +1347,47 @@ pub(super) fn filter_v_row_f16_impl(
         *v = 0.0;
     }
 
+    let chunks = width / 4;
     for (row, &weight) in rows.iter().zip(weights.iter()) {
         debug_assert!(row.len() >= width);
-        for x in 0..width {
+        let wv = GenericF32x4::splat(token, weight);
+        for c in 0..chunks {
+            let x = c * 4;
+            // Load 4 f16 bit patterns zero-extended into i32 lanes, decode.
+            let bits = GenericI32x4::from_array(
+                token,
+                [
+                    row[x] as i32,
+                    row[x + 1] as i32,
+                    row[x + 2] as i32,
+                    row[x + 3] as i32,
+                ],
+            );
+            let vals = bits.f16_to_f32();
+            let acc = GenericF32x4::from_slice(token, &output[x..x + 4]);
+            // Non-fused: (v * weight) then add, matching `output[x] += v * w`.
+            let out = acc + (vals * wv);
+            let mut tmp = [0.0f32; 4];
+            out.store(&mut tmp);
+            output[x..x + 4].copy_from_slice(&tmp);
+        }
+        for x in (chunks * 4)..width {
             output[x] += super::scalar::f16_to_f32_soft(row[x]) * weight;
         }
     }
 }
 
 /// Batch V-filter: f16 intermediate → f32 output.
+///
+/// Vectorized 4 output x-positions at a time: a 4-wide f32 accumulator sums
+/// `decode(intermediate[in_y, x..x+4]) * weight` across taps (taps outer, same
+/// order as the scalar path → bit-identical for finite values). Decode uses the
+/// register-level [`i32x4::f16_to_f32`] (NEON-fp16 HW on aarch64); scalar tail
+/// for the remaining < 4 columns.
 #[magetypes(neon, wasm128)]
 #[inline(always)]
 pub(super) fn filter_v_all_f16_impl(
-    _token: Token,
+    token: Token,
     intermediate: &[u16],
     output: &mut [f32],
     h_row_len: usize,
@@ -1325,13 +1395,38 @@ pub(super) fn filter_v_all_f16_impl(
     out_h: usize,
     weights: &F32WeightTable,
 ) {
+    let chunks = h_row_len / 4;
     for out_y in 0..out_h {
         let left = weights.left[out_y];
         let tap_count = weights.tap_count(out_y);
         let w = weights.weights(out_y);
         let out_start = out_y * h_row_len;
 
-        for x in 0..h_row_len {
+        for c in 0..chunks {
+            let x = c * 4;
+            let mut acc = GenericF32x4::zero(token);
+            for (t, &weight) in w[..tap_count].iter().enumerate() {
+                let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
+                let base = in_y * h_row_len + x;
+                let bits = GenericI32x4::from_array(
+                    token,
+                    [
+                        intermediate[base] as i32,
+                        intermediate[base + 1] as i32,
+                        intermediate[base + 2] as i32,
+                        intermediate[base + 3] as i32,
+                    ],
+                );
+                let vals = bits.f16_to_f32();
+                let wv = GenericF32x4::splat(token, weight);
+                // Non-fused multiply then add, matching the scalar `acc += v*w`.
+                acc = acc + (vals * wv);
+            }
+            let mut tmp = [0.0f32; 4];
+            acc.store(&mut tmp);
+            output[out_start + x..out_start + x + 4].copy_from_slice(&tmp);
+        }
+        for x in (chunks * 4)..h_row_len {
             let mut acc = 0.0f32;
             for (t, &weight) in w[..tap_count].iter().enumerate() {
                 let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
