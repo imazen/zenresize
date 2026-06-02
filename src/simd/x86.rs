@@ -15,6 +15,11 @@ use crate::fastmath;
 use crate::proven::{idx, idx_mut, sub};
 use crate::weights::{F32WeightTable, I16_PRECISION, I16WeightTable};
 use archmage::X64V3Token;
+// f16<->f32 slice converters: the V3 entry summons-up to the 16-wide AVX-512F
+// `_mm512_cvtph_ps`/`_mm512_cvtps_ph` when the `avx512` feature is built and the
+// CPU proves V4, else 8-wide F16C — replacing this file's former hand-rolled
+// 8-wide bulk kernels.
+use magetypes::simd::F16Convert;
 #[cfg(feature = "avx512")]
 use archmage::X64V4Token;
 
@@ -2359,50 +2364,21 @@ pub(crate) fn filter_v_row_i16_v3(
 // f16 (IEEE 754 half-precision) kernels — F16C is guaranteed by X64V3Token
 // =============================================================================
 
-/// Bulk convert f32 → f16 row using F16C (vcvtps2ph).
-/// Processes 8 f32 at a time → 8 f16 (stored as u16).
-#[archmage::arcane]
-pub(crate) fn f32_to_f16_row_v3(_token: X64V3Token, input: &[f32], output: &mut [u16]) {
+/// Bulk convert f32 → f16 row via magetypes `F16Convert`. The V3 token's slice
+/// override summons-up to the 16-wide AVX-512F `_mm512_cvtps_ph` when the
+/// `avx512` feature is built and the CPU proves V4 (~1.3 ns amortized summon),
+/// else 8-wide F16C `vcvtps2ph`, else a branchless software tail.
+pub(crate) fn f32_to_f16_row_v3(token: X64V3Token, input: &[f32], output: &mut [u16]) {
     debug_assert_eq!(input.len(), output.len());
-    let len = input.len();
-
-    let (in_chunks, _) = input.as_chunks::<8>();
-    let (out_chunks, _) = output.as_chunks_mut::<8>();
-
-    for (in_chunk, out_chunk) in in_chunks.iter().zip(out_chunks.iter_mut()) {
-        let floats = _mm256_loadu_ps(in_chunk);
-        let halfs = _mm256_cvtps_ph::<0>(floats); // round-to-nearest-even
-        _mm_storeu_si128(out_chunk, halfs);
-    }
-
-    // Scalar tail
-    let chunks8 = in_chunks.len();
-    for i in (chunks8 * 8)..len {
-        output[i] = super::scalar::f32_to_f16_soft(input[i]);
-    }
+    token.f32_to_f16_slice(input, output);
 }
 
-/// Bulk convert f16 → f32 row using F16C (vcvtph2ps).
-/// Processes 8 f16 at a time → 8 f32.
-#[archmage::arcane]
-pub(crate) fn f16_to_f32_row_v3(_token: X64V3Token, input: &[u16], output: &mut [f32]) {
+/// Bulk convert f16 → f32 row via magetypes `F16Convert` (16-wide AVX-512F
+/// summon-up under `avx512`, else 8-wide F16C `vcvtph2ps`). See
+/// [`f32_to_f16_row_v3`].
+pub(crate) fn f16_to_f32_row_v3(token: X64V3Token, input: &[u16], output: &mut [f32]) {
     debug_assert_eq!(input.len(), output.len());
-    let len = input.len();
-
-    let (in_chunks, _) = input.as_chunks::<8>();
-    let (out_chunks, _) = output.as_chunks_mut::<8>();
-
-    for (in_chunk, out_chunk) in in_chunks.iter().zip(out_chunks.iter_mut()) {
-        let halfs = _mm_loadu_si128(in_chunk);
-        let floats = _mm256_cvtph_ps(halfs);
-        _mm256_storeu_ps(out_chunk, floats);
-    }
-
-    // Scalar tail
-    let chunks8 = in_chunks.len();
-    for i in (chunks8 * 8)..len {
-        output[i] = super::scalar::f16_to_f32_soft(input[i]);
-    }
+    token.f16_to_f32_slice(input, output);
 }
 
 /// Horizontal filter: f32 input → f16 (u16) output using AVX2+F16C.

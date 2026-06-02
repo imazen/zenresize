@@ -13,7 +13,7 @@ include = ["/src/**", "/README.md", "/CHANGELOG.md", "/LICENSE*", "/build.rs"]
 [features]
 default = ["std"]
 std = ["archmage/std", "magetypes/std", "linear-srgb/std", "zenpixels/std", "whereat/std", "zenblend/std"]
-avx512 = ["archmage/avx512"]
+avx512 = ["archmage/avx512", "magetypes/avx512"]
 # zennode node definitions (Constrain schema with RIAPI keys)
 # zennode = ["dep:zennode"]
 # Enable SIMD features on pic-scale for benchmarks (default: scalar-only)
@@ -24,10 +24,10 @@ pretty-safe = []
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512", "bench-simd-competitors", "pretty-safe"))'] }
 
 [dependencies]
-archmage = { version = "0.9.25", default-features = false, features = ["macros"] }
+archmage = { version = "0.9.26", default-features = false, features = ["macros"] }
 # 0.9.25 adds the F16Convert trait (hardware f16<->f32 slice converters:
 # F16C on x86-64-v3, NEON-fp16 on aarch64, branchless software elsewhere).
-magetypes = { version = "0.9.25", default-features = false }
+magetypes = { version = "0.9.26", default-features = false }
 linear-srgb = { version = "0.6.11", default-features = false, features = ["transfer"] }
 safe_unaligned_simd = "0.2.5"
 zenpixels = { version = "0.2.10", default-features = false }

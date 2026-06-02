@@ -1254,7 +1254,7 @@ pub(super) fn filter_v_row_u8_i16_impl(
 // filter kernels below decode their f16 inputs to an f32 scratch via the same
 // slice API once per row, then run the existing f32 accumulation.
 
-/// Bulk convert f32 → f16 row.
+/// Bulk convert f32 → f16 row. (aarch64/wasm tiers; x86 lives in `x86.rs`.)
 #[magetypes(neon, wasm128)]
 #[inline(always)]
 pub(super) fn f32_to_f16_row_impl(token: Token, input: &[f32], output: &mut [u16]) {
@@ -1262,7 +1262,7 @@ pub(super) fn f32_to_f16_row_impl(token: Token, input: &[f32], output: &mut [u16
     token.f32_to_f16_slice(input, output);
 }
 
-/// Bulk convert f16 → f32 row.
+/// Bulk convert f16 → f32 row. (aarch64/wasm tiers; x86 lives in `x86.rs`.)
 #[magetypes(neon, wasm128)]
 #[inline(always)]
 pub(super) fn f16_to_f32_row_impl(token: Token, input: &[u16], output: &mut [f32]) {
