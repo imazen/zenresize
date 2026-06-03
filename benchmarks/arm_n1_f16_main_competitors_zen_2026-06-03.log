@@ -1,0 +1,323 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling cfg-if v1.0.4
+   Compiling autocfg v1.5.0
+   Compiling libm v0.2.16
+   Compiling libc v0.2.184
+   Compiling crossbeam-utils v0.8.21
+   Compiling zerocopy v0.8.48
+   Compiling bitflags v2.11.0
+   Compiling rustix v1.1.4
+   Compiling num-traits v0.2.19
+   Compiling utf8parse v0.2.2
+   Compiling rustversion v1.0.22
+   Compiling rayon-core v1.13.0
+   Compiling linux-raw-sys v0.12.1
+   Compiling anstyle-parse v1.0.0
+   Compiling crc32fast v1.5.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling anstyle-query v1.1.5
+   Compiling simd-adler32 v0.3.9
+   Compiling crossbeam-deque v0.8.6
+   Compiling syn v2.0.117
+   Compiling shlex v1.3.0
+   Compiling siphasher v1.0.2
+   Compiling find-msvc-tools v0.1.9
+   Compiling serde_core v1.0.228
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling colorchoice v1.0.5
+   Compiling rand_core v0.6.4
+   Compiling safe_unaligned_simd v0.2.5
+   Compiling anstyle v1.0.14
+   Compiling rand v0.8.6
+   Compiling getrandom v0.2.17
+   Compiling anstream v1.0.0
+   Compiling cc v1.2.60
+   Compiling phf_shared v0.11.3
+   Compiling adler2 v2.0.1
+   Compiling clap_lex v1.1.0
+   Compiling getrandom v0.4.2
+   Compiling zmij v1.0.21
+   Compiling either v1.15.0
+   Compiling strsim v0.11.1
+   Compiling heck v0.5.0
+   Compiling rayon v1.11.0
+   Compiling miniz_oxide v0.8.9
+   Compiling clap_builder v4.6.0
+   Compiling alloca v0.4.0
+   Compiling phf_generator v0.11.3
+   Compiling num_cpus v1.17.0
+   Compiling pxfm v0.1.28
+   Compiling anyhow v1.0.102
+   Compiling thiserror v1.0.69
+   Compiling memchr v2.8.0
+   Compiling serde_json v1.0.149
+   Compiling thiserror v2.0.18
+   Compiling whereat v0.1.5
+   Compiling serde v1.0.228
+   Compiling is_ci v1.2.0
+   Compiling supports-color v3.0.2
+   Compiling core_affinity v0.8.3
+   Compiling flate2 v1.1.9
+   Compiling zerocopy-derive v0.8.48
+   Compiling bytemuck_derive v1.10.2
+   Compiling archmage-macros v0.9.26
+   Compiling scroll_derive v0.11.1
+   Compiling clap_derive v4.6.0
+   Compiling thiserror-impl v2.0.18
+   Compiling scroll v0.11.0
+   Compiling phf_macros v0.11.3
+   Compiling bytemuck v1.25.0
+   Compiling rgb v0.8.53
+   Compiling archmage v0.9.26
+   Compiling serde_derive v1.0.228
+   Compiling thiserror-impl v1.0.69
+   Compiling magetypes v0.9.26
+   Compiling clap v4.6.0
+   Compiling erydanos v0.2.18
+   Compiling fdeflate v0.3.7
+   Compiling plain v0.2.3
+   Compiling zenresize v0.3.1 (/home/ubuntu/bench/zr-main)
+   Compiling tango-bench v0.7.2
+   Compiling once_cell v1.21.4
+   Compiling palette v0.7.6
+   Compiling by_address v1.2.1
+   Compiling litrs v1.0.0
+   Compiling log v0.4.29
+   Compiling zune-core v0.5.1
+   Compiling itoa v1.0.18
+   Compiling fastrand v2.4.1
+   Compiling document-features v0.2.12
+   Compiling tempfile v3.27.0
+   Compiling zune-jpeg v0.5.15
+   Compiling goblin v0.7.1
+   Compiling zenblend v0.1.2
+   Compiling linear-srgb v0.6.11
+   Compiling ppv-lite86 v0.2.21
+   Compiling half v2.7.1
+   Compiling palette_derive v0.7.6
+   Compiling rand_chacha v0.3.1
+   Compiling colorutils-rs v0.7.6
+   Compiling png v0.18.1
+   Compiling phf v0.11.3
+   Compiling zenpixels v0.2.10
+   Compiling moxcms v0.8.1
+   Compiling novtb v0.1.7
+   Compiling colorz v1.1.4
+   Compiling sysinfo v0.36.1
+   Compiling fs4 v0.13.1
+   Compiling terminal_size v0.4.4
+   Compiling approx v0.5.1
+   Compiling libloading v0.8.9
+   Compiling byteorder-lite v0.1.0
+   Compiling fast-srgb8 v1.0.0
+   Compiling glob-match v0.2.1
+   Compiling imgref v1.12.0
+   Compiling zenbench v0.1.5
+warning: function `idx` is never used
+  --> src/proven.rs:13:15
+   |
+13 | pub(crate) fn idx<T>(slice: &[T], i: usize) -> &T {
+   |               ^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `idx_mut` is never used
+  --> src/proven.rs:26:15
+   |
+26 | pub(crate) fn idx_mut<T>(slice: &mut [T], i: usize) -> &mut T {
+   |               ^^^^^^^
+
+warning: function `sub` is never used
+  --> src/proven.rs:39:15
+   |
+39 | pub(crate) fn sub<T>(slice: &[T], range: Range<usize>) -> &[T] {
+   |               ^^^
+
+   Compiling image v0.25.10
+   Compiling pic-scale v0.7.3
+   Compiling fast_image_resize v6.0.0
+warning: `zenresize` (lib) generated 3 warnings
+   Compiling resize v0.8.9
+   Compiling zenlayout v0.2.2
+   Compiling pic-scale-safe v0.1.10
+    Finished `bench` profile [optimized] target(s) in 52.40s
+     Running benches/competitors_zen.rs (target/release/deps/competitors_zen-9f45448f6fdae47e)
+[zenbench] calibration: int=0.66ns/iter mem_bw=32.1GiB/s mem_lat=88.4ns
+[zenbench] timer resolution: 40ns, loop overhead: 0.34ns/iter, TSC: 0.025 ticks/ns (invariant)
+[zenbench] results → /tmp/zenbench/zenbench-1780485901-26d27.txt
+
+═══════════════════════════════════════════════════════════════
+  zenbench  1780485901-26d27
+═══════════════════════════════════════════════════════════════
+
+  srgb_1024_2x_down  70 rounds × 1 calls
+                         mean ±mad ms  95% CI vs base     iB/s
+  ├─ zenresize_srgb       32.4 ±0.2ms  [32.2–32.6]ms      123M
+  ├─ zenresize_srgb_i16   35.4 ±0.3ms  [+8.7%–+9.1%]      113M
+  ├─ zen_stream_srgb      32.5 ±0.2ms  [-0.2%–+0.2%]      123M [1]
+  ├─ ps_scalar_srgb        8.3 ±0.1ms  [-74.5%–-74.2%]    482M
+  ├─ pss_srgb             10.2 ±0.1ms  [-68.9%–-68.6%]    392M
+  ├─ fir_srgb              9.8 ±0.1ms  [-69.6%–-69.3%]    406M
+  ╰─ resize_crate          6.4 ±0.6ms  [-81.5%–-80.3%]    626M
+
+  resize_crate        ████████████████████████████████████████████████ 626 MiB/s
+  ps_scalar_srgb      █████████████████████████████████████ 482 MiB/s
+  fir_srgb            ███████████████████████████████ 406 MiB/s
+  pss_srgb            ██████████████████████████████ 392 MiB/s
+  zenresize_srgb      █████████ 123 MiB/s
+  zen_stream_srgb     █████████ 123 MiB/s
+  zenresize_srgb_i16  █████████ 113 MiB/s
+  [1] CI crosses zero
+
+  linear_1024_2x_down  30 rounds × 1 calls
+                           mean ±mad ms  95% CI vs base      iB/s
+  ├─ zenresize_linear       43.2 ±0.3ms  [43.1–43.3]ms      92.6M
+  ├─ zenresize_linear_i16   32.7 ±0.2ms  [-24.6%–-24.1%]     122M
+  ├─ ps_scalar_linear       34.8 ±0.6ms  [-20.3%–-19.3%]     115M [1]
+  ╰─ fir_linear             37.5 ±0.4ms  [-13.5%–-12.9%]     107M
+
+  zenresize_linear_i16  █████████████████████████████████████████████ 122 MiB/s
+  ps_scalar_linear      ██████████████████████████████████████████ 115 MiB/s
+  fir_linear            ███████████████████████████████████████ 107 MiB/s
+  zenresize_linear      ██████████████████████████████████ 92.6 MiB/s
+  [1] drift r=0.64 — later rounds slower
+
+  f32_1024_2x_down  30 rounds × 1 calls
+                    mean ±mad ms  95% CI vs base     iB/s
+  ├─ zenresize_f32   41.0 ±0.2ms  [40.9–41.1]ms      391M
+  ╰─ fir_f32         23.7 ±0.3ms  [-42.4%–-41.8%]    675M
+
+  fir_f32        █████████████████████████████████████████████████████ 675 MiB/s
+  zenresize_f32  ███████████████████████████████ 391 MiB/s
+
+  srgb_4k_2x_down  9 rounds × 1 calls ⚠ only 9 rounds
+                          mean ±mad ms  95% CI vs base     iB/s
+  ├─ zenresize_srgb       250.6 ±1.7ms  [249.4–251.9]ms    126M
+  ├─ zenresize_srgb_i16   273.7 ±2.1ms  [+8.3%–+10.1%]     116M
+  ├─ zen_stream_srgb      252.7 ±2.1ms  [+0.0%–+1.6%]      125M [1]
+  ├─ ps_scalar_srgb        83.4 ±1.3ms  [-67.4%–-66.1%]    379M
+  ├─ pss_srgb              99.4 ±1.3ms  [-61.0%–-59.7%]    318M
+  ├─ fir_srgb              90.9 ±1.1ms  [-64.4%–-63.1%]    348M
+  ╰─ resize_crate          37.8 ±0.4ms  [-85.5%–-84.3%]    837M
+
+  resize_crate        ████████████████████████████████████████████████ 837 MiB/s
+  ps_scalar_srgb      ██████████████████████ 379 MiB/s
+  fir_srgb            ████████████████████ 348 MiB/s
+  pss_srgb            ██████████████████ 318 MiB/s
+  zenresize_srgb      ███████ 126 MiB/s
+  zen_stream_srgb     ███████ 125 MiB/s
+  zenresize_srgb_i16  ███████ 116 MiB/s
+  [1] CI crosses zero
+
+  linear_4k_2x_down  9 rounds × 1 calls ⚠ only 9 rounds
+                            mean ±mad ms  95% CI vs base      iB/s
+  ├─ zenresize_linear       343.5 ±3.8ms  [341.6–345.3]ms    92.1M
+  ├─ zenresize_linear_i16   253.7 ±2.6ms  [-27.1%–-25.2%]     125M [1]
+  ├─ ps_scalar_linear       226.1 ±2.9ms  [-34.9%–-34.0%]     140M
+  ╰─ fir_linear             337.2 ±2.4ms  [-2.8%–-0.9%]      93.8M [2]
+
+  ps_scalar_linear      █████████████████████████████████████████████ 140 MiB/s
+  zenresize_linear_i16  ████████████████████████████████████████ 125 MiB/s
+  fir_linear            ██████████████████████████████ 93.8 MiB/s
+  zenresize_linear      ██████████████████████████████ 92.1 MiB/s
+  [1] drift r=0.53 — later rounds slower
+  [2] CI crosses zero
+
+  f32_4k_2x_down  14 rounds × 1 calls
+                     mean ±mad ms  95% CI vs base     iB/s
+  ├─ zenresize_f32   333.8 ±1.6ms  [331.0–336.3]ms    379M
+  ╰─ fir_f32         284.7 ±3.1ms  [-15.8%–-13.6%]    445M
+
+  fir_f32        █████████████████████████████████████████████████████ 445 MiB/s
+  zenresize_f32  █████████████████████████████████████████████ 379 MiB/s
+
+  srgb_4k_10x_down  6 rounds × 1 calls ⚠ only 6 rounds
+                          mean ±mad ms  95% CI vs base      iB/s
+  ├─ zenresize_srgb       438.6 ±1.6ms  [436.5–440.7]ms     104M
+  ├─ zenresize_srgb_i16   422.9 ±2.5ms  [-4.0%–-3.0%]       108M
+  ├─ zen_stream_srgb      438.1 ±1.9ms  [-0.5%–+0.3%]       104M [1] [2]
+  ├─ ps_scalar_srgb       160.7 ±2.0ms  [-64.1%–-62.6%]     285M
+  ├─ pss_srgb             174.4 ±2.6ms  [-61.0%–-59.5%]     262M
+  ├─ fir_srgb              95.3 ±0.6ms  [-78.3%–-78.1%]     480M [3]
+  ╰─ resize_crate          28.5 ±0.9ms  [-94.0%–-93.0%]    1.57G
+
+  resize_crate        ███████████████████████████████████████████████ 1.57 GiB/s
+  fir_srgb            ██████████████ 480 MiB/s
+  ps_scalar_srgb      ████████ 285 MiB/s
+  pss_srgb            ████████ 262 MiB/s
+  zenresize_srgb_i16  ███ 108 MiB/s
+  zen_stream_srgb     ███ 104 MiB/s
+  zenresize_srgb      ███ 104 MiB/s
+  [1] CI crosses zero
+  [2] drift r=-0.71 — later rounds faster
+  [3] drift r=0.80 — later rounds slower
+
+  linear_4k_10x_down  6 rounds × 1 calls ⚠ only 6 rounds
+                             mean ±mad ms  95% CI vs base     iB/s
+  ├─ zenresize_linear        434.3 ±4.0ms  [432.1–436.5]ms    105M
+  ├─ zenresize_linear_i16    427.1 ±0.7ms  [-2.3%–-1.1%]      107M
+  ├─ ps_scalar_linear       438.0 ±11.0ms  [-0.4%–+2.2%]      105M [1]
+  ╰─ fir_linear              355.0 ±3.7ms  [-19.1%–-17.4%]    129M [2]
+
+  fir_linear            ██████████████████████████████████████████████ 129 MiB/s
+  zenresize_linear_i16  ██████████████████████████████████████ 107 MiB/s
+  zenresize_linear      ██████████████████████████████████████ 105 MiB/s
+  ps_scalar_linear      █████████████████████████████████████ 105 MiB/s
+  [1] CI crosses zero
+  [2] drift r=-0.77 — later rounds faster
+
+  f32_4k_10x_down  11 rounds × 1 calls
+                     mean ±mad ms  95% CI vs base     iB/s
+  ├─ zenresize_f32   428.6 ±1.2ms  [427.6–430.0]ms    427M
+  ╰─ fir_f32         293.8 ±1.7ms  [-31.7%–-31.2%]    623M
+
+  fir_f32        █████████████████████████████████████████████████████ 623 MiB/s
+  zenresize_f32  ████████████████████████████████████ 427 MiB/s
+
+  srgb_576_2x_up  30 rounds × 1 calls
+                         mean ±mad ms  95% CI vs base      iB/s
+  ├─ zenresize_srgb       43.0 ±0.3ms  [42.9–43.1]ms      29.4M
+  ├─ zenresize_srgb_i16   46.1 ±0.2ms  [+7.0%–+7.6%]      27.4M
+  ├─ zen_stream_srgb      42.9 ±0.2ms  [-0.5%–-0.1%]      29.5M [1]
+  ├─ ps_scalar_srgb       11.4 ±0.1ms  [-73.7%–-73.1%]     111M
+  ├─ pss_srgb             13.7 ±0.1ms  [-68.9%–-68.3%]    92.7M
+  ├─ fir_srgb             15.4 ±0.1ms  [-64.6%–-64.2%]    82.3M
+  ╰─ resize_crate          9.3 ±1.9ms  [-80.4%–-77.5%]     136M [2]
+
+  resize_crate        ███████████████████████████████████████████████ 136 MiB/s
+  ps_scalar_srgb      ██████████████████████████████████████ 111 MiB/s
+  pss_srgb            ████████████████████████████████ 92.7 MiB/s
+  fir_srgb            █████████████████████████████ 82.3 MiB/s
+  zen_stream_srgb     ██████████ 29.5 MiB/s
+  zenresize_srgb      ██████████ 29.4 MiB/s
+  zenresize_srgb_i16  ██████████ 27.4 MiB/s
+  [1] CI crosses zero
+  [2] CV=21%
+
+  linear_576_2x_up  30 rounds × 1 calls
+                           mean ±mad ms  95% CI vs base      iB/s
+  ├─ zenresize_linear       44.9 ±0.4ms  [44.8–45.0]ms      28.2M
+  ├─ zenresize_linear_i16   44.9 ±0.2ms  [-0.6%–-0.1%]      28.2M [1]
+  ├─ ps_scalar_linear       16.5 ±0.2ms  [-63.5%–-62.8%]    76.5M
+  ╰─ fir_linear             50.1 ±0.2ms  [+11.3%–+11.9%]    25.2M
+
+  ps_scalar_linear      █████████████████████████████████████████████ 76.5 MiB/s
+  zenresize_linear      █████████████████ 28.2 MiB/s
+  zenresize_linear_i16  █████████████████ 28.2 MiB/s
+  fir_linear            ███████████████ 25.2 MiB/s
+  [1] CI crosses zero
+
+  f32_576_2x_up  30 rounds × 1 calls
+                    mean ±mad ms  95% CI vs base     iB/s
+  ├─ zenresize_f32   34.7 ±0.2ms  [34.6–34.8]ms      146M
+  ╰─ fir_f32         25.8 ±0.2ms  [-26.0%–-25.5%]    197M
+
+  fir_f32        █████████████████████████████████████████████████████ 197 MiB/s
+  zenresize_f32  ███████████████████████████████████████ 146 MiB/s
+
+  total: 136.2s  (4 noisy rounds)
+═══════════════════════════════════════════════════════════════
+  filter: cargo bench -- --group=NAME  format: --format=llm|csv|md|json
+MAIN_DONE_0
