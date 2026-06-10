@@ -8,6 +8,9 @@
   `Result<Vec<u8>, &'static str>` instead of `Vec<u8>`. They previously
   panicked on adversarial inputs; they now validate and surface errors.
 
+### Added
+- Versioned public-API surface snapshot at `docs/public-api/zenresize.txt`, regenerated on every `cargo test` by `tests/public_api_doc.rs` (`ZEN_API_DOC=check` verifies in the CI clippy job, `=off` skips); `justfile` recipes `fmt` / `api-doc` / `api-doc-check`. Dev-only — not part of the published package (include-whitelist already excludes it).
+
 ### Changed
 - Exclude `tests/` (405 KB of weights fixtures) and `benches/` from published package tarball; local targets unaffected (declarations kept, `benches/` dir present → `cargo bench`/`cargo test` work as before).
 
