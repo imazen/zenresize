@@ -1,0 +1,198 @@
+# zenresize public API — doc(hidden) items and excluded-feature surface
+# excluded features: (none)
+# (regenerated on every `cargo test` by zenutils-apidoc; ZEN_API_DOC=check verifies, =off skips).
+# Encodings: crate-name prefix stripped; auto traits collapse to a
+# count + exceptions; trait impls collapse to one roster line per
+# type (method signatures live at the trait definition); blanket
+# impls omitted; re-export duplicates annotated `[also: path]`.
+# DO NOT EDIT BY HAND — commit regenerated changes with the code.
+
+## summary
+#
+#   pub modules                                 4
+#   pub types (struct/enum/trait/alias)         5
+#   pub consts/statics                          2
+#   free functions                              2
+#   inherent methods                           45
+#   struct fields                              16
+#   enum variants                              62
+#   re-exports                                  8
+#   trait roster entries (type × trait)        24
+#   auto-trait-complete types                   4
+#
+# per-module pub lines:
+#   (root)                           46
+#   composite                         1
+#   fastmath                          8
+#   filter                           61
+#   fit                               1
+#   plane                             1
+#   simd                              2
+#   weights                          24
+
+## items (143 lines)
+
+#[non_exhaustive] #[repr(u8)] pub enum Filter [also: filter]
+pub const weights::I16_PRECISION: i32
+pub const weights::WEIGHT_THRESHOLD: f64
+pub fn OrientOutput::assert_fields_are_eq(&self)
+pub fn ResizeConfigBuilder::filter(self, filter::Filter) -> Self
+pub fn ResizeConfigBuilder::sharpen(self, f32) -> Self
+pub fn ResizeConfigBuilder::sharpen_percent(self, f32) -> Self
+pub fn ResizeConfigBuilder::up_filter(self, filter::Filter) -> Self
+pub fn SourceRegion::assert_fields_are_eq(&self)
+pub fn StreamingError::assert_fields_are_eq(&self)
+pub fn WorkingFormat::assert_fields_are_eq(&self)
+pub fn composite::CompositeError::assert_fields_are_eq(&self)
+pub fn filter::Filter::all() -> &'static [filter::Filter]
+pub fn filter::Filter::assert_fields_are_eq(&self)
+pub fn filter::Filter::clone(&self) -> filter::Filter
+pub fn filter::Filter::cmp(&self, &filter::Filter) -> core::cmp::Ordering
+pub fn filter::Filter::default() -> filter::Filter
+pub fn filter::Filter::eq(&self, &filter::Filter) -> bool
+pub fn filter::Filter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn filter::Filter::hash<__H: core::hash::Hasher>(&self, &mut __H)
+pub fn filter::Filter::name(&self) -> &'static str
+pub fn filter::Filter::partial_cmp(&self, &filter::Filter) -> core::option::Option<core::cmp::Ordering>
+pub fn filter::InterpolationDetails::calculate_percent_negative_weight(&self) -> f64
+pub fn filter::InterpolationDetails::clone(&self) -> filter::InterpolationDetails
+pub fn filter::InterpolationDetails::create(filter::Filter) -> Self
+pub fn filter::InterpolationDetails::default() -> Self
+pub fn filter::InterpolationDetails::filter(&self, f64) -> f64
+pub fn filter::InterpolationDetails::with_blur(self, f64) -> Self
+pub fn filter::InterpolationDetails::with_lobe_ratio(self, f32) -> Self
+pub fn filter::InterpolationDetails::with_sharpen_percent(self, f32) -> Self
+pub fn fit::FitMode::assert_fields_are_eq(&self)
+pub fn plane::PlaneResizer::new(filter::Filter, u32, u32, u32, u32) -> Self
+pub fn simd::filter_v_all_u8_i16(&[u8], &mut [u8], usize, usize, usize, &weights::I16WeightTable)
+pub fn simd::filter_v_all_u8_i16_tiled(&[u8], &mut [u8], usize, usize, usize, &weights::I16WeightTable, usize)
+pub fn weights::F32WeightTable::clone(&self) -> weights::F32WeightTable
+pub fn weights::F32WeightTable::is_empty(&self) -> bool
+pub fn weights::F32WeightTable::len(&self) -> usize
+pub fn weights::F32WeightTable::new(u32, u32, &filter::InterpolationDetails) -> Self
+pub fn weights::F32WeightTable::tap_count(&self, usize) -> usize
+pub fn weights::F32WeightTable::weights(&self, usize) -> &[f32]
+pub fn weights::F32WeightTable::weights_padded(&self, usize) -> &[f32]
+pub fn weights::I16WeightTable::clone(&self) -> weights::I16WeightTable
+pub fn weights::I16WeightTable::expanded_4ch_all(&self) -> &[i16]
+pub fn weights::I16WeightTable::is_empty(&self) -> bool
+pub fn weights::I16WeightTable::len(&self) -> usize
+pub fn weights::I16WeightTable::new(u32, u32, &filter::InterpolationDetails) -> Self
+pub fn weights::I16WeightTable::tap_count(&self, usize) -> usize
+pub fn weights::I16WeightTable::weights(&self, usize) -> &[i16]
+pub fn weights::I16WeightTable::weights_expanded_4ch(&self, usize) -> &[i16]
+pub fn weights::I16WeightTable::weights_padded(&self, usize) -> &[i16]
+pub mod fastmath
+pub mod filter
+pub mod simd
+pub mod weights
+pub struct filter::InterpolationDetails
+pub struct weights::F32WeightTable
+pub struct weights::I16WeightTable
+pub use fastmath::bt709_from_linear
+pub use fastmath::bt709_to_linear
+pub use fastmath::hlg_from_linear
+pub use fastmath::hlg_to_linear
+pub use fastmath::pq_from_linear
+pub use fastmath::pq_to_linear
+pub use fastmath::srgb_from_linear
+pub use fastmath::srgb_to_linear
+pub Filter::Box = 24
+pub Filter::CatmullRom = 13
+pub Filter::CatmullRomFast = 25
+pub Filter::CatmullRomFastSharp = 26
+pub Filter::Cubic = 11
+pub Filter::CubicBSpline = 15
+pub Filter::CubicFast = 10
+pub Filter::CubicSharp = 12
+pub Filter::Fastest = 27
+pub Filter::Ginseng = 4
+pub Filter::GinsengSharp = 5
+pub Filter::Hermite = 16
+pub Filter::Jinc = 17
+pub Filter::Lanczos = 6
+pub Filter::Lanczos2 = 8
+pub Filter::Lanczos2Sharp = 9
+pub Filter::LanczosSharp = 7
+pub Filter::LegacyIDCTFilter = 31
+pub Filter::Linear = 23
+pub Filter::Mitchell = 14
+pub Filter::MitchellFast = 28
+pub Filter::NCubic = 29
+pub Filter::NCubicSharp = 30
+pub Filter::RawLanczos2 = 20
+pub Filter::RawLanczos2Sharp = 21
+pub Filter::RawLanczos3 = 18
+pub Filter::RawLanczos3Sharp = 19
+pub Filter::Robidoux = 2
+pub Filter::RobidouxFast = 1
+pub Filter::RobidouxSharp = 3
+pub Filter::Triangle = 22
+pub ResizeConfig::filter: filter::Filter
+pub ResizeConfig::up_filter: core::option::Option<filter::Filter>
+pub filter::Filter::Box = 24
+pub filter::Filter::CatmullRom = 13
+pub filter::Filter::CatmullRomFast = 25
+pub filter::Filter::CatmullRomFastSharp = 26
+pub filter::Filter::Cubic = 11
+pub filter::Filter::CubicBSpline = 15
+pub filter::Filter::CubicFast = 10
+pub filter::Filter::CubicSharp = 12
+pub filter::Filter::Fastest = 27
+pub filter::Filter::Ginseng = 4
+pub filter::Filter::GinsengSharp = 5
+pub filter::Filter::Hermite = 16
+pub filter::Filter::Jinc = 17
+pub filter::Filter::Lanczos = 6
+pub filter::Filter::Lanczos2 = 8
+pub filter::Filter::Lanczos2Sharp = 9
+pub filter::Filter::LanczosSharp = 7
+pub filter::Filter::LegacyIDCTFilter = 31
+pub filter::Filter::Linear = 23
+pub filter::Filter::Mitchell = 14
+pub filter::Filter::MitchellFast = 28
+pub filter::Filter::NCubic = 29
+pub filter::Filter::NCubicSharp = 30
+pub filter::Filter::RawLanczos2 = 20
+pub filter::Filter::RawLanczos2Sharp = 21
+pub filter::Filter::RawLanczos3 = 18
+pub filter::Filter::RawLanczos3Sharp = 19
+pub filter::Filter::Robidoux = 2
+pub filter::Filter::RobidouxFast = 1
+pub filter::Filter::RobidouxSharp = 3
+pub filter::Filter::Triangle = 22
+pub filter::InterpolationDetails::blur: f64
+pub filter::InterpolationDetails::lobe_ratio_goal: core::option::Option<f32>
+pub filter::InterpolationDetails::p1: f64
+pub filter::InterpolationDetails::p2: f64
+pub filter::InterpolationDetails::p3: f64
+pub filter::InterpolationDetails::q1: f64
+pub filter::InterpolationDetails::q2: f64
+pub filter::InterpolationDetails::q3: f64
+pub filter::InterpolationDetails::q4: f64
+pub filter::InterpolationDetails::window: f64
+pub weights::F32WeightTable::left: alloc::vec::Vec<i32>
+pub weights::F32WeightTable::max_taps: usize
+pub weights::I16WeightTable::left: alloc::vec::Vec<i32>
+pub weights::I16WeightTable::max_taps: usize
+
+## trait impls (14 types)
+
+Bt709: TrivialClone
+Hlg: TrivialClone
+NoTransfer: TrivialClone
+OrientOutput: TrivialClone
+Pq: TrivialClone
+Srgb: TrivialClone
+WorkingFormat: TrivialClone
+composite::NoBackground: TrivialClone
+composite::SliceBackground<'a>: TrivialClone
+filter::Filter: Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, TrivialClone
+filter::InterpolationDetails: Clone, Default
+fit::FitMode: TrivialClone
+weights::F32WeightTable: Clone
+weights::I16WeightTable: Clone
+
+## auto traits
+
+4 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe

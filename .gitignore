@@ -6,6 +6,7 @@
 
 # Rust build artifacts
 target/
+apidoc/target/
 
 # Fuzz build artifacts and crashes
 fuzz/target/

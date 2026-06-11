@@ -1690,7 +1690,6 @@ dependencies = [
  "resize",
  "rgb",
  "safe_unaligned_simd",
- "serde_json",
  "tango-bench",
  "whereat",
  "zenbench",

@@ -1,0 +1,15 @@
+# CI-free public-API snapshot runner — the only package depending on
+# zenutils-apidoc. The empty [workspace] table detaches it from the parent
+# package (zenresize has no workspace table to `exclude` it from), so plain
+# `cargo test` and every CI job (including --all-features ones) never
+# compile the apidoc tree or run rustdoc. Regenerate via `just api-doc`.
+[package]
+name = "zenresize-apidoc"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+zenutils-apidoc = "0.1.0"
