@@ -19,9 +19,9 @@ use archmage::X64V3Token;
 // `_mm512_cvtph_ps`/`_mm512_cvtps_ph` when the `avx512` feature is built and the
 // CPU proves V4, else 8-wide F16C — replacing this file's former hand-rolled
 // 8-wide bulk kernels.
-use magetypes::simd::F16Convert;
 #[cfg(feature = "avx512")]
 use archmage::X64V4Token;
+use magetypes::simd::F16Convert;
 
 // Safe unaligned SIMD load/store — takes references instead of raw pointers.
 // Explicit imports because names overlap with core::arch intrinsics.

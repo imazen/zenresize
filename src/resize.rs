@@ -1039,9 +1039,9 @@ fn resize_hfirst_streaming_inner<const N: usize>(
             // sized to N is allocation-free per inner iteration.
             let empty: &[u8] = &[];
             let mut stack_refs: [&[u8]; N] = [empty; N];
-            for t in 0..tap_count {
+            for (t, slot) in stack_refs.iter_mut().enumerate().take(tap_count) {
                 let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                stack_refs[t] = &ring[in_y % cache_size];
+                *slot = &ring[in_y % cache_size];
             }
             simd::filter_v_row_u8_i16(
                 &stack_refs[..tap_count],
@@ -1063,9 +1063,9 @@ fn resize_hfirst_streaming_inner<const N: usize>(
             .ok_or("output offset overflows usize")?;
         let empty: &[u8] = &[];
         let mut stack_refs: [&[u8]; N] = [empty; N];
-        for t in 0..tap_count {
+        for (t, slot) in stack_refs.iter_mut().enumerate().take(tap_count) {
             let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-            stack_refs[t] = &ring[in_y % cache_size];
+            *slot = &ring[in_y % cache_size];
         }
         simd::filter_v_row_u8_i16(
             &stack_refs[..tap_count],
@@ -1306,9 +1306,9 @@ fn resize_hfirst_streaming_f32_inner<const N: usize>(
 
             let empty: &[u16] = &[];
             let mut stack_refs: [&[u16]; N] = [empty; N];
-            for t in 0..tap_count {
+            for (t, slot) in stack_refs.iter_mut().enumerate().take(tap_count) {
                 let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-                stack_refs[t] = &ring[in_y % cache_size];
+                *slot = &ring[in_y % cache_size];
             }
             simd::filter_v_row_f16(&stack_refs[..tap_count], &mut temp_output, weights);
 
@@ -1338,9 +1338,9 @@ fn resize_hfirst_streaming_f32_inner<const N: usize>(
 
         let empty: &[u16] = &[];
         let mut stack_refs: [&[u16]; N] = [empty; N];
-        for t in 0..tap_count {
+        for (t, slot) in stack_refs.iter_mut().enumerate().take(tap_count) {
             let in_y = (left + t as i32).clamp(0, in_h as i32 - 1) as usize;
-            stack_refs[t] = &ring[in_y % cache_size];
+            *slot = &ring[in_y % cache_size];
         }
         simd::filter_v_row_f16(&stack_refs[..tap_count], &mut temp_output, weights);
         if needs_premul {
