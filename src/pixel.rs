@@ -294,6 +294,19 @@ pub struct ResizeConfig {
     /// The total output dimensions become `(left + out_width + right)` by
     /// `(top + out_height + bottom)`.
     pub padding: Option<Padding>,
+    /// Maximum total output pixels (`out_width * out_height`) accepted by
+    /// [`validate`](Self::validate), bounding the output-buffer allocation
+    /// when target dimensions come from untrusted input.
+    ///
+    /// The weight-table cap in `validate` binds *downscales* (large tap
+    /// counts) but **not upscales** — an upscale uses a small fixed tap
+    /// count, so a tiny header advertising huge target dimensions could still
+    /// force a multi-gigabyte `vec![0; out_w * out_h * channels]`. This cap
+    /// closes that gap.
+    ///
+    /// Defaults to `Some(120_000_000)` (120 MP — admits 108 MP phone photos).
+    /// Set to `None` to disable the cap (not recommended for untrusted dims).
+    pub max_output_pixels: Option<u64>,
 }
 
 impl ResizeConfig {
@@ -364,6 +377,19 @@ impl ResizeConfig {
             .is_none_or(|sum| sum > MAX_WEIGHT_TABLE_ELEMENTS)
         {
             return Err("combined weight table size exceeds memory cap");
+        }
+
+        // Bound the OUTPUT-buffer allocation. The weight-table cap above binds
+        // downscales (large taps) but NOT upscales (fixed small taps), so a
+        // tiny header advertising huge target dimensions could still force a
+        // multi-gigabyte `vec![0; out_w * out_h * channels]`. Cap the total
+        // output pixel count. `out_width`/`out_height` are `u32` (validated
+        // `> 0` above); their product fits in `u64` (`u32::MAX² < u64::MAX`).
+        if let Some(max) = self.max_output_pixels {
+            let out_pixels = self.out_width as u64 * self.out_height as u64;
+            if out_pixels > max {
+                return Err("output pixel count exceeds max_output_pixels cap");
+            }
         }
 
         // Reject non-finite (NaN / infinity) numeric configuration. These
@@ -645,6 +671,7 @@ pub struct ResizeConfigBuilder {
     out_stride: usize,
     source_region: Option<SourceRegion>,
     padding: Option<Padding>,
+    max_output_pixels: Option<u64>,
 }
 
 impl ResizeConfigBuilder {
@@ -667,6 +694,7 @@ impl ResizeConfigBuilder {
             out_stride: 0,
             source_region: None,
             padding: None,
+            max_output_pixels: Some(120_000_000),
         }
     }
 
@@ -909,6 +937,17 @@ impl ResizeConfigBuilder {
         self
     }
 
+    /// Set the maximum total output pixels (`out_width * out_height`) accepted
+    /// by [`ResizeConfig::validate`].
+    ///
+    /// Defaults to `Some(120_000_000)` (120 MP). Pass `None` to disable the
+    /// cap — not recommended when target dimensions come from untrusted input,
+    /// since an upscale's output buffer would otherwise be unbounded.
+    pub fn max_output_pixels(mut self, max: Option<u64>) -> Self {
+        self.max_output_pixels = max;
+        self
+    }
+
     /// Build the configuration.
     pub fn build(self) -> ResizeConfig {
         let output = self.output.unwrap_or(self.input);
@@ -930,6 +969,7 @@ impl ResizeConfigBuilder {
             out_stride: self.out_stride,
             source_region: self.source_region,
             padding: self.padding,
+            max_output_pixels: self.max_output_pixels,
         }
     }
 }
@@ -943,6 +983,41 @@ mod validate_tests {
             .filter(crate::filter::Filter::Lanczos)
             .format(zenpixels::PixelDescriptor::RGBA8_SRGB)
             .build()
+    }
+
+    #[test]
+    fn default_output_pixel_cap_is_120mp() {
+        assert_eq!(base_config().max_output_pixels, Some(120_000_000));
+    }
+
+    #[test]
+    fn rejects_output_exceeding_pixel_cap() {
+        // 12000x11000 = 132 MP output exceeds the default 120 MP cap. This is
+        // an *upscale* (small fixed taps) so the weight-table cap does not
+        // bind — only the output-pixel cap rejects it.
+        let cfg = ResizeConfig::builder(100, 100, 12_000, 11_000).build();
+        assert!(
+            cfg.validate().is_err(),
+            "output above max_output_pixels must be rejected"
+        );
+    }
+
+    #[test]
+    fn accepts_108mp_within_default_cap() {
+        // 12000x9000 = 108 MP (common phone-photo size) must pass the cap.
+        let cfg = ResizeConfig::builder(100, 100, 12_000, 9_000).build();
+        assert!(cfg.validate().is_ok(), "108 MP output must be accepted");
+    }
+
+    #[test]
+    fn output_pixel_cap_opt_out_with_none() {
+        let cfg = ResizeConfig::builder(100, 100, 12_000, 11_000)
+            .max_output_pixels(None)
+            .build();
+        assert!(
+            cfg.validate().is_ok(),
+            "disabling the cap must allow large upscales"
+        );
     }
 
     #[test]
