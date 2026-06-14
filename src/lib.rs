@@ -65,7 +65,9 @@ pub use zenpixels::{
 // Re-exports: minimal public API
 pub use filter::Filter;
 pub use fit::{FitMode, fit_cover_source_crop, fit_dims};
-pub use pixel::{Element, LobeRatio, Padding, ResizeConfig, ResizeConfigBuilder, SourceRegion};
+pub use pixel::{
+    ConfigError, Element, LobeRatio, Padding, ResizeConfig, ResizeConfigBuilder, SourceRegion,
+};
 pub use plane::PlaneResizer;
 pub use resize::Resizer;
 pub use streaming::{OrientOutput, StreamingError, StreamingResize, WorkingFormat};
