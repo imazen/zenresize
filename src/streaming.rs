@@ -41,7 +41,7 @@ use alloc::{boxed::Box, vec, vec::Vec};
 use crate::color;
 use crate::composite::{self, Background, CompositeError, NoBackground};
 use crate::filter::InterpolationDetails;
-use crate::pixel::ResizeConfig;
+use crate::pixel::{ConfigError, ResizeConfig};
 use crate::simd;
 use crate::transfer::{Bt709, Hlg, Pq, Srgb, TransferCurve};
 use crate::weights::{F32WeightTable, I16WeightTable};
@@ -449,8 +449,24 @@ pub struct StreamingResize<B: Background = NoBackground> {
 
 impl StreamingResize<NoBackground> {
     /// Create a new streaming resizer (no background compositing).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `config` fails [`ResizeConfig::validate`] (zero/overflowing
+    /// dimensions, an oversized weight table, an output above
+    /// [`max_output_pixels`](ResizeConfig::max_output_pixels), or non-finite
+    /// numeric parameters). When `config` is derived from untrusted input, use
+    /// [`try_new`](Self::try_new) to handle the error instead of panicking.
     pub fn new(config: &ResizeConfig) -> Self {
         Self::new_inner(config, NoBackground, false, 0)
+    }
+
+    /// Fallible constructor: returns the [`ResizeConfig::validate`] error
+    /// instead of panicking. Prefer this when dimensions come from untrusted
+    /// input.
+    pub fn try_new(config: &ResizeConfig) -> Result<Self, At<ConfigError>> {
+        config.validate().map_err(|msg| at!(ConfigError(msg)))?;
+        Ok(Self::new_inner(config, NoBackground, false, 0))
     }
 
     /// Create a streaming resizer with a batch hint for [`push_rows()`](Self::push_rows).

@@ -13,15 +13,15 @@
 #   pub types (struct/enum/trait/alias)         5
 #   pub consts/statics                          2
 #   free functions                              2
-#   inherent methods                           45
+#   inherent methods                           46
 #   struct fields                              16
 #   enum variants                              62
 #   re-exports                                  8
-#   trait roster entries (type × trait)        24
+#   trait roster entries (type × trait)        25
 #   auto-trait-complete types                   4
 #
 # per-module pub lines:
-#   (root)                           46
+#   (root)                           47
 #   composite                         1
 #   fastmath                          8
 #   filter                           61
@@ -30,11 +30,12 @@
 #   simd                              2
 #   weights                          24
 
-## items (143 lines)
+## items (144 lines)
 
 #[non_exhaustive] #[repr(u8)] pub enum Filter [also: filter]
 pub const weights::I16_PRECISION: i32
 pub const weights::WEIGHT_THRESHOLD: f64
+pub fn ConfigError::assert_fields_are_eq(&self)
 pub fn OrientOutput::assert_fields_are_eq(&self)
 pub fn ResizeConfigBuilder::filter(self, filter::Filter) -> Self
 pub fn ResizeConfigBuilder::sharpen(self, f32) -> Self
@@ -176,9 +177,10 @@ pub weights::F32WeightTable::max_taps: usize
 pub weights::I16WeightTable::left: alloc::vec::Vec<i32>
 pub weights::I16WeightTable::max_taps: usize
 
-## trait impls (14 types)
+## trait impls (15 types)
 
 Bt709: TrivialClone
+ConfigError: TrivialClone
 Hlg: TrivialClone
 NoTransfer: TrivialClone
 OrientOutput: TrivialClone

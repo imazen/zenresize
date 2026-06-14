@@ -224,6 +224,26 @@ impl Padding {
 // ResizeConfig
 // =============================================================================
 
+/// Error returned by the fallible resizer constructors
+/// ([`Resizer::try_new`](crate::Resizer::try_new) /
+/// [`StreamingResize::try_new`](crate::StreamingResize::try_new)) when a
+/// configuration fails [`ResizeConfig::validate`].
+///
+/// Wraps the validation message. The infallible `new` constructors panic on
+/// the same conditions; prefer `try_new` when dimensions come from untrusted
+/// input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConfigError(pub &'static str);
+
+impl core::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for ConfigError {}
+
 /// Resize configuration built with [`ResizeConfigBuilder`].
 ///
 /// Use [`ResizeConfig::builder()`] to create one.
