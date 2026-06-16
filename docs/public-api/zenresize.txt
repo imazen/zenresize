@@ -6,7 +6,7 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: zenresize.txt 298 lines (supported surface) | zenresize.features.txt 0 added (features: avx512,bench-simd-competitors,pretty-safe,std) | zenresize.internal.txt 160 lines (203 hidden + 0 excluded-feature)
+# files: zenresize.txt 296 lines (supported surface) | zenresize.features.txt 0 added (features: avx512,bench-simd-competitors,pretty-safe,std) | zenresize.internal.txt 158 lines (201 hidden + 0 excluded-feature)
 
 ## summary
 #
@@ -14,8 +14,8 @@
 #   pub types (struct/enum/trait/alias)        35
 #   pub consts/statics                          4
 #   free functions                             17
-#   inherent methods                          153
-#   struct fields                              26
+#   inherent methods                          152
+#   struct fields                              27
 #   enum variants                              27
 #   re-exports                                 20
 #   trait roster entries (type × trait)        88
@@ -23,12 +23,12 @@
 #   auto-trait exceptions                       2
 #
 # per-module pub lines:
-#   (root)                          232
+#   (root)                          231
 #   composite                        34
 #   fit                               7
 #   plane                            13
 
-## items (272 lines)
+## items (271 lines)
 
 pub mod zenresize
 pub use AlphaMode
@@ -141,6 +141,7 @@ pub ResizeConfig::input: zenpixels::descriptor::PixelDescriptor
 pub ResizeConfig::kernel_width_scale: core::option::Option<f64>
 pub ResizeConfig::linear: bool
 pub ResizeConfig::lobe_ratio: LobeRatio
+pub ResizeConfig::max_output_pixels: core::option::Option<u64>
 pub ResizeConfig::out_height: u32
 pub ResizeConfig::out_stride: usize
 pub ResizeConfig::out_width: u32
@@ -179,6 +180,7 @@ pub fn ResizeConfigBuilder::input(self, zenpixels::descriptor::PixelDescriptor) 
 pub fn ResizeConfigBuilder::kernel_width_scale(self, f64) -> Self
 pub fn ResizeConfigBuilder::linear(self) -> Self
 pub fn ResizeConfigBuilder::lobe_ratio(self, LobeRatio) -> Self
+pub fn ResizeConfigBuilder::max_output_pixels(self, core::option::Option<u64>) -> Self
 pub fn ResizeConfigBuilder::out_stride(self, usize) -> Self
 pub fn ResizeConfigBuilder::output(self, zenpixels::descriptor::PixelDescriptor) -> Self
 pub fn ResizeConfigBuilder::padding(self, u32, u32, u32, u32) -> Self
