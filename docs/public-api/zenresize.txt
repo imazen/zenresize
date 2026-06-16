@@ -11,15 +11,15 @@
 ## summary
 #
 #   pub modules                                 4
-#   pub types (struct/enum/trait/alias)        34
+#   pub types (struct/enum/trait/alias)        35
 #   pub consts/statics                          4
 #   free functions                             17
 #   inherent methods                          152
 #   struct fields                              27
 #   enum variants                              27
 #   re-exports                                 20
-#   trait roster entries (type × trait)        81
-#   auto-trait-complete types                  20
+#   trait roster entries (type × trait)        88
+#   auto-trait-complete types                  21
 #   auto-trait exceptions                       2
 #
 # per-module pub lines:
@@ -111,6 +111,7 @@ pub WorkingFormat::F32
 pub WorkingFormat::I16Linear
 pub WorkingFormat::I16Srgb
 pub struct Bt709
+pub struct ConfigError(pub &'static str)
 pub struct Hlg
 pub struct NoBackground [also: composite]
 pub struct NoTransfer
@@ -194,6 +195,7 @@ pub fn ResizeConfigBuilder::up_filter(self, crate::filter::Filter) -> Self
 pub fn ResizeConfigBuilder::with_padding(self, Padding) -> Self
 pub struct Resizer<B: composite::Background>
 pub fn Resizer<composite::NoBackground>::new(&ResizeConfig) -> Self
+pub fn Resizer<composite::NoBackground>::try_new(&ResizeConfig) -> core::result::Result<Self, whereat::at::At<ConfigError>>
 pub fn Resizer<B>::background_mut(&mut self) -> &mut B
 pub fn Resizer<B>::into_background(self) -> B
 pub fn Resizer<B>::resize(&mut self, &[u8]) -> alloc::vec::Vec<u8>
@@ -236,6 +238,7 @@ pub fn composite::StreamedBackground::push_row(&mut self, &[f32])
 pub fn composite::StreamedBackground::rows_pushed(&self) -> u32
 pub struct StreamingResize<B: composite::Background>
 pub fn StreamingResize<composite::NoBackground>::new(&ResizeConfig) -> Self
+pub fn StreamingResize<composite::NoBackground>::try_new(&ResizeConfig) -> core::result::Result<Self, whereat::at::At<ConfigError>>
 pub fn StreamingResize<composite::NoBackground>::with_batch_hint(&ResizeConfig, u32) -> Self
 pub fn StreamingResize<B>::background_mut(&mut self) -> &mut B
 pub fn StreamingResize<B>::finish(&mut self) -> u32
@@ -302,9 +305,10 @@ pub fn resize_hfirst_streaming(&ResizeConfig, &[u8]) -> core::result::Result<all
 pub fn resize_hfirst_streaming_f32(&ResizeConfig, &[u8]) -> core::result::Result<alloc::vec::Vec<u8>, &'static str>
 pub fn unpremultiply_f32_row(&mut [f32]) [also: composite]
 
-## trait impls (22 types)
+## trait impls (23 types)
 
 Bt709: Clone, Copy, Debug, Default, TransferCurve
+ConfigError: Clone, Copy, Debug, Display, Eq, Error, PartialEq
 Hlg: Clone, Copy, Debug, Default, TransferCurve
 LobeRatio: Clone, Debug, Default, PartialEq
 NoTransfer: Clone, Copy, Debug, Default, TransferCurve
@@ -329,6 +333,6 @@ u8: Element
 
 ## auto traits
 
-20 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+21 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
 Resizer<B>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
 StreamingResize<B>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe

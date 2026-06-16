@@ -10,7 +10,7 @@ use alloc::{vec, vec::Vec};
 use crate::color;
 use crate::composite::{Background, CompositeError, NoBackground};
 use crate::filter::InterpolationDetails;
-use crate::pixel::ResizeConfig;
+use crate::pixel::{ConfigError, ResizeConfig};
 use crate::proven;
 use crate::simd;
 use crate::streaming::StreamingResize;
@@ -101,11 +101,26 @@ pub struct Resizer<B: Background = NoBackground> {
 impl Resizer<NoBackground> {
     /// Create a new resizer for the given configuration.
     /// Pre-computes weight tables.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `config` fails [`ResizeConfig::validate`]. When `config` is
+    /// derived from untrusted input, use [`try_new`](Self::try_new) instead.
     pub fn new(config: &ResizeConfig) -> Self {
         Resizer {
             config: config.clone(),
             stream: StreamingResize::new(config),
         }
+    }
+
+    /// Fallible constructor: returns the [`ResizeConfig::validate`] error
+    /// instead of panicking. Prefer this when dimensions come from untrusted
+    /// input.
+    pub fn try_new(config: &ResizeConfig) -> Result<Self, At<ConfigError>> {
+        Ok(Resizer {
+            config: config.clone(),
+            stream: StreamingResize::try_new(config)?,
+        })
     }
 }
 
@@ -1513,6 +1528,29 @@ mod tests {
             .format(PixelDescriptor::RGBA8_SRGB)
             .srgb()
             .build()
+    }
+
+    #[test]
+    fn try_new_surfaces_validate_error_instead_of_panicking() {
+        // Valid config -> Ok.
+        assert!(Resizer::try_new(&test_config(8, 8, 4, 4)).is_ok());
+
+        // Invalid config (zero output width) -> Err, NOT a panic. This is the
+        // path a server hits on untrusted dimensions.
+        let mut bad = test_config(8, 8, 4, 4);
+        bad.out_width = 0;
+        assert!(
+            Resizer::try_new(&bad).is_err(),
+            "invalid config must be a try_new error, not a panic"
+        );
+    }
+
+    #[test]
+    fn streaming_try_new_surfaces_validate_error() {
+        assert!(StreamingResize::try_new(&test_config(8, 8, 4, 4)).is_ok());
+        let mut bad = test_config(8, 8, 4, 4);
+        bad.out_height = 0;
+        assert!(StreamingResize::try_new(&bad).is_err());
     }
 
     #[test]
