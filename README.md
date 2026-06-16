@@ -23,6 +23,32 @@ let output = Resizer::new(&config).resize(&input);
 assert_eq!(output.len(), 512 * 384 * 4);
 ```
 
+## Errors
+
+`Resizer::resize` returns the output `Vec` directly and is infallible from the caller's view — it **panics** on misuse (a pixel-format mismatch, or an `input` whose length isn't `input_row_len() × in_height`). Validate inputs up front, or use the streaming API for a fallible path.
+
+`StreamingResize::push_row` returns `Result<(), whereat::At<StreamingError>>`, and the `with_background` / `with_mask` constructors return `Result<Self, whereat::At<CompositeError>>` — the error plus the source location it was raised at, which is what a server wants in structured logs. Pull both with the `whereat::At` accessors (re-exported as `zenresize::At`; `StreamingError` is `#[non_exhaustive]`, so keep a wildcard arm):
+
+```rust
+use zenresize::{StreamingResize, StreamingError};
+
+match stream.push_row(row) {
+    Ok(()) => {}
+    Err(e) => {
+        let loc = e.location();    // Option<&core::panic::Location> — file:line
+        match e.error() {          // &StreamingError
+            StreamingError::InputTooShort      => { /* row shorter than input_row_len() */ }
+            StreamingError::RingBufferOverflow => { /* output drained out of order */ }
+            StreamingError::AlreadyFinished    => { /* push_row after finish() */ }
+            _ => {}
+        }
+        eprintln!("resize row failed at {loc:?}: {e}");
+    }
+}
+```
+
+The crate imposes no max-output-pixels limit and exposes no cancellation token: a server resizing untrusted *target* dimensions should cap output pixels itself, and cancel cooperatively at the `push_row` / `next_output_row` boundary.
+
 ## Operations
 
 All operations work in the streaming API. Crop and padding also work independently (without resize) by setting output dimensions equal to crop/content dimensions.
