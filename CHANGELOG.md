@@ -9,15 +9,6 @@
   panicked on adversarial inputs; they now validate and surface errors.
 
 ### Added
-- One-shot convenience functions `resize_rgba8(src, in_w, in_h, out_w, out_h)
-  -> Result<Vec<u8>, At<ConfigError>>` and `resize_rgba8_to_fit(src, in_w, in_h,
-  max_w, max_h) -> Result<(Vec<u8>, u32, u32), At<ConfigError>>` — the shortest
-  path for the two most common jobs (exact resize; aspect-fit thumbnail), with
-  Lanczos + correct sRGB linear-light defaults. **Fallible by design**: output
-  dimensions are validated via `Resizer::try_new` (the 120 MP cap, NaN/degenerate
-  rejection) and the input length is checked with overflow safety, so an untrusted
-  target size or a mismatched buffer returns a `ConfigError` rather than panicking
-  — they never `panic!`. Additive; the builder + `Resizer` path is unchanged.
 - Split README: `README.md` (GitHub, full badges + benchmarks) and a generated
   `README.crates.md` (crates.io, CI badge only) via `readme = "README.crates.md"`;
   `benchmarks/README.md` documents the fair-comparison methodology and pinned-commit

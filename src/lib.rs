@@ -31,8 +31,6 @@
 
 #[cfg(not(feature = "std"))]
 extern crate alloc;
-#[cfg(not(feature = "std"))]
-use alloc::vec::Vec;
 
 whereat::define_at_crate_info!();
 
@@ -97,99 +95,3 @@ pub use transfer::{Bt709, Hlg, NoTransfer, Pq, Srgb, TransferCurve};
 
 // Re-export whereat types for downstream consumers
 pub use whereat::{At, ResultAtExt};
-
-// ---------------------------------------------------------------------------
-// One-shot convenience functions
-//
-// The shortest path for the two most common jobs. Both wrap the builder +
-// `Resizer` path with sane photographic defaults (Lanczos filter, correct sRGB
-// linear-light resampling). Reach for `ResizeConfig::builder` when you need a
-// different filter, color space, crop, padding, `Cover`/`Stretch` fit, u16/f32
-// I/O, or row-at-a-time streaming.
-// ---------------------------------------------------------------------------
-
-/// Resize an 8-bit RGBA image to exact dimensions in one call.
-///
-/// `src` must be exactly `in_w * in_h * 4` bytes of tightly-packed RGBA; the
-/// returned buffer is `out_w * out_h * 4` bytes.
-///
-/// Fallible by design: the output dimensions are validated the same way
-/// [`Resizer::try_new`] validates them (the default 120 MP cap, plus NaN /
-/// degenerate-config rejection), and the input length is checked with overflow
-/// safety — so passing an untrusted target size or a mismatched buffer returns a
-/// [`ConfigError`] instead of panicking. For a different filter, color space,
-/// crop, padding, `Cover`/`Stretch` fit, u16/f32 I/O, or row-streaming, build a
-/// [`ResizeConfig`] and use [`Resizer`].
-///
-/// ```
-/// let src = vec![128u8; 64 * 48 * 4];        // 64×48 RGBA
-/// let out = zenresize::resize_rgba8(&src, 64, 48, 32, 24)?;
-/// assert_eq!(out.len(), 32 * 24 * 4);
-/// # Ok::<(), zenresize::At<zenresize::ConfigError>>(())
-/// ```
-pub fn resize_rgba8(
-    src: &[u8],
-    in_w: u32,
-    in_h: u32,
-    out_w: u32,
-    out_h: u32,
-) -> Result<Vec<u8>, At<ConfigError>> {
-    check_rgba8_len(src, in_w, in_h)?;
-    let mut resizer = Resizer::try_new(
-        &ResizeConfig::builder(in_w, in_h, out_w, out_h)
-            .filter(Filter::Lanczos)
-            .format(PixelDescriptor::RGBA8_SRGB)
-            .build(),
-    )?;
-    Ok(resizer.resize(src))
-}
-
-/// Aspect-preserving resize of an 8-bit RGBA image to fit within `max_w × max_h`.
-///
-/// Never upscales past the source ([`FitMode::Within`]): the result is at most
-/// `max_w × max_h`, touches the box on its longer axis, and is returned with its
-/// actual dimensions. For `Cover` (center-crop to fill), `Fit` (allow upscale),
-/// or `Stretch`, build a [`ResizeConfig`] with [`ResizeConfigBuilder::fit`].
-///
-/// `src` must be `in_w * in_h * 4` bytes of tightly-packed RGBA; an oversized
-/// target or a length mismatch returns a [`ConfigError`] (never panics).
-///
-/// ```
-/// let src = vec![200u8; 1600 * 900 * 4];      // 1600×900 RGBA
-/// let (thumb, w, h) = zenresize::resize_rgba8_to_fit(&src, 1600, 900, 320, 320)?;
-/// assert_eq!((w, h), (320, 180));             // 16:9 fit inside 320×320
-/// assert_eq!(thumb.len(), (w * h * 4) as usize);
-/// # Ok::<(), zenresize::At<zenresize::ConfigError>>(())
-/// ```
-pub fn resize_rgba8_to_fit(
-    src: &[u8],
-    in_w: u32,
-    in_h: u32,
-    max_w: u32,
-    max_h: u32,
-) -> Result<(Vec<u8>, u32, u32), At<ConfigError>> {
-    check_rgba8_len(src, in_w, in_h)?;
-    let (out_w, out_h) = fit_dims(in_w, in_h, max_w, max_h, FitMode::Within);
-    let mut resizer = Resizer::try_new(
-        &ResizeConfig::builder(in_w, in_h, out_w, out_h)
-            .filter(Filter::Lanczos)
-            .format(PixelDescriptor::RGBA8_SRGB)
-            .build(),
-    )?;
-    Ok((resizer.resize(src), out_w, out_h))
-}
-
-/// Validate that `src` is exactly `in_w * in_h * 4` tightly-packed RGBA8 bytes,
-/// returning a located [`ConfigError`] (never panicking) on mismatch or on a
-/// `in_w * in_h * 4` product that overflows `usize`.
-fn check_rgba8_len(src: &[u8], in_w: u32, in_h: u32) -> Result<(), At<ConfigError>> {
-    let expected = (in_w as usize)
-        .checked_mul(in_h as usize)
-        .and_then(|px| px.checked_mul(4));
-    if expected != Some(src.len()) {
-        return Err(whereat::at!(ConfigError(
-            "src length must equal in_w * in_h * 4 (tightly-packed RGBA8)"
-        )));
-    }
-    Ok(())
-}
