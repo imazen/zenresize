@@ -9,6 +9,16 @@
   panicked on adversarial inputs; they now validate and surface errors.
 
 ### Added
+- One-shot convenience functions `resize_rgba8(src, in_w, in_h, out_w, out_h)`
+  and `resize_rgba8_to_fit(src, in_w, in_h, max_w, max_h)` — the shortest path
+  for the two most common jobs (exact resize; aspect-fit thumbnail), with
+  Lanczos + correct sRGB linear-light defaults. Additive; the builder + `Resizer`
+  path is unchanged.
+- Split README: `README.md` (GitHub, full badges + benchmarks) and a generated
+  `README.crates.md` (crates.io, CI badge only) via `readme = "README.crates.md"`;
+  `benchmarks/README.md` documents the fair-comparison methodology and pinned-commit
+  reproduction. Crosslink footer refreshed (fixes the stale `heic` link, adds the
+  current zen* crates).
 - Versioned public-API surface snapshot at `docs/public-api/zenresize.txt`, regenerated on every `cargo test` by `tests/public_api_doc.rs` (`ZEN_API_DOC=check` verifies in the CI clippy job, `=off` skips); `justfile` recipes `fmt` / `api-doc` / `api-doc-check`. Dev-only — not part of the published package (include-whitelist already excludes it).
 
 ### Changed

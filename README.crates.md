@@ -1,4 +1,6 @@
-# zenresize [![CI](https://img.shields.io/github/actions/workflow/status/imazen/zenresize/ci.yml?style=flat-square&label=CI)](https://github.com/imazen/zenresize/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/zenresize?style=flat-square)](https://crates.io/crates/zenresize) [![lib.rs](https://img.shields.io/crates/v/zenresize?style=flat-square&label=lib.rs&color=blue)](https://lib.rs/crates/zenresize) [![docs.rs](https://img.shields.io/docsrs/zenresize?style=flat-square)](https://docs.rs/zenresize) [![MSRV](https://img.shields.io/badge/MSRV-1.93-blue?style=flat-square)](https://doc.rust-lang.org/cargo/reference/manifest.html#the-rust-version-field) [![license](https://img.shields.io/crates/l/zenresize?style=flat-square)](#license)
+<!-- GENERATED FROM README.md by zenutils gen-readme-crates.sh — DO NOT EDIT. -->
+
+# zenresize [![CI](https://img.shields.io/github/actions/workflow/status/imazen/zenresize/ci.yml?style=flat-square&label=CI)](https://github.com/imazen/zenresize/actions/workflows/ci.yml)
 
 zenresize is a SIMD-accelerated image resampling library with crop, resize, and canvas padding in streaming or fullframe modes. Pure Rust, `#![forbid(unsafe_code)]` by default, `no_std`-compatible.
 
@@ -610,41 +612,6 @@ The imgref functions override the config's dimensions, formats, and stride. Filt
 | `pretty-safe` | no | Replaces bounds-checked indexing with `get_unchecked` in SIMD kernels where bounds are proven by prior guards. ~17% fewer instructions on x86-64. Introduces `unsafe`; the default build is `#![forbid(unsafe_code)]`. |
 | `bench-simd-competitors` | no | Enables SIMD on pic-scale for the benchmark comparison (off by default, so pic-scale runs scalar-only). |
 
-<!-- crates.io:skip-start -->
-## Benchmarks
-
-Cross-library comparison lives in [`benches/paired_bench.rs`](benches/paired_bench.rs).
-It is built to be fair: measurements are **interleaved** (A,B,A,B…) so both libraries
-see identical thermal/scheduler state, every contender runs **single-threaded**
-(`ThreadingPolicy::Single`) on the **same in-memory** RGBA image — **no file I/O in the
-timed region** — and it reports a paired 95% confidence interval on the *relative* speed.
-
-For an apples-to-apples SIMD comparison, enable `bench-simd-competitors` (otherwise
-pic-scale runs scalar-only, which would flatter zenresize):
-
-```bash
-git clone https://github.com/imazen/zenresize && cd zenresize
-git checkout <commit>     # the exact commit you're measuring
-cargo bench --bench paired_bench --features bench-simd-competitors
-```
-
-Full methodology, competitor versions, threading modes, and pinned-commit reproduction:
-**[benchmarks/README.md](benchmarks/README.md)**. The `benches/` directory has 19
-binaries covering throughput, precision, regression, and callgrind/perf profiling:
-
-| Benchmark | What it measures |
-|-----------|-----------------|
-| `paired_bench` | Interleaved paired comparison vs pic-scale, fast_image_resize, resize. 95% CI. |
-| `resize_bench` | Criterion throughput at 50%, 25%, 200% scale across sizes. |
-| `tango_bench` | Self-regression detection across code changes. |
-| `sweep_bench` | Sizes 64–7680 px × ratios 12.5%–300%. CSV output. |
-| `precision` | f32/u8 accuracy vs f64 reference and cross-library. |
-| `transfer_bench` | sRGB/BT.709/PQ/HLG transfer speed vs powf and colorutils-rs. |
-| `planar_bench` | Interleaved vs planar strategies at 0.5–24 MP. |
-| `profile_*` | Minimal binaries for callgrind/perf (sRGB, linear, f32, f16, streaming). |
-
-Build benchmarks **without** `-C target-cpu=native` — runtime SIMD dispatch is what ships.
-<!-- crates.io:skip-end -->
 
 ## Threading
 

@@ -6,15 +6,15 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: zenresize.txt 296 lines (supported surface) | zenresize.features.txt 0 added (features: avx512,bench-simd-competitors,pretty-safe,std) | zenresize.internal.txt 158 lines (201 hidden + 0 excluded-feature)
+# files: zenresize.txt 302 lines (supported surface) | zenresize.features.txt 0 added (features: avx512,bench-simd-competitors,pretty-safe,std) | zenresize.internal.txt 160 lines (203 hidden + 0 excluded-feature)
 
 ## summary
 #
 #   pub modules                                 4
 #   pub types (struct/enum/trait/alias)        35
 #   pub consts/statics                          4
-#   free functions                             17
-#   inherent methods                          152
+#   free functions                             19
+#   inherent methods                          154
 #   struct fields                              27
 #   enum variants                              27
 #   re-exports                                 20
@@ -23,12 +23,12 @@
 #   auto-trait exceptions                       2
 #
 # per-module pub lines:
-#   (root)                          231
+#   (root)                          236
 #   composite                        34
 #   fit                               7
 #   plane                            13
 
-## items (271 lines)
+## items (276 lines)
 
 pub mod zenresize
 pub use AlphaMode
@@ -303,6 +303,8 @@ pub fn resize_4ch<P>(imgref::ImgRef<'_, P>, u32, u32, zenpixels::descriptor::Pix
 pub fn resize_gray8(imgref::ImgRef<'_, u8>, u32, u32, &ResizeConfig) -> imgref::ImgVec<u8>
 pub fn resize_hfirst_streaming(&ResizeConfig, &[u8]) -> core::result::Result<alloc::vec::Vec<u8>, &'static str>
 pub fn resize_hfirst_streaming_f32(&ResizeConfig, &[u8]) -> core::result::Result<alloc::vec::Vec<u8>, &'static str>
+pub fn resize_rgba8(&[u8], u32, u32, u32, u32) -> alloc::vec::Vec<u8>
+pub fn resize_rgba8_to_fit(&[u8], u32, u32, u32, u32) -> (alloc::vec::Vec<u8>, u32, u32)
 pub fn unpremultiply_f32_row(&mut [f32]) [also: composite]
 
 ## trait impls (23 types)
