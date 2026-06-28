@@ -25,6 +25,15 @@
 - Exclude `tests/` (405 KB of weights fixtures) and `benches/` from published package tarball; local targets unaffected (declarations kept, `benches/` dir present → `cargo bench`/`cargo test` work as before).
 
 ### Fixed
+- The allocating `Resizer::resize()` / `resize_into()` (and every `resize_*`
+  type and cross-format variant) now honor canvas padding (`.padding()` /
+  `.padding_color()`): the output buffer is sized to the full padded canvas
+  (`total_output_height() * total_output_row_len()`) and rows are assembled at
+  total dims, matching `StreamingResize`. Previously the buffer was sized at the
+  inner resize dims (`out_height * output_row_len()`), so a padded config
+  panicked with an out-of-bounds row copy. Post-resize sharpen/blur now run over
+  the full canvas. No behavior change when padding is unset (`total_output_*`
+  equals the inner dims). Regression test: `tests/allocating_padding.rs`.
 - Bound weight-table allocation in `ResizeConfig::validate()` so adversarial
   `in_size`/`out_size` ratios cannot trigger multi-GB allocations from a
   few-byte container header. Cap is ~256 MB worth of f32 entries per axis.

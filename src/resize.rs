@@ -173,6 +173,11 @@ impl<B: Background> Resizer<B> {
 
     /// Resize a u8 image, allocating and returning the output.
     ///
+    /// Honors canvas padding configured via
+    /// [`ResizeConfigBuilder::padding`](crate::ResizeConfigBuilder::padding): the
+    /// returned buffer covers the full padded canvas (`total_output_width` ×
+    /// `total_output_height`), matching [`StreamingResize`](crate::StreamingResize).
+    ///
     /// # Panics
     /// Panics if the config uses `LinearF32` format (use [`resize_f32`](Self::resize_f32) instead).
     pub fn resize(&mut self, input: &[u8]) -> Vec<u8> {
@@ -180,8 +185,8 @@ impl<B: Background> Resizer<B> {
             self.config.input.channel_type() == ChannelType::U8,
             "resize() requires Srgb8 format; use resize_f32() for LinearF32 or resize_u16() for Encoded16"
         );
-        let out_row_len = self.config.output_row_len();
-        let len = self.config.out_height as usize * out_row_len;
+        let out_row_len = self.config.total_output_row_len();
+        let len = self.config.total_output_height() as usize * out_row_len;
         let mut output = proven::alloc_output::<u8>(len);
         self.resize_into(input, &mut output);
         output
@@ -199,10 +204,10 @@ impl<B: Background> Resizer<B> {
         let config = &self.config;
         let in_stride = config.effective_in_stride();
         let in_row_len = config.input_row_len();
-        let out_row_len = config.output_row_len();
+        let out_row_len = config.total_output_row_len();
         let channels = config.input.channels();
         let in_h = config.in_height as usize;
-        let out_h = config.out_height as usize;
+        let out_h = config.total_output_height() as usize;
 
         // Reset the cached stream and push/drain all rows through it.
         self.stream.reset();
@@ -233,8 +238,8 @@ impl<B: Background> Resizer<B> {
         if config.post_sharpen > 0.0 {
             crate::blur::unsharp_mask_u8(
                 output,
-                config.out_width,
-                config.out_height,
+                config.total_output_width(),
+                config.total_output_height(),
                 channels,
                 config.post_sharpen,
                 config.post_sharpen * 0.5 + 0.5, // sigma scales with amount
@@ -245,8 +250,8 @@ impl<B: Background> Resizer<B> {
         if config.post_blur_sigma > 0.0 {
             crate::blur::blur_u8(
                 output,
-                config.out_width,
-                config.out_height,
+                config.total_output_width(),
+                config.total_output_height(),
                 channels,
                 config.post_blur_sigma,
             );
@@ -262,8 +267,8 @@ impl<B: Background> Resizer<B> {
             self.config.input.channel_type() == ChannelType::F32,
             "resize_f32() requires LinearF32 format; use resize() for Srgb8 or resize_u16() for Encoded16"
         );
-        let out_row_len = self.config.output_row_len();
-        let len = self.config.out_height as usize * out_row_len;
+        let out_row_len = self.config.total_output_row_len();
+        let len = self.config.total_output_height() as usize * out_row_len;
         let mut output = vec![0.0f32; len];
         self.resize_f32_into(input, &mut output);
         output
@@ -281,10 +286,10 @@ impl<B: Background> Resizer<B> {
         let config = &self.config;
         let in_stride = config.effective_in_stride();
         let in_row_len = config.input_row_len();
-        let out_row_len = config.output_row_len();
+        let out_row_len = config.total_output_row_len();
         let out_channels = config.output.channels();
         let in_h = config.in_height as usize;
-        let out_h = config.out_height as usize;
+        let out_h = config.total_output_height() as usize;
 
         self.stream.reset();
         let mut out_y = 0usize;
@@ -314,8 +319,8 @@ impl<B: Background> Resizer<B> {
         if config.post_sharpen > 0.0 {
             crate::blur::unsharp_mask_f32(
                 output,
-                config.out_width,
-                config.out_height,
+                config.total_output_width(),
+                config.total_output_height(),
                 out_channels,
                 config.post_sharpen,
                 config.post_sharpen * 0.5 + 0.5,
@@ -326,8 +331,8 @@ impl<B: Background> Resizer<B> {
         if config.post_blur_sigma > 0.0 {
             crate::blur::blur_f32(
                 output,
-                config.out_width,
-                config.out_height,
+                config.total_output_width(),
+                config.total_output_height(),
                 out_channels,
                 config.post_blur_sigma,
             );
@@ -346,8 +351,8 @@ impl<B: Background> Resizer<B> {
             self.config.input.channel_type() == ChannelType::U16,
             "resize_u16() requires Encoded16 format"
         );
-        let out_row_len = self.config.output_row_len();
-        let len = self.config.out_height as usize * out_row_len;
+        let out_row_len = self.config.total_output_row_len();
+        let len = self.config.total_output_height() as usize * out_row_len;
         let mut output = vec![0u16; len];
         self.resize_u16_into(input, &mut output);
         output
@@ -365,9 +370,9 @@ impl<B: Background> Resizer<B> {
         let config = &self.config;
         let in_stride = config.effective_in_stride();
         let in_row_len = config.input_row_len();
-        let out_row_len = config.output_row_len();
+        let out_row_len = config.total_output_row_len();
         let in_h = config.in_height as usize;
-        let out_h = config.out_height as usize;
+        let out_h = config.total_output_height() as usize;
 
         self.stream.reset();
         let mut out_y = 0usize;
@@ -408,7 +413,7 @@ impl<B: Background> Resizer<B> {
             self.config.output.channel_type() == ChannelType::F32,
             "output must be LinearF32"
         );
-        let len = self.config.out_height as usize * self.config.output_row_len();
+        let len = self.config.total_output_height() as usize * self.config.total_output_row_len();
         let mut output = vec![0.0f32; len];
         self.resize_u8_to_f32_into(input, &mut output);
         output
@@ -427,9 +432,9 @@ impl<B: Background> Resizer<B> {
         let config = &self.config;
         let in_stride = config.effective_in_stride();
         let in_row_len = config.input_row_len();
-        let out_row_len = config.output_row_len();
+        let out_row_len = config.total_output_row_len();
         let in_h = config.in_height as usize;
-        let out_h = config.out_height as usize;
+        let out_h = config.total_output_height() as usize;
 
         self.stream.reset();
         let mut out_y = 0usize;
@@ -466,7 +471,7 @@ impl<B: Background> Resizer<B> {
             self.config.output.channel_type() == ChannelType::U8,
             "output must be u8"
         );
-        let len = self.config.out_height as usize * self.config.output_row_len();
+        let len = self.config.total_output_height() as usize * self.config.total_output_row_len();
         let mut output = proven::alloc_output::<u8>(len);
         self.resize_f32_to_u8_into(input, &mut output);
         output
@@ -485,9 +490,9 @@ impl<B: Background> Resizer<B> {
         let config = &self.config;
         let in_stride = config.effective_in_stride();
         let in_row_len = config.input_row_len();
-        let out_row_len = config.output_row_len();
+        let out_row_len = config.total_output_row_len();
         let in_h = config.in_height as usize;
-        let out_h = config.out_height as usize;
+        let out_h = config.total_output_height() as usize;
 
         self.stream.reset();
         let mut out_y = 0usize;
@@ -524,7 +529,7 @@ impl<B: Background> Resizer<B> {
             self.config.output.channel_type() == ChannelType::U16,
             "output must be Encoded16"
         );
-        let len = self.config.out_height as usize * self.config.output_row_len();
+        let len = self.config.total_output_height() as usize * self.config.total_output_row_len();
         let mut output = vec![0u16; len];
         self.resize_u8_to_u16_into(input, &mut output);
         output
@@ -543,9 +548,9 @@ impl<B: Background> Resizer<B> {
         let config = &self.config;
         let in_stride = config.effective_in_stride();
         let in_row_len = config.input_row_len();
-        let out_row_len = config.output_row_len();
+        let out_row_len = config.total_output_row_len();
         let in_h = config.in_height as usize;
-        let out_h = config.out_height as usize;
+        let out_h = config.total_output_height() as usize;
 
         self.stream.reset();
         let mut out_y = 0usize;
@@ -582,7 +587,7 @@ impl<B: Background> Resizer<B> {
             self.config.output.channel_type() == ChannelType::U8,
             "output must be u8"
         );
-        let len = self.config.out_height as usize * self.config.output_row_len();
+        let len = self.config.total_output_height() as usize * self.config.total_output_row_len();
         let mut output = proven::alloc_output::<u8>(len);
         self.resize_u16_to_u8_into(input, &mut output);
         output
@@ -601,9 +606,9 @@ impl<B: Background> Resizer<B> {
         let config = &self.config;
         let in_stride = config.effective_in_stride();
         let in_row_len = config.input_row_len();
-        let out_row_len = config.output_row_len();
+        let out_row_len = config.total_output_row_len();
         let in_h = config.in_height as usize;
-        let out_h = config.out_height as usize;
+        let out_h = config.total_output_height() as usize;
 
         self.stream.reset();
         let mut out_y = 0usize;
@@ -640,7 +645,7 @@ impl<B: Background> Resizer<B> {
             self.config.output.channel_type() == ChannelType::F32,
             "output must be LinearF32"
         );
-        let len = self.config.out_height as usize * self.config.output_row_len();
+        let len = self.config.total_output_height() as usize * self.config.total_output_row_len();
         let mut output = vec![0.0f32; len];
         self.resize_u16_to_f32_into(input, &mut output);
         output
@@ -659,9 +664,9 @@ impl<B: Background> Resizer<B> {
         let config = &self.config;
         let in_stride = config.effective_in_stride();
         let in_row_len = config.input_row_len();
-        let out_row_len = config.output_row_len();
+        let out_row_len = config.total_output_row_len();
         let in_h = config.in_height as usize;
-        let out_h = config.out_height as usize;
+        let out_h = config.total_output_height() as usize;
 
         self.stream.reset();
         let mut out_y = 0usize;
@@ -698,7 +703,7 @@ impl<B: Background> Resizer<B> {
             self.config.output.channel_type() == ChannelType::U16,
             "output must be Encoded16"
         );
-        let len = self.config.out_height as usize * self.config.output_row_len();
+        let len = self.config.total_output_height() as usize * self.config.total_output_row_len();
         let mut output = vec![0u16; len];
         self.resize_f32_to_u16_into(input, &mut output);
         output
@@ -717,9 +722,9 @@ impl<B: Background> Resizer<B> {
         let config = &self.config;
         let in_stride = config.effective_in_stride();
         let in_row_len = config.input_row_len();
-        let out_row_len = config.output_row_len();
+        let out_row_len = config.total_output_row_len();
         let in_h = config.in_height as usize;
-        let out_h = config.out_height as usize;
+        let out_h = config.total_output_height() as usize;
 
         self.stream.reset();
         let mut out_y = 0usize;
