@@ -9,6 +9,17 @@
   panicked on adversarial inputs; they now validate and surface errors.
 
 ### Added
+- One-shot convenience functions `resize_rgba8(img: ImgRef<RGBA8>, out_w, out_h)
+  -> Result<ImgVec<RGBA8>, At<ConfigError>>` and `resize_rgba8_to_fit(img:
+  ImgRef<RGBA8>, max_w, max_h) -> Result<ImgVec<RGBA8>, At<ConfigError>>` — the
+  shortest path for the two most common jobs (exact resize; aspect-fit
+  thumbnail), with Lanczos + correct sRGB linear-light defaults. The source
+  dimensions and row stride ride with the pixels via `imgref::ImgRef`, so there
+  is no redundant width/height argument and no buffer-length-mismatch class of
+  bug. Fallible: target dimensions are validated (the 120 MP cap, NaN/degenerate
+  rejection) so an untrusted target size returns a `ConfigError` rather than
+  panicking. Re-exports `ImgRef`, `ImgVec`, and `RGBA8` at the crate root.
+  Additive; the builder + `Resizer` path is unchanged.
 - Split README: `README.md` (GitHub, full badges + benchmarks) and a generated
   `README.crates.md` (crates.io, CI badge only) via `readme = "README.crates.md"`;
   `benchmarks/README.md` documents the fair-comparison methodology and pinned-commit

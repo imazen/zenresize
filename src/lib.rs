@@ -87,6 +87,12 @@ pub use resize::{
     resize_3ch, resize_4ch, resize_gray8, resize_hfirst_streaming, resize_hfirst_streaming_f32,
 };
 
+// Re-export the imgref + rgb input/output types so callers of the typed one-shot
+// fns (and the `resize_4ch` / `resize_3ch` family) don't need to depend on the
+// `imgref` / `rgb` crates directly.
+pub use imgref::{ImgRef, ImgVec};
+pub use rgb::RGBA8;
+
 pub use transfer::{Bt709, Hlg, NoTransfer, Pq, Srgb, TransferCurve};
 
 // zennode node definitions
@@ -95,3 +101,97 @@ pub use transfer::{Bt709, Hlg, NoTransfer, Pq, Srgb, TransferCurve};
 
 // Re-export whereat types for downstream consumers
 pub use whereat::{At, ResultAtExt};
+
+// ---------------------------------------------------------------------------
+// One-shot convenience functions
+//
+// The shortest path for the two most common jobs. Both take a typed
+// [`ImgRef<RGBA8>`] so the source dimensions and row stride ride *with* the
+// pixels — there is no separate width/height to keep in sync and no
+// buffer-length-mismatch class of bug. Both default to a Lanczos filter with
+// correct sRGB linear-light resampling. Reach for [`ResizeConfig::builder`] +
+// [`Resizer`] when you need a different filter, color space, crop, padding,
+// `Cover`/`Stretch` fit, u16/f32 I/O, or row-at-a-time streaming.
+// ---------------------------------------------------------------------------
+
+/// Resize an 8-bit RGBA image to exact `out_w × out_h` in one call.
+///
+/// The source dimensions and row stride travel with the pixels inside
+/// [`ImgRef`], so there is no separate width/height argument to keep in sync and
+/// no buffer-length mismatch to guard against. Lanczos filter, correct sRGB
+/// linear-light resampling.
+///
+/// Fallible: the target dimensions are validated the same way
+/// [`Resizer::try_new`] validates them (the default 120 MP cap, plus NaN /
+/// degenerate-config rejection), so an untrusted target size returns a located
+/// [`ConfigError`] instead of panicking. For a different filter, color space,
+/// crop, padding, `Cover`/`Stretch` fit, u16/f32 I/O, or row-streaming, build a
+/// [`ResizeConfig`] and use [`Resizer`].
+///
+/// ```
+/// use zenresize::{ImgRef, RGBA8};
+///
+/// let pixels = vec![RGBA8::default(); 64 * 48]; // 64×48 RGBA
+/// let img = ImgRef::new(&pixels, 64, 48);
+/// let out = zenresize::resize_rgba8(img, 32, 24)?;
+/// assert_eq!((out.width(), out.height()), (32, 24));
+/// # Ok::<(), zenresize::At<zenresize::ConfigError>>(())
+/// ```
+pub fn resize_rgba8(
+    img: ImgRef<RGBA8>,
+    out_w: u32,
+    out_h: u32,
+) -> Result<ImgVec<RGBA8>, At<ConfigError>> {
+    let config = ResizeConfig::builder(img.width() as u32, img.height() as u32, out_w, out_h)
+        .filter(Filter::Lanczos)
+        .format(PixelDescriptor::RGBA8_SRGB)
+        .build();
+    // Validate the target dimensions (the 120 MP cap, NaN / degenerate-config
+    // rejection) before resizing, so an untrusted target size returns a located
+    // error instead of panicking inside `resize_4ch`. This is the same check
+    // `Resizer::try_new` performs.
+    config
+        .validate()
+        .map_err(|msg| whereat::at!(ConfigError(msg)))?;
+    Ok(resize_4ch(
+        img,
+        out_w,
+        out_h,
+        PixelDescriptor::RGBA8_SRGB,
+        &config,
+    ))
+}
+
+/// Aspect-preserving resize of an 8-bit RGBA image to fit within `max_w × max_h`.
+///
+/// Never upscales past the source ([`FitMode::Within`]): the result is at most
+/// `max_w × max_h` and touches the box on its longer axis. The output dimensions
+/// ride with the returned [`ImgVec`] (`.width()` / `.height()`). For `Cover`
+/// (center-crop to fill), `Fit` (allow upscale), or `Stretch`, build a
+/// [`ResizeConfig`] with [`ResizeConfigBuilder::fit`].
+///
+/// Fallible on the same terms as [`resize_rgba8`].
+///
+/// ```
+/// use zenresize::{ImgRef, RGBA8};
+///
+/// let pixels = vec![RGBA8::default(); 1600 * 900]; // 1600×900 RGBA
+/// let img = ImgRef::new(&pixels, 1600, 900);
+/// let thumb = zenresize::resize_rgba8_to_fit(img, 320, 320)?;
+/// assert_eq!((thumb.width(), thumb.height()), (320, 180)); // 16:9 within 320×320
+/// # Ok::<(), zenresize::At<zenresize::ConfigError>>(())
+/// ```
+pub fn resize_rgba8_to_fit(
+    img: ImgRef<RGBA8>,
+    max_w: u32,
+    max_h: u32,
+) -> Result<ImgVec<RGBA8>, At<ConfigError>> {
+    let (out_w, out_h) = fit_dims(
+        img.width() as u32,
+        img.height() as u32,
+        max_w,
+        max_h,
+        FitMode::Within,
+    );
+    resize_rgba8(img, out_w, out_h)
+}
