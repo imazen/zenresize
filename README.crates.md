@@ -1,6 +1,6 @@
 <!-- GENERATED FROM README.md by zenutils gen-readme-crates.sh — DO NOT EDIT. -->
 
-# zenresize [![CI](https://img.shields.io/github/actions/workflow/status/imazen/zenresize/ci.yml?style=flat-square&label=CI)](https://github.com/imazen/zenresize/actions/workflows/ci.yml)
+# zenresize
 
 zenresize is a SIMD-accelerated image resampling library with crop, resize, and canvas padding in streaming or fullframe modes. Pure Rust, `#![forbid(unsafe_code)]` by default, `no_std`-compatible.
 
