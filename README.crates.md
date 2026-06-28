@@ -12,11 +12,13 @@ zenresize = "0.3"
 ```
 
 ```rust
-// Resize 8-bit RGBA in one call — Lanczos filter, correct sRGB linear-light:
-let resized = zenresize::resize_rgba8(&rgba, 1920, 1080, 800, 450);
+// Resize 8-bit RGBA in one call — Lanczos filter, correct sRGB linear-light.
+// Returns Result: an oversized/invalid target or a wrong-length buffer is a
+// ConfigError, never a panic (safe for untrusted target dimensions).
+let resized = zenresize::resize_rgba8(&rgba, 1920, 1080, 800, 450)?;
 
 // Or fit within a box, aspect preserved (never upscales past the source):
-let (thumb, tw, th) = zenresize::resize_rgba8_to_fit(&rgba, 1920, 1080, 320, 320);
+let (thumb, tw, th) = zenresize::resize_rgba8_to_fit(&rgba, 1920, 1080, 320, 320)?;
 ```
 
 Need a different filter, color space, crop, padding, `Cover`/`Stretch` fit, u16/f32

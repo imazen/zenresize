@@ -303,8 +303,8 @@ pub fn resize_4ch<P>(imgref::ImgRef<'_, P>, u32, u32, zenpixels::descriptor::Pix
 pub fn resize_gray8(imgref::ImgRef<'_, u8>, u32, u32, &ResizeConfig) -> imgref::ImgVec<u8>
 pub fn resize_hfirst_streaming(&ResizeConfig, &[u8]) -> core::result::Result<alloc::vec::Vec<u8>, &'static str>
 pub fn resize_hfirst_streaming_f32(&ResizeConfig, &[u8]) -> core::result::Result<alloc::vec::Vec<u8>, &'static str>
-pub fn resize_rgba8(&[u8], u32, u32, u32, u32) -> alloc::vec::Vec<u8>
-pub fn resize_rgba8_to_fit(&[u8], u32, u32, u32, u32) -> (alloc::vec::Vec<u8>, u32, u32)
+pub fn resize_rgba8(&[u8], u32, u32, u32, u32) -> core::result::Result<alloc::vec::Vec<u8>, whereat::at::At<ConfigError>>
+pub fn resize_rgba8_to_fit(&[u8], u32, u32, u32, u32) -> core::result::Result<(alloc::vec::Vec<u8>, u32, u32), whereat::at::At<ConfigError>>
 pub fn unpremultiply_f32_row(&mut [f32]) [also: composite]
 
 ## trait impls (23 types)
