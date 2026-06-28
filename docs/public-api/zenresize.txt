@@ -6,29 +6,29 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: zenresize.txt 300 lines (supported surface) | zenresize.features.txt 0 added (features: avx512,bench-simd-competitors,pretty-safe,std) | zenresize.internal.txt 160 lines (203 hidden + 0 excluded-feature)
+# files: zenresize.txt 305 lines (supported surface) | zenresize.features.txt 0 added (features: avx512,bench-simd-competitors,pretty-safe,std) | zenresize.internal.txt 160 lines (203 hidden + 0 excluded-feature)
 
 ## summary
 #
 #   pub modules                                 4
 #   pub types (struct/enum/trait/alias)        35
 #   pub consts/statics                          4
-#   free functions                             17
+#   free functions                             19
 #   inherent methods                          154
 #   struct fields                              27
 #   enum variants                              27
-#   re-exports                                 20
+#   re-exports                                 23
 #   trait roster entries (type × trait)        88
 #   auto-trait-complete types                  21
 #   auto-trait exceptions                       2
 #
 # per-module pub lines:
-#   (root)                          234
+#   (root)                          239
 #   composite                        34
 #   fit                               7
 #   plane                            13
 
-## items (274 lines)
+## items (279 lines)
 
 pub mod zenresize
 pub use AlphaMode
@@ -37,6 +37,8 @@ pub use BlendMode
 pub use ChannelLayout
 pub use ChannelType
 pub use Filter
+pub use ImgRef
+pub use ImgVec
 pub use LinearGradientMask
 pub use MaskFill
 pub use MaskSource
@@ -44,6 +46,7 @@ pub use MaskSpan
 pub use MaskSpans
 pub use Orientation
 pub use PixelDescriptor
+pub use RGBA8
 pub use RadialGradientMask
 pub use ResultAtExt
 pub use RoundedRectMask
@@ -303,6 +306,8 @@ pub fn resize_4ch<P>(imgref::ImgRef<'_, P>, u32, u32, zenpixels::descriptor::Pix
 pub fn resize_gray8(imgref::ImgRef<'_, u8>, u32, u32, &ResizeConfig) -> imgref::ImgVec<u8>
 pub fn resize_hfirst_streaming(&ResizeConfig, &[u8]) -> core::result::Result<alloc::vec::Vec<u8>, &'static str>
 pub fn resize_hfirst_streaming_f32(&ResizeConfig, &[u8]) -> core::result::Result<alloc::vec::Vec<u8>, &'static str>
+pub fn resize_rgba8(imgref::ImgRef<'_, rgb::RGBA8>, u32, u32) -> core::result::Result<imgref::ImgVec<rgb::RGBA8>, whereat::at::At<ConfigError>>
+pub fn resize_rgba8_to_fit(imgref::ImgRef<'_, rgb::RGBA8>, u32, u32) -> core::result::Result<imgref::ImgVec<rgb::RGBA8>, whereat::at::At<ConfigError>>
 pub fn unpremultiply_f32_row(&mut [f32]) [also: composite]
 
 ## trait impls (23 types)
