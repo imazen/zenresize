@@ -1,0 +1,40 @@
+# zenresize NEON vs forced-scalar — first tier-isolated measurement
+date:    2026-07-28
+host:    Apple M4 Pro (12 core), macOS, aarch64
+command: cargo bench --bench tier_isolation
+build:   release, NO -C target-cpu=native (native pins the tier at compile time,
+         after which it cannot be disabled and the bench skips)
+filter:  Lanczos, RGBA8 sRGB, single-threaded
+
+## Why this file exists
+
+Every other bench in this crate measures zenresize against pic-scale /
+fast_image_resize / resize. That answers "are we competitive", not "is our SIMD
+worth anything" — a kernel slower than its own scalar fallback still looks fine
+next to a competitor. benches/tier_isolation.rs runs the identical pipeline with
+the native SIMD token disabled, which is the comparison that can expose a bad
+kernel.
+
+## Result
+
+| case                      | NEON     | scalar    | speedup |
+|---------------------------|----------|-----------|---------|
+| down_4k_to_1080p / srgb   |  78.94ms |  123.03ms |  1.56x  |
+| down_4k_to_1080p / linear |  71.89ms |  308.67ms |  4.29x  |
+| down_1024_to_256 / srgb   |   7.03ms |   11.26ms |  1.60x  |
+| down_1024_to_256 / linear |   8.25ms |   34.69ms |  4.20x  |
+| up_256_to_1024 / srgb     |   7.69ms |   12.21ms |  1.59x  |
+| up_256_to_1024 / linear   |   6.63ms |   26.49ms |  4.00x  |
+
+No regression in any case.
+
+The linear-light path gains ~4x versus ~1.6x for sRGB because it additionally
+runs the sRGB<->linear transfer functions, which are themselves 3-6.6x on NEON
+(see linear-srgb/benchmarks/neon_vs_scalar_tiers_2026-07-28.meta). Consequence
+worth knowing: with NEON, linear-light 4K downscale is FASTER than the sRGB
+path (71.89ms vs 78.94ms), while with SIMD disabled it is 2.5x SLOWER
+(308.67ms vs 123.03ms). Any heuristic that avoids linear-light on cost grounds
+was calibrated on scalar behaviour and is wrong on ARM.
+
+Whole-pipeline numbers; they bound what NEON contributes but do not attribute
+it per kernel.

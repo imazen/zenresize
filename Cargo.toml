@@ -58,8 +58,16 @@ pic-scale = { version = "0.7", default-features = false, features = ["colorspace
 pic-scale-safe = "0.1"
 fast_image_resize = "6"
 zenbench = { version = "0.1.2", features = ["criterion-compat"] }
+# `testable_dispatch` lets benches/tier_isolation.rs disable the baseline SIMD
+# token (NEON on aarch64) so the scalar arm is real rather than a second
+# measurement of the SIMD path.
+archmage = { version = "0.9.26", features = ["std", "macros", "testable_dispatch"] }
 resize = "0.8"
 palette = "0.7"
+
+[[bench]]
+name = "tier_isolation"
+harness = false
 
 [[bench]]
 name = "resize_bench"

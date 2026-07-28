@@ -1,0 +1,199 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.45
+   Compiling autocfg v1.5.1
+   Compiling libm v0.2.16
+   Compiling cfg-if v1.0.4
+   Compiling libc v0.2.186
+   Compiling zerocopy v0.8.52
+   Compiling bitflags v2.13.0
+   Compiling crossbeam-utils v0.8.21
+   Compiling num-traits v0.2.19
+   Compiling rustversion v1.0.22
+   Compiling utf8parse v0.2.2
+   Compiling anstyle-parse v1.0.0
+   Compiling colorchoice v1.0.5
+   Compiling siphasher v1.0.3
+   Compiling rayon-core v1.13.0
+   Compiling find-msvc-tools v0.1.9
+   Compiling crc32fast v1.5.0
+   Compiling anstyle v1.0.14
+   Compiling anstyle-query v1.1.5
+   Compiling serde_core v1.0.228
+   Compiling syn v2.0.117
+   Compiling simd-adler32 v0.3.9
+   Compiling safe_unaligned_simd v0.2.5
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling rustix v1.1.4
+   Compiling rand_core v0.6.4
+   Compiling shlex v2.0.1
+   Compiling cc v1.2.64
+   Compiling crossbeam-epoch v0.9.18
+   Compiling crossbeam-deque v0.8.6
+   Compiling rand v0.8.6
+   Compiling anstream v1.0.0
+   Compiling errno v0.3.14
+   Compiling getrandom v0.2.17
+   Compiling phf_shared v0.11.3
+   Compiling strsim v0.11.1
+   Compiling adler2 v2.0.1
+   Compiling clap_lex v1.1.0
+   Compiling zmij v1.0.21
+   Compiling heck v0.5.0
+   Compiling clap_builder v4.6.0
+   Compiling miniz_oxide v0.8.9
+   Compiling phf_generator v0.11.3
+   Compiling alloca v0.4.0
+   Compiling erydanos v0.2.18
+   Compiling objc2-core-foundation v0.3.2
+   Compiling memchr v2.8.2
+   Compiling serde v1.0.228
+   Compiling zerocopy-derive v0.8.52
+   Compiling bytemuck_derive v1.10.2
+   Compiling archmage-macros v0.9.26
+   Compiling clap_derive v4.6.1
+   Compiling whereat v0.1.5
+   Compiling is_ci v1.2.0
+   Compiling anyhow v1.0.102
+   Compiling thiserror v1.0.69
+   Compiling bytemuck v1.25.0
+   Compiling thiserror v2.0.18
+   Compiling pxfm v0.1.29
+   Compiling serde_json v1.0.150
+   Compiling either v1.16.0
+   Compiling archmage v0.9.26
+   Compiling rayon v1.12.0
+   Compiling clap v4.6.1
+   Compiling rgb v0.8.53
+   Compiling magetypes v0.9.26
+   Compiling supports-color v3.0.2
+   Compiling objc2-io-kit v0.3.2
+   Compiling thiserror-impl v1.0.69
+   Compiling thiserror-impl v2.0.18
+   Compiling phf_macros v0.11.3
+   Compiling serde_derive v1.0.228
+   Compiling ppv-lite86 v0.2.21
+   Compiling half v2.7.1
+   Compiling rand_chacha v0.3.1
+   Compiling flate2 v1.1.9
+   Compiling fdeflate v0.3.7
+   Compiling zenresize v0.3.1 (/Users/lilith/work/zen/zenresize)
+   Compiling itoa v1.0.18
+   Compiling by_address v1.2.1
+   Compiling tango-bench v0.7.2
+   Compiling palette v0.7.6
+   Compiling zune-core v0.5.1
+   Compiling litrs v1.0.0
+   Compiling zune-jpeg v0.5.15
+   Compiling document-features v0.2.12
+   Compiling zenblend v0.1.3
+   Compiling linear-srgb v0.6.12
+   Compiling palette_derive v0.7.6
+   Compiling png v0.18.1
+   Compiling colorutils-rs v0.8.0
+   Compiling phf v0.11.3
+   Compiling sysinfo v0.36.1
+   Compiling colorz v1.1.4
+   Compiling moxcms v0.8.1
+   Compiling zenpixels v0.2.13
+   Compiling terminal_size v0.4.4
+   Compiling fs4 v1.1.0
+   Compiling approx v0.5.1
+   Compiling libloading v0.8.9
+   Compiling glob-match v0.2.1
+   Compiling imgref v1.12.2
+   Compiling byteorder-lite v0.1.0
+   Compiling fast-srgb8 v1.0.0
+   Compiling log v0.4.32
+   Compiling zenbench v0.1.8
+   Compiling fast_image_resize v6.0.0
+warning: function `idx` is never used
+  --> src/proven.rs:13:15
+   |
+13 | pub(crate) fn idx<T>(slice: &[T], i: usize) -> &T {
+   |               ^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `idx_mut` is never used
+  --> src/proven.rs:26:15
+   |
+26 | pub(crate) fn idx_mut<T>(slice: &mut [T], i: usize) -> &mut T {
+   |               ^^^^^^^
+
+warning: function `sub` is never used
+  --> src/proven.rs:39:15
+   |
+39 | pub(crate) fn sub<T>(slice: &[T], range: Range<usize>) -> &[T] {
+   |               ^^^
+
+   Compiling pic-scale v0.7.9
+   Compiling image v0.25.10
+   Compiling colorutils-rs v0.7.6
+   Compiling resize v0.8.9
+   Compiling zenlayout v0.2.2
+   Compiling pic-scale-safe v0.1.10
+warning: `zenresize` (lib) generated 3 warnings
+    Finished `bench` profile [optimized] target(s) in 14.94s
+     Running benches/tier_isolation.rs (target/release/deps/tier_isolation-4f2db868650c48a7)
+[tier_isolation] comparing neon vs forced scalar
+
+  down_4k_to_1080p/srgb  0 rounds ⚠ only 0 rounds
+              mean ±mad ms  95% CI vs base 
+  ├─ neon      78.9 ±0.2ms  [78.9–79.0]ms  
+  ╰─ scalar   123.0 ±1.4ms                 
+
+  neon    ███████████████████████████████████████ 78.94ms
+  scalar  █████████████████████████████████████████████████████████████ 123.03ms
+
+  down_4k_to_1080p/linear  0 rounds ⚠ only 0 rounds
+              mean ±mad ms  95% CI vs base 
+  ├─ neon      71.9 ±0.1ms  [71.9–71.9]ms  
+  ╰─ scalar   308.7 ±0.5ms                 
+
+  neon    ██████████████ 71.89ms
+  scalar  █████████████████████████████████████████████████████████████ 308.67ms
+
+  down_1024_to_256/srgb  0 rounds ⚠ only 0 rounds
+             mean ±mad ms  95% CI vs base
+  ├─ neon      7.0 ±0.0ms  [7.0–7.0]ms  
+  ╰─ scalar   11.3 ±0.0ms               
+
+  neon    ███████████████████████████████████████ 7.03ms
+  scalar  ██████████████████████████████████████████████████████████████ 11.26ms
+
+  down_1024_to_256/linear  0 rounds ⚠ only 0 rounds
+             mean ±mad ms  95% CI vs base
+  ├─ neon      8.3 ±0.0ms  [8.2–8.3]ms  
+  ╰─ scalar   34.7 ±0.1ms               
+
+  neon    ███████████████ 8.25ms
+  scalar  ██████████████████████████████████████████████████████████████ 34.69ms
+
+  up_256_to_1024/srgb  0 rounds ⚠ only 0 rounds
+             mean ±mad ms  95% CI vs base
+  ├─ neon      7.7 ±0.0ms  [7.7–7.7]ms  
+  ╰─ scalar   12.2 ±0.1ms               
+
+  neon    ███████████████████████████████████████ 7.69ms
+  scalar  ██████████████████████████████████████████████████████████████ 12.21ms
+
+  up_256_to_1024/linear  0 rounds ⚠ only 0 rounds
+             mean ±mad ms  95% CI vs base
+  ├─ neon      6.6 ±0.1ms  [6.6–6.7]ms  
+  ╰─ scalar   26.5 ±0.1ms               
+
+  neon    ████████████████ 6.63ms
+  scalar  ██████████████████████████████████████████████████████████████ 26.49ms
+[zenbench] calibration: int=0.29ns/iter mem_bw=117.8GiB/s mem_lat=7.4ns
+[zenbench] timer resolution: 41ns, loop overhead: 0.22ns/iter, TSC: 1.000 ticks/ns (invariant)
+[zenbench] results → /var/folders/sc/m9jbk0qj0jz4w09h7gg8v3p80000gn/T/zenbench/zenbench-1785242677-1bdc.txt
+
+═══════════════════════════════════════════════════════════════
+  zenbench  1785242677-1bdc
+  git: 7bf8ca7b4d2c3157c595ebbd8113d8070a17d8b5
+═══════════════════════════════════════════════════════════════
+
+  total: 0.0s
+═══════════════════════════════════════════════════════════════
+  filter: cargo bench -- --group=NAME  format: --format=llm|csv|md|json
