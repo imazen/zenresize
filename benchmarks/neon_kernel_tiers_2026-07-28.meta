@@ -1,0 +1,49 @@
+# zenresize per-kernel NEON-vs-scalar — u8_to_f32_row was 1.67x SLOWER; fixed
+date:  2026-07-28
+host:  Apple M4 Pro (12 core), macOS, aarch64
+build: release, NO -C target-cpu=native
+bench: cargo bench --bench kernel_tiers   (1920-px RGBA rows)
+
+## Why per-kernel
+
+zenresize had only ever been measured END-TO-END (whole-image resize: 1.56x
+sRGB / 4.29x linear on aarch64). An end-to-end number cannot reveal a single
+kernel that is SLOWER than its own scalar fallback — the faster kernels hide it.
+That failure mode turned up in garb, zensim, zentone and zenpng during the same
+sweep (in zenpng, six of eight filter paths were losing), so it was worth
+checking here too.
+
+## Result
+
+| kernel                   | NEON    | scalar  | ratio |
+|--------------------------|---------|---------|-------|
+| u8_to_f32_row            | 2.00us  | 1.20us  | 0.60x |  <- SLOWER
+| f32_to_u8_row            | 2.60us  | 2.60us  | 1.00x |
+| premultiply_alpha_row    | 2.00us  | 2.00us  | 1.00x |
+| unpremultiply_alpha_row  | 2.90us  | 2.90us  | 1.00x |
+| premultiply_u8_row       | 1.10us  | 1.10us  | 1.00x |
+| unpremultiply_u8_row     | 8.40us  | 8.50us  | 1.01x |
+
+One loser. The 1.00x rows are NOT gaps — on AArch64 NEON is baseline, so the
+forced-scalar arm autovectorises too and 1.00x means the arms compile to
+equivalent code (the lesson recorded in zentone's aces_ap1 write-up).
+
+## Cause and fix
+
+`u8_to_f32_row_impl` widens four pixels with
+`i32x4::from_array(token, [inp[0] as i32, inp[1] as i32, ...])` — scalar lane
+assembly feeding a vector convert. The autovectoriser handles the plain
+`*i as f32 * (1.0/255.0)` loop better than that hand-built widening.
+
+aarch64 now takes `u8_to_f32_row_scalar`:
+
+  2.00us -> 1.30us    1.54x
+
+Bit-identical — verified 0 differing lanes at n = 7680/1023/17/4/3/1 (including
+lengths below one f32x4 and a single element). 249 tests green.
+
+## Note
+
+`u8_to_f32_row_impl` is declared `#[magetypes(neon, wasm128)]` — it has no
+scalar tier of its own, so the incant! fallback reaches a separately written
+`simd/scalar.rs::u8_to_f32_row_scalar`. That is the function dispatched to here.

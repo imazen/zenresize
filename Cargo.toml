@@ -153,3 +153,7 @@ opt-level = 2
 
 [profile.dev]
 opt-level = 1
+
+[[bench]]
+name = "kernel_tiers"
+harness = false

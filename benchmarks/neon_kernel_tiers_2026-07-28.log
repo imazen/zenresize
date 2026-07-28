@@ -1,0 +1,105 @@
+   Compiling zenresize v0.3.1 (/Users/lilith/work/zen/zenresize)
+warning: function `idx` is never used
+  --> src/proven.rs:13:15
+   |
+13 | pub(crate) fn idx<T>(slice: &[T], i: usize) -> &T {
+   |               ^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `idx_mut` is never used
+  --> src/proven.rs:26:15
+   |
+26 | pub(crate) fn idx_mut<T>(slice: &mut [T], i: usize) -> &mut T {
+   |               ^^^^^^^
+
+warning: function `sub` is never used
+  --> src/proven.rs:39:15
+   |
+39 | pub(crate) fn sub<T>(slice: &[T], range: Range<usize>) -> &[T] {
+   |               ^^^
+
+warning: `zenresize` (lib) generated 3 warnings
+warning: unused import: `archmage::SimdToken`
+  --> benches/kernel_tiers.rs:25:9
+   |
+25 |     use archmage::SimdToken;
+   |         ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `zenresize` (bench "kernel_tiers") generated 1 warning (run `cargo fix --bench "kernel_tiers" -p zenresize` to apply 1 suggestion)
+    Finished `bench` profile [optimized] target(s) in 1.46s
+     Running benches/kernel_tiers.rs (target/release/deps/kernel_tiers-84f5a1f2c39dbaaa)
+[kernel_tiers] comparing neon vs forced scalar
+[zenbench] calibration: int=0.37ns/iter mem_bw=90.1GiB/s mem_lat=7.8ns
+[zenbench] timer resolution: 41ns, loop overhead: 0.38ns/iter, TSC: 1.000 ticks/ns (invariant)
+[zenbench] results → /var/folders/sc/m9jbk0qj0jz4w09h7gg8v3p80000gn/T/zenbench/zenbench-1785253812-c746.txt
+
+═══════════════════════════════════════════════════════════════
+  zenbench  1785253812-c746
+  git: 665e02fc7022a48f8ec8497322c16a6a4dc229b8
+═══════════════════════════════════════════════════════════════
+
+  u8_to_f32_row  200 rounds × 1K calls
+             mean ±mad µs  95% CI vs base      iB/s
+  ├─ neon     2.0 ±1.0µs  [1.9–2.0]µs        3.67G [1]
+  ╰─ scalar   1.2 ±0.2µs  [-41.3%–-33.9%]    5.87G
+
+  scalar  ███████████████████████████████████████████████████████████ 5.87 GiB/s
+  neon    █████████████████████████████████████ 3.67 GiB/s
+  [1] CV=32%
+
+  f32_to_u8_row  200 rounds × 990 calls
+             mean ±mad µs  95% CI vs base    iB/s
+  ├─ neon     2.6 ±0.6µs  [2.5–2.7]µs      2.74G [1]
+  ╰─ scalar   2.6 ±0.3µs  [-0.8%–+2.1%]    2.72G [2]
+
+  neon    ███████████████████████████████████████████████████████████ 2.74 GiB/s
+  scalar  ███████████████████████████████████████████████████████████ 2.72 GiB/s
+  [1] CV=20%
+  [2] CI crosses zero
+
+  premultiply_alpha_row  130 rounds × 1K calls
+             mean ±mad µs  95% CI vs base    iB/s
+  ├─ neon     2.0 ±0.7µs  [1.9–2.1]µs      3.58G [1]
+  ╰─ scalar   2.0 ±0.7µs  [-0.2%–+0.6%]    3.59G [2] [3]
+
+  scalar  ███████████████████████████████████████████████████████████ 3.59 GiB/s
+  neon    ███████████████████████████████████████████████████████████ 3.58 GiB/s
+  [1] CV=27%
+  [2] CI crosses zero
+  [3] CV=27%
+
+  unpremultiply_alpha_row  110 rounds × 853 calls
+             mean ±mad µs  95% CI vs base    iB/s
+  ├─ neon     2.9 ±0.2µs  [2.8–3.0]µs      2.43G
+  ╰─ scalar   2.9 ±0.4µs  [-0.3%–+0.7%]    2.43G [1]
+
+  scalar  ███████████████████████████████████████████████████████████ 2.43 GiB/s
+  neon    ███████████████████████████████████████████████████████████ 2.43 GiB/s
+  [1] CI crosses zero
+
+  premultiply_u8_row  90 rounds × 2K calls
+             mean ±mad µs  95% CI vs base    iB/s
+  ├─ neon     1.1 ±0.2µs  [1.0–1.1]µs      6.60G
+  ╰─ scalar   1.1 ±0.2µs  [-0.1%–+0.5%]    6.63G [1]
+
+  scalar  ███████████████████████████████████████████████████████████ 6.63 GiB/s
+  neon    ███████████████████████████████████████████████████████████ 6.60 GiB/s
+  [1] CI crosses zero
+
+  unpremultiply_u8_row  200 rounds × 358 calls
+             mean ±mad µs  95% CI vs base   iB/s
+  ├─ neon     8.4 ±1.7µs  [7.9–9.0]µs      868M [1]
+  ╰─ scalar   8.5 ±1.8µs  [-0.3%–+0.1%]    862M [2] [3]
+
+  neon    ████████████████████████████████████████████████████████████ 868 MiB/s
+  scalar  ████████████████████████████████████████████████████████████ 862 MiB/s
+  [1] CV=47%
+  [2] CI crosses zero
+  [3] CV=48%
+
+  total: 110.2s  (3 noisy rounds)
+═══════════════════════════════════════════════════════════════
+  filter: cargo bench -- --group=NAME  format: --format=llm|csv|md|json

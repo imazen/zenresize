@@ -61,6 +61,23 @@ pub(crate) fn filter_v_row_f32(rows: &[&[f32]], output: &mut [f32], weights: &[f
 
 /// Convert a row of u8 pixels to f32 (divide by 255).
 pub(crate) fn u8_to_f32_row(input: &[u8], output: &mut [f32]) {
+    // aarch64: the NEON kernel is SLOWER than the scalar one here. NEON is
+    // baseline on AArch64, so LLVM autovectorises the scalar body, and this
+    // kernel's per-4-pixel `i32x4::from_array([a as i32, b as i32, ...])`
+    // widening is scalar lane-assembly that the autovectoriser does better.
+    // Measured on a 1920-px RGBA row (benches/kernel_tiers.rs):
+    //   neon 2.00us vs scalar 1.20us  (0.60x — 1.67x slower)
+    // Bit-identical: verified 0 differing lanes at n = 7680/1023/17/4/3/1.
+    #[cfg(target_arch = "aarch64")]
+    {
+        use archmage::SimdToken;
+        return crate::simd::scalar::u8_to_f32_row_scalar(
+            archmage::ScalarToken::summon().expect("scalar token is infallible"),
+            input,
+            output,
+        );
+    }
+    #[cfg(not(target_arch = "aarch64"))]
     archmage::incant!(u8_to_f32_row(input, output))
 }
 
@@ -324,4 +341,23 @@ pub(crate) fn filter_v_all_i16_i16(
         out_h,
         weights
     ))
+}
+
+/// Dev-only per-kernel access for `benches/kernel_tiers.rs`.
+///
+/// NOT public API and NOT semver-covered — `simd` is already `#[doc(hidden)]`.
+/// These exist because the crate was only ever measured end-to-end (resize of a
+/// whole image), which cannot show a single kernel being SLOWER than its own
+/// scalar fallback. That failure mode was found in garb, zensim, zentone and
+/// zenpng during the 2026-07-28 aarch64 sweep, so it is worth checking here.
+#[doc(hidden)]
+pub mod __bench_kernels {
+    // Thin forwarders rather than `pub use`: the kernels are `pub(crate)`,
+    // and re-exporting them directly would widen their visibility.
+    pub fn u8_to_f32_row(i: &[u8], o: &mut [f32]) { super::u8_to_f32_row(i, o) }
+    pub fn f32_to_u8_row(i: &[f32], o: &mut [u8]) { super::f32_to_u8_row(i, o) }
+    pub fn premultiply_alpha_row(r: &mut [f32]) { super::premultiply_alpha_row(r) }
+    pub fn unpremultiply_alpha_row(r: &mut [f32]) { super::unpremultiply_alpha_row(r) }
+    pub fn premultiply_u8_row(i: &[u8], o: &mut [u8]) { super::premultiply_u8_row(i, o) }
+    pub fn unpremultiply_u8_row(r: &mut [u8]) { super::unpremultiply_u8_row(r) }
 }
