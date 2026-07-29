@@ -43,6 +43,29 @@ fn bench_kernels(suite: &mut Suite) {
     let u8src: &'static [u8] = Box::leak((0..n + PAD).map(|i| if i < n { (i % 251) as u8 } else { 0 }).collect::<Vec<_>>().into_boxed_slice());
     let fsrc: &'static [f32] = Box::leak((0..n + PAD).map(|i| if i < n { (i % 251) as f32 / 251.0 } else { 0.0 }).collect::<Vec<_>>().into_boxed_slice());
 
+    // In-place kernels: the buffer clone is a 30 KB allocation + copy, which
+    // dominates a sub-microsecond kernel and made both arms move ~30% between
+    // runs. `with_input` is not timed, so build the buffer there.
+    macro_rules! ab_inplace {
+        ($name:expr, $src:expr, $call:expr) => {
+            suite.compare($name, |g| {
+                g.throughput(Throughput::Bytes(n as u64));
+                for (arm, simd) in [(TIER_NAME, true), ("scalar", false)] {
+                    g.bench(arm, move |b| {
+                        b.with_input(move || {
+                            set_simd(simd);
+                            $src.to_vec()
+                        })
+                        .run(move |mut r| {
+                            $call(&mut r);
+                            r
+                        })
+                    });
+                }
+            });
+        };
+    }
+
     macro_rules! ab {
         ($name:expr, $body:expr) => {
             suite.compare($name, |g| {
@@ -58,10 +81,10 @@ fn bench_kernels(suite: &mut Suite) {
 
     ab!("u8_to_f32_row", { let mut o = vec![0f32; n]; k::u8_to_f32_row(&u8src[..n], &mut o); o });
     ab!("f32_to_u8_row", { let mut o = vec![0u8; n]; k::f32_to_u8_row(&fsrc[..n], &mut o); o });
-    ab!("premultiply_alpha_row", { let mut r = fsrc[..n].to_vec(); k::premultiply_alpha_row(&mut r); r });
-    ab!("unpremultiply_alpha_row", { let mut r = fsrc[..n].to_vec(); k::unpremultiply_alpha_row(&mut r); r });
+    ab_inplace!("premultiply_alpha_row", fsrc[..n], k::premultiply_alpha_row);
+    ab_inplace!("unpremultiply_alpha_row", fsrc[..n], k::unpremultiply_alpha_row);
     ab!("premultiply_u8_row", { let mut o = vec![0u8; n]; k::premultiply_u8_row(&u8src[..n], &mut o); o });
-    ab!("unpremultiply_u8_row", { let mut r = u8src[..n].to_vec(); k::unpremultiply_u8_row(&mut r); r });
+    ab_inplace!("unpremultiply_u8_row", u8src[..n], k::unpremultiply_u8_row);
 
     // ── The convolutions. A 1920 -> 960 downscale (the common web case) with
     // Lanczos3, RGBA. These run once per output row of every resize, so they

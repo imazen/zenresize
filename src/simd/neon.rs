@@ -39,14 +39,58 @@ pub(crate) fn f32_to_u8_row_neon(_token: NeonToken, input: &[f32], output: &mut 
     super::wide_kernels::f32_to_u8_row_impl_neon(_token, input, output)
 }
 
+/// Portable body, deliberately.
+///
+/// A hand-written `vld4q_f32` version was tried and MEASURED NO GAIN: 1.00x
+/// against the forced-scalar tier both before and after (CI straddling zero,
+/// reproduced across runs). NEON is baseline on aarch64, so LLVM already
+/// vectorizes this loop about as well as the intrinsics do — see
+/// `unpremultiply_alpha_row_neon` below for the case where hand-writing DOES
+/// pay, and why the two differ.
 #[archmage::arcane]
 pub(crate) fn premultiply_alpha_row_neon(_token: NeonToken, row: &mut [f32]) {
     super::wide_kernels::premultiply_alpha_row_impl_neon(_token, row)
 }
 
+/// Hand-written NEON unpremultiply: 4 f32 pixels per `vld4q_f32`.
+///
+/// Same shape as [`premultiply_alpha_row_neon`] — the portable body is scalar
+/// in every tier (measured 1.00x, 5.41 GiB/s).
+///
+/// Bit-exact: the scalar body computes `inv_a = 1.0 / a` and then `c * inv_a`,
+/// two roundings in that order, and so does this — `vdivq_f32` is a correctly
+/// rounded IEEE divide, matching `1.0 / a`, and `vmulq_f32` matches the
+/// multiply. The `a > 1/1024` guard becomes a select, leaving the pixel
+/// untouched below the threshold exactly as the branch did.
 #[archmage::arcane]
-pub(crate) fn unpremultiply_alpha_row_neon(_token: NeonToken, row: &mut [f32]) {
-    super::wide_kernels::unpremultiply_alpha_row_impl_neon(_token, row)
+pub(crate) fn unpremultiply_alpha_row_neon(token: NeonToken, row: &mut [f32]) {
+    const PX: usize = 4;
+    let full = row.len() / (PX * 4) * (PX * 4);
+    let (body, tail) = row.split_at_mut(full);
+    let thresh = vdupq_n_f32(1.0 / 1024.0);
+    let one = vdupq_n_f32(1.0);
+    for chunk in body.chunks_exact_mut(PX * 4) {
+        let block: &mut [f32; PX * 4] = chunk.try_into().unwrap();
+        let p = vld4q_f32(block);
+        // Select on the RESULT, not on the multiplier: below the threshold the
+        // scalar branch leaves the channel completely untouched, and `c * 1.0`
+        // — while equal for every finite value — is not guaranteed to preserve
+        // a NaN payload. Selecting the original lane is unconditionally exact.
+        let live = vcgtq_f32(p.3, thresh);
+        let inv = vdivq_f32(one, p.3);
+        vst4q_f32(
+            block,
+            float32x4x4_t(
+                vbslq_f32(live, vmulq_f32(p.0, inv), p.0),
+                vbslq_f32(live, vmulq_f32(p.1, inv), p.1),
+                vbslq_f32(live, vmulq_f32(p.2, inv), p.2),
+                p.3,
+            ),
+        );
+    }
+    if !tail.is_empty() {
+        super::wide_kernels::unpremultiply_alpha_row_impl_neon(token, tail);
+    }
 }
 
 #[archmage::arcane]
