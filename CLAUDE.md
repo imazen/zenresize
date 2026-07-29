@@ -100,6 +100,66 @@ Requires RGBAF32_LINEAR_PREMUL upstream.
 - `filter_h_i16_i16` — H-filter for linear i16 path
 - `filter_v_row_f16` / `filter_h_row_f32_to_f16` — f32 path
 
+## aarch64 / NEON (2026-07-28 sweep)
+
+**NEON is BASELINE on aarch64.** `#[target_feature(enable="neon")]` is a no-op,
+so the "scalar" tier is autovectorized too. A 1.00x NEON-vs-forced-scalar
+result therefore means "LLVM already did it", NOT "the SIMD path is missing".
+Hand-written intrinsics only pay where the portable form *structurally* cannot
+vectorize. Two proven cases, and one proven non-case:
+
+- **PAYS — runtime-variable divisor.** `unpremultiply_u8_row` divides by the
+  pixel's own alpha; there is no SIMD integer divide, so it sat at 1.00x /
+  2.4 GiB/s while `premultiply_u8_row` (divisor = the constant 255, which LLVM
+  turns into a multiply-shift) ran at 14.5 GiB/s. `vld4q_u8` + f32 divide:
+  **2.7x**.
+- **PAYS — interleaved layout.** `unpremultiply_alpha_row`: `vld4q_f32`
+  deinterleaves RGBA so alpha is already a vector. **1.22x**.
+- **DOES NOT PAY — `premultiply_alpha_row`.** A `vld4q_f32` version was written
+  and measured at 1.00x both before and after; it was reverted. Don't re-attempt
+  it; the function carries a comment saying so.
+
+A portable f32-divide rewrite of `unpremultiply_u8_row` inside `wide_kernels`
+was tried FIRST and was **worse** (4.1us vs 3.0us): marshalling one pixel at a
+time through a vector costs more than the integer divides it removes. The win
+came from `vld4q`, i.e. from the deinterleave, not from the divide.
+
+### benches/kernel_tiers.rs — read this before trusting a kernel number
+
+End-to-end resize numbers (1.56x sRGB / 4.29x linear) **cannot** show a kernel
+that is slower than its own scalar fallback. `benches/kernel_tiers.rs` compares
+each kernel against its forced-scalar tier; `simd::__bench_kernels` is the
+`#[doc(hidden)]` forwarder module that lets it reach `pub(crate)` kernels (25
+covered — it was 6, and the 19 added were the H/V convolutions that actually
+dominate a resize).
+
+Two traps, both hit during that sweep:
+
+1. **In-place kernels must build their buffer in `with_input`, not in the timed
+   body.** A 30 KB clone dominates a sub-microsecond kernel. With the clone
+   timed, `premultiply_alpha_row` looked like a 0.92x regression (CI [-4.3%,
+   -2.8%]) — it is actually 1.00x. That false regression was reported in a
+   commit message before it was caught.
+2. **Only the IN-RUN paired ratio is trustworthy.** Absolute timings on this
+   machine drift up to 2x between runs (the same unchanged code measured 551ns
+   and 1.2us). Never claim a cross-run absolute speedup; quote the ratio and its
+   CI from a single run, and reproduce it.
+
+### H kernels over-read; callers must pad
+
+The 4-channel H filters loop to `weights.max_taps` and rely on zero-padded
+weights, so they read up to `groups4 * 16` elements past the row end. This is a
+CONTRACT, not a bug — `streaming.rs` allocates `in_row_len + h_padding_i16` and
+zeroes the pad. Any new caller (or bench) must do the same or it will panic.
+
+### filter_h_row_f32_to_f16 was scalar [FIXED]
+
+Its convolution ran fully scalar — a `/` and a `%` per output element — while
+its sibling `filter_h_4ch` vectorized over the RGBA pixel, so the NEON tier did
+strictly more work than its own scalar fallback (0.94x). Now vectorized the same
+way: **4.55x**. For `channels == 4` this is exact, because a flat chunk of 4 IS
+one output pixel; other channel counts still take the original path.
+
 ## Investigation Notes
 
 ### i16 accuracy gap [FIXED]
