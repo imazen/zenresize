@@ -1304,6 +1304,37 @@ pub(super) fn filter_h_row_f32_to_f16_impl(
         acc
     };
 
+    // RGBA: accumulate the whole pixel as one vector, exactly like
+    // `filter_h_4ch` does for the f32 output. Lane `c` performs the same
+    // multiply-add sequence, in the same order, that `acc_at(i + c)` performs
+    // scalar-wise, so the accumulators are bit-identical — and a flat chunk of
+    // 4 IS one output pixel when channels == 4, so the f16 conversion sees the
+    // same four values as before. The scalar closure above was doing a `/` and
+    // a `%` per output element and never vectorized the convolution at all,
+    // which is why this path lost to its own scalar tier.
+    if channels == 4 {
+        #[allow(non_camel_case_types)]
+        type f32x4<U> = GenericF32x4<U>;
+        let (in_pixels, _) = input.as_chunks::<4>();
+        let (out_pixels, _) = output.as_chunks_mut::<4>();
+        for out_x in 0..out_width {
+            let left = weights.left[out_x] as usize;
+            let w = weights.weights(out_x);
+            let mut acc = f32x4::zero(token);
+            for (t, &weight) in w.iter().enumerate() {
+                acc += f32x4::from_array(token, in_pixels[left + t]) * f32x4::splat(token, weight);
+            }
+            let packed = acc.to_f16().to_array();
+            out_pixels[out_x] = [
+                packed[0] as u16,
+                packed[1] as u16,
+                packed[2] as u16,
+                packed[3] as u16,
+            ];
+        }
+        return;
+    }
+
     let chunks = total / 4;
     for ch in 0..chunks {
         let i = ch * 4;

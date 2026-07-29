@@ -360,4 +360,81 @@ pub mod __bench_kernels {
     pub fn unpremultiply_alpha_row(r: &mut [f32]) { super::unpremultiply_alpha_row(r) }
     pub fn premultiply_u8_row(i: &[u8], o: &mut [u8]) { super::premultiply_u8_row(i, o) }
     pub fn unpremultiply_u8_row(r: &mut [u8]) { super::unpremultiply_u8_row(r) }
+
+    // ── The H/V filter kernels: the resizer's actual hot path. The six above
+    // are per-pixel conversions; these are the convolutions every resize runs
+    // once per output row, so a loss here costs far more.
+    use crate::weights::{F32WeightTable, I16WeightTable};
+
+    pub fn filter_h_row_f32(i: &[f32], o: &mut [f32], w: &F32WeightTable, c: usize) {
+        super::filter_h_row_f32(i, o, w, c)
+    }
+    pub fn filter_v_row_f32(rows: &[&[f32]], o: &mut [f32], w: &[f32]) {
+        super::filter_v_row_f32(rows, o, w)
+    }
+    pub fn filter_h_u8_i16(i: &[u8], o: &mut [u8], w: &I16WeightTable, c: usize) {
+        super::filter_h_u8_i16(i, o, w, c)
+    }
+    pub fn filter_h_u8_to_i16(i: &[u8], o: &mut [i16], w: &I16WeightTable, c: usize) {
+        super::filter_h_u8_to_i16(i, o, w, c)
+    }
+    pub fn filter_h_i16_i16(i: &[i16], o: &mut [i16], w: &I16WeightTable, c: usize) {
+        super::filter_h_i16_i16(i, o, w, c)
+    }
+    pub fn filter_v_row_u8_i16(rows: &[&[u8]], o: &mut [u8], w: &[i16]) {
+        super::filter_v_row_u8_i16(rows, o, w)
+    }
+    pub fn filter_v_row_i16(rows: &[&[i16]], o: &mut [i16], w: &[i16]) {
+        super::filter_v_row_i16(rows, o, w)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn filter_h_u8_i16_4rows(
+        i0: &[u8], i1: &[u8], i2: &[u8], i3: &[u8],
+        o0: &mut [u8], o1: &mut [u8], o2: &mut [u8], o3: &mut [u8],
+        w: &I16WeightTable,
+    ) {
+        super::filter_h_u8_i16_4rows(i0, i1, i2, i3, o0, o1, o2, o3, w)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn filter_h_u8_to_i16_4rows(
+        i0: &[u8], i1: &[u8], i2: &[u8], i3: &[u8],
+        o0: &mut [i16], o1: &mut [i16], o2: &mut [i16], o3: &mut [i16],
+        w: &I16WeightTable,
+    ) {
+        super::filter_h_u8_to_i16_4rows(i0, i1, i2, i3, o0, o1, o2, o3, w)
+    }
+    pub fn filter_v_all_i16_i16(
+        inter: &[i16], o: &mut [i16], h_row_len: usize, in_h: usize, out_h: usize,
+        w: &I16WeightTable,
+    ) {
+        super::filter_v_all_i16_i16(inter, o, h_row_len, in_h, out_h, w)
+    }
+
+    // ── f16 pipeline
+    pub fn f32_to_f16_row(i: &[f32], o: &mut [u16]) { super::f32_to_f16_row(i, o) }
+    pub fn f16_to_f32_row(i: &[u16], o: &mut [f32]) { super::f16_to_f32_row(i, o) }
+    pub fn filter_h_row_f32_to_f16(i: &[f32], o: &mut [u16], w: &F32WeightTable, c: usize) {
+        super::filter_h_row_f32_to_f16(i, o, w, c)
+    }
+    pub fn filter_v_row_f16(rows: &[&[u16]], o: &mut [f32], w: &[f32]) {
+        super::filter_v_row_f16(rows, o, w)
+    }
+    pub fn filter_v_all_f16(
+        inter: &[u16], o: &mut [f32], h_row_len: usize, in_h: usize, out_h: usize,
+        w: &F32WeightTable,
+    ) {
+        super::filter_v_all_f16(inter, o, h_row_len, in_h, out_h, w)
+    }
+
+    // ── colour / transfer
+    pub fn srgb_u8_to_linear_f32(i: &[u8], o: &mut [f32], c: usize, a: bool) {
+        super::srgb_u8_to_linear_f32(i, o, c, a)
+    }
+    pub fn linear_f32_to_srgb_u8(i: &[f32], o: &mut [u8], c: usize, a: bool) {
+        super::linear_f32_to_srgb_u8(i, o, c, a)
+    }
+    pub fn srgb_to_linear_row(r: &mut [f32], c: usize, a: bool) { super::srgb_to_linear_row(r, c, a) }
+    pub fn srgb_from_linear_row(r: &mut [f32], c: usize, a: bool) { super::srgb_from_linear_row(r, c, a) }
+    pub fn pq_to_linear_row(r: &mut [f32], c: usize, a: bool) { super::pq_to_linear_row(r, c, a) }
+    pub fn hlg_to_linear_row(r: &mut [f32], c: usize, a: bool) { super::hlg_to_linear_row(r, c, a) }
 }
