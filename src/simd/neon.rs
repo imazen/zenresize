@@ -6,6 +6,7 @@
 
 use crate::weights::{F32WeightTable, I16WeightTable};
 use archmage::NeonToken;
+use archmage::prelude::*;
 
 #[archmage::arcane]
 pub(crate) fn filter_h_row_f32_neon(
@@ -155,9 +156,86 @@ pub(crate) fn premultiply_u8_row_neon(_token: NeonToken, input: &[u8], output: &
     super::wide_kernels::premultiply_u8_row_impl_neon(_token, input, output)
 }
 
+/// Widen a `u8x16` into four `u32x4` groups (lossless).
+#[archmage::rite]
+fn widen_u8x16(_t: NeonToken, v: uint8x16_t) -> [uint32x4_t; 4] {
+    let lo16 = vmovl_u8(vget_low_u8(v));
+    let hi16 = vmovl_u8(vget_high_u8(v));
+    [
+        vmovl_u16(vget_low_u16(lo16)),
+        vmovl_u16(vget_high_u16(lo16)),
+        vmovl_u16(vget_low_u16(hi16)),
+        vmovl_u16(vget_high_u16(hi16)),
+    ]
+}
+
+/// Narrow four `u32x4` groups (all values <= 255) back into a `u8x16`.
+#[archmage::rite]
+fn narrow_u32x4x4(_t: NeonToken, g: [uint32x4_t; 4]) -> uint8x16_t {
+    let n0 = vcombine_u16(vmovn_u32(g[0]), vmovn_u32(g[1]));
+    let n1 = vcombine_u16(vmovn_u32(g[2]), vmovn_u32(g[3]));
+    vcombine_u8(vmovn_u16(n0), vmovn_u16(n1))
+}
+
+/// One 4-lane group of the unpremultiply: `min(255, (c*255 + a/2) / a)`, and 0
+/// where `a == 0`.
+///
+/// `num` is built in integer (exact), then converted — `num <= 65152 < 2^24`
+/// and `a <= 255` are both exact in f32, so `vdivq_f32` returns the correctly
+/// rounded quotient and truncating it equals integer floor. See
+/// `tests/unpremul_u8_exhaustive.rs`, which enumerates the whole domain.
+///
+/// `a == 255` needs no special case: `(c*255 + 127) / 255 == c` exactly.
+/// `a == 0` divides by zero, giving inf or NaN, so it is selected away.
+#[archmage::rite]
+fn unpremul_group(_t: NeonToken, c: uint32x4_t, a: uint32x4_t) -> uint32x4_t {
+    let num = vaddq_u32(vmulq_u32(c, vdupq_n_u32(255)), vshrq_n_u32::<1>(a));
+    let q = vdivq_f32(vcvtq_f32_u32(num), vcvtq_f32_u32(a));
+    let r = vminq_u32(vcvtq_u32_f32(q), vdupq_n_u32(255));
+    vbslq_u32(vceqq_u32(a, vdupq_n_u32(0)), vdupq_n_u32(0), r)
+}
+
+/// Hand-written NEON unpremultiply: 16 pixels per iteration.
+///
+/// The divisor is the pixel's own alpha, so there is nothing a portable
+/// integer kernel can vectorize — the generic body measured 3.0us / 2.37 GiB/s
+/// with NEON and forced-scalar identical (1.00x). A portable f32-divide
+/// rewrite was tried first and was WORSE (4.1us): marshalling one pixel at a
+/// time through a vector cost more than the three integer divides it removed.
+///
+/// `vld4q_u8` is what makes it work — it deinterleaves RGBA into four planes
+/// in one instruction, so the alpha for a whole group is already a vector and
+/// no per-pixel shuffling is needed.
 #[archmage::arcane]
-pub(crate) fn unpremultiply_u8_row_neon(_token: NeonToken, row: &mut [u8]) {
-    super::wide_kernels::unpremultiply_u8_row_impl_neon(_token, row)
+pub(crate) fn unpremultiply_u8_row_neon(token: NeonToken, row: &mut [u8]) {
+    const PX: usize = 16;
+    let full = row.len() / (PX * 4) * (PX * 4);
+    let (body, tail) = row.split_at_mut(full);
+
+    for chunk in body.chunks_exact_mut(PX * 4) {
+        let block: &mut [u8; PX * 4] = chunk.try_into().unwrap();
+        let p = vld4q_u8(block);
+        let a_groups = widen_u8x16(token, p.3);
+
+        let mut planes = [p.0, p.1, p.2];
+        for plane in planes.iter_mut() {
+            let c = widen_u8x16(token, *plane);
+            *plane = narrow_u32x4x4(
+                token,
+                [
+                    unpremul_group(token, c[0], a_groups[0]),
+                    unpremul_group(token, c[1], a_groups[1]),
+                    unpremul_group(token, c[2], a_groups[2]),
+                    unpremul_group(token, c[3], a_groups[3]),
+                ],
+            );
+        }
+        vst4q_u8(block, uint8x16x4_t(planes[0], planes[1], planes[2], p.3));
+    }
+
+    if !tail.is_empty() {
+        super::wide_kernels::unpremultiply_u8_row_impl_neon(token, tail);
+    }
 }
 
 #[archmage::arcane]
