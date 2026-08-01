@@ -379,9 +379,18 @@ impl TransferCurve for Srgb {
         has_alpha: bool,
         premul: bool,
     ) {
-        color::srgb_u8_to_linear_f32(src, dst, channels, has_alpha);
-        if premul {
-            simd::premultiply_alpha_row(dst);
+        // Fused when both steps run AND the layout is RGBA: collapses the
+        // alpha-fixup pass and the premultiply pass into one traversal.
+        // Measured 1.06-1.07x (benches/kernel_tiers.rs, "srgb_u8_to_linear +
+        // premultiply"). sRGB is the default transfer function, so this is the
+        // highest-traffic pairing in the crate.
+        if premul && channels == 4 && has_alpha {
+            simd::srgb_u8_to_linear_premultiply_f32(src, dst);
+        } else {
+            color::srgb_u8_to_linear_f32(src, dst, channels, has_alpha);
+            if premul {
+                simd::premultiply_alpha_row(dst);
+            }
         }
     }
 

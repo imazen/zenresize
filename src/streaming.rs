@@ -1302,12 +1302,23 @@ impl<B: Background> StreamingResize<B> {
             let mut premul_done = false;
             match tf {
                 TransferFunction::Srgb => {
-                    color::srgb_u8_to_linear_f32(
-                        pixel_data,
-                        &mut self.temp_input_f32[..pixel_len],
-                        self.channels,
-                        self.alpha_is_last,
-                    );
+                    // Fused sRGB->linear + premultiply (RGBA only) — see
+                    // transfer.rs. The guard mirrors the fused kernel's
+                    // contract; anything else takes the unfused path.
+                    if self.needs_premul && self.channels == 4 && self.alpha_is_last {
+                        simd::srgb_u8_to_linear_premultiply_f32(
+                            pixel_data,
+                            &mut self.temp_input_f32[..pixel_len],
+                        );
+                        premul_done = true;
+                    } else {
+                        color::srgb_u8_to_linear_f32(
+                            pixel_data,
+                            &mut self.temp_input_f32[..pixel_len],
+                            self.channels,
+                            self.alpha_is_last,
+                        );
+                    }
                 }
                 TransferFunction::Linear => {
                     // Fused u8->f32 + premultiply: see transfer.rs. `premul_done`

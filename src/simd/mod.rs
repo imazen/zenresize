@@ -246,6 +246,15 @@ pub(crate) fn srgb_u8_to_linear_f32(
     archmage::incant!(srgb_u8_to_linear_f32(input, output, channels, has_alpha))
 }
 
+/// FUSED sRGB u8 → linear f32 + premultiply (RGBA only).
+///
+/// See `crate::color::srgb_u8_to_linear_premultiply_f32_impl`. Collapses the
+/// alpha-fixup pass and the caller's premultiply pass into one traversal.
+/// Callers must only use this when `channels == 4 && has_alpha`.
+pub(crate) fn srgb_u8_to_linear_premultiply_f32(input: &[u8], output: &mut [f32]) {
+    crate::color::srgb_u8_to_linear_premultiply_f32_impl(input, output)
+}
+
 /// Convert linear f32 → sRGB u8 (LUT-based, dispatched via token).
 pub(crate) fn linear_f32_to_srgb_u8(
     input: &[f32],
@@ -466,4 +475,5 @@ pub mod __bench_kernels {
     pub fn pq_to_linear_row(r: &mut [f32], c: usize, a: bool) { super::pq_to_linear_row(r, c, a) }
     pub fn hlg_to_linear_row(r: &mut [f32], c: usize, a: bool) { super::hlg_to_linear_row(r, c, a) }
     pub fn u8_to_f32_premultiply_row(i: &[u8], o: &mut [f32]) { super::u8_to_f32_premultiply_row(i, o) }
+    pub fn srgb_u8_to_linear_premultiply_f32(i: &[u8], o: &mut [f32]) { super::srgb_u8_to_linear_premultiply_f32(i, o) }
 }

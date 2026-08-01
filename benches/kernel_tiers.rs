@@ -152,6 +152,28 @@ fn bench_kernels(suite: &mut Suite) {
         });
     });
 
+    // The sRGB fusion, against the three-pass sequence it replaces. sRGB is the
+    // default transfer function for web images, so this is the highest-traffic
+    // pairing in the crate.
+    let u8src4 = u8src;
+    let u8src5 = u8src;
+    suite.compare("srgb_u8_to_linear + premultiply", |g| {
+        g.throughput(Throughput::Bytes(n as u64));
+        g.bench("fused", move |b| {
+            b.with_input(move || vec![0f32; n]).run(move |mut o| {
+                k::srgb_u8_to_linear_premultiply_f32(&u8src4[..n], &mut o);
+                o
+            })
+        });
+        g.bench("sequence", move |b| {
+            b.with_input(move || vec![0f32; n]).run(move |mut o| {
+                k::srgb_u8_to_linear_f32(&u8src5[..n], &mut o, 4, true);
+                k::premultiply_alpha_row(&mut o);
+                o
+            })
+        });
+    });
+
     ab_inplace!("premultiply_alpha_row", fsrc[..n], k::premultiply_alpha_row);
     // 64x the row size: the #[arcane] boundary is a per-CALL cost, so at this
     // size it amortizes to nothing and the ratio reflects the BODY alone.

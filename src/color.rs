@@ -39,6 +39,33 @@ pub(crate) fn srgb_u8_to_linear_f32_impl(
     }
 }
 
+/// FUSED sRGB u8 → linear f32 → premultiplied, for RGBA.
+///
+/// The unfused sequence makes THREE passes over the 30 KB output row:
+///   1. `srgb_u8_to_linear_slice` — LUT, all four channels
+///   2. the alpha fixup loop below — alpha is linear `v/255`, not sRGB-curved
+///   3. the caller's `premultiply_alpha_row`
+///
+/// Passes 2 and 3 both walk the same buffer doing per-pixel work on the same
+/// alpha, so they merge into one. That removes a full 30 KB read + 30 KB write
+/// round trip through cache; the LUT pass is untouched.
+///
+/// Bit-exact with the sequence: alpha is `in[3] as f32 / 255.0` exactly as the
+/// fixup computes it, and RGB is then multiplied by that same value, which is
+/// what `premultiply_alpha_row` does after the fixup has run. Same operations,
+/// same order, one fewer traversal.
+pub(crate) fn srgb_u8_to_linear_premultiply_f32_impl(input: &[u8], output: &mut [f32]) {
+    debug_assert_eq!(input.len(), output.len());
+    linear_srgb::default::srgb_u8_to_linear_slice(input, output);
+    for (chunk_in, chunk_out) in input.chunks_exact(4).zip(output.chunks_exact_mut(4)) {
+        let a = chunk_in[3] as f32 / 255.0;
+        chunk_out[0] *= a;
+        chunk_out[1] *= a;
+        chunk_out[2] *= a;
+        chunk_out[3] = a;
+    }
+}
+
 /// Implementation: linear f32 → sRGB u8 using LUT.
 ///
 /// Called by all dispatch tiers (scalar, x86, neon, wasm128).
@@ -412,6 +439,58 @@ mod tests {
                 "sRGB space roundtrip mismatch at {}",
                 i
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod srgb_premul_fusion_gate {
+    use super::*;
+
+    /// The fused sRGB+premultiply must equal `srgb_u8_to_linear_f32_impl`
+    /// followed by a premultiply, BIT-FOR-BIT.
+    ///
+    /// The risk being gated is ORDER: the unfused sequence sets alpha to the
+    /// LINEAR `v/255` first and only then multiplies RGB by it. Multiplying by
+    /// the sRGB-curved alpha the LUT pass initially wrote — an easy mistake
+    /// when merging the two loops — would be wrong for every non-opaque pixel.
+    #[test]
+    fn fused_srgb_premul_matches_sequence() {
+        let mut s = 0x0BAD_C0DEu32;
+        for px in [1usize, 2, 3, 4, 7, 16, 17, 64, 255, 1920] {
+            let n = px * 4;
+            let src: Vec<u8> = (0..n)
+                .map(|i| {
+                    s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    // Alpha extremes in every 4th lane: 0 and 255 are where
+                    // premultiply's effect is most visible.
+                    if i % 4 == 3 {
+                        match (s >> 16) % 4 {
+                            0 => 0u8,
+                            1 => 255,
+                            _ => (s >> 24) as u8,
+                        }
+                    } else {
+                        (s >> 24) as u8
+                    }
+                })
+                .collect();
+
+            let mut fused = vec![0f32; n];
+            srgb_u8_to_linear_premultiply_f32_impl(&src, &mut fused);
+
+            let mut seq = vec![0f32; n];
+            srgb_u8_to_linear_f32_impl(&src, &mut seq, 4, true);
+            for p in seq.chunks_exact_mut(4) {
+                let a = p[3];
+                p[0] *= a;
+                p[1] *= a;
+                p[2] *= a;
+            }
+
+            let a: Vec<u32> = fused.iter().map(|v| v.to_bits()).collect();
+            let b: Vec<u32> = seq.iter().map(|v| v.to_bits()).collect();
+            assert_eq!(a, b, "fused sRGB+premul diverges at {px} px");
         }
     }
 }
