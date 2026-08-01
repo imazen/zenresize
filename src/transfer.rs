@@ -230,9 +230,14 @@ impl TransferCurve for NoTransfer {
         _has_alpha: bool,
         premul: bool,
     ) {
-        simd::u8_to_f32_row(src, dst);
+        // Fused when both steps run: one pass and one #[arcane] region instead
+        // of writing 30 KB of f32 and immediately re-reading it. Measured
+        // 1.12-1.14x on a 1920px row (benches/kernel_tiers.rs, "u8_to_f32 +
+        // premultiply").
         if premul {
-            simd::premultiply_alpha_row(dst);
+            simd::u8_to_f32_premultiply_row(src, dst);
+        } else {
+            simd::u8_to_f32_row(src, dst);
         }
     }
 

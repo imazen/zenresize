@@ -39,6 +39,25 @@ pub(crate) fn f32_to_u8_row_neon(_token: NeonToken, input: &[f32], output: &mut 
     super::wide_kernels::f32_to_u8_row_impl_neon(_token, input, output)
 }
 
+/// CORRECTION 2026-08-01 (same day, after more samples): the commit that
+/// landed this claimed "0.92x -> 1.00x" as a stable single-row result. It is
+/// not. Re-measured later the same day the single-row ratio flip-flops
+/// (0.92x, 1.07x, then 0.92x in four of five runs) — the effect is the same
+/// size as this host's run-to-run drift, so a single-row number cannot decide
+/// it either way.
+///
+/// What IS established, at 64x the row size where the per-CALL `#[arcane]`
+/// boundary amortizes to nothing and the ratio reflects the BODY alone
+/// (three runs, CI +9.5% to +12.6%):
+///
+///   neon 80.2 / 79.0 / 78.6 us   vs   scalar 90.0 / 88.8 / 88.2 us  = 1.12x
+///
+/// So: this body IS ~1.12x faster than the portable one, and at one-row
+/// granularity the boundary consumes exactly that, leaving the net within
+/// noise of parity. Both facts are needed to read the single-row bench
+/// honestly. It is also why the FUSED `u8_to_f32_premultiply_row` wins — it
+/// removes a boundary crossing rather than trying to out-run one.
+///
 /// Hand-written NEON premultiply: 4 f32 pixels per `vld4q_f32`.
 ///
 /// CORRECTED 2026-08-01. This previously ran the portable body with a comment
@@ -566,5 +585,123 @@ mod premultiply_neon_gate {
             checked += 1;
         }
         assert_eq!(checked, 17);
+    }
+}
+
+/// Fused u8->f32 + premultiply, 4 RGBA pixels per iteration.
+///
+/// See `super::u8_to_f32_premultiply_row` for why this exists. `vld4_u8` gives
+/// the four channel planes for 4 pixels directly, so the widen-to-f32 and the
+/// premultiply happen with the data already deinterleaved — no separate pass
+/// and no interleave/deinterleave round trip.
+///
+/// Bit-exact with `u8_to_f32_row` followed by `premultiply_alpha_row`:
+/// `vcvtq_f32_u32` is the exact u32->f32 conversion for values 0..=255 (all
+/// exactly representable), the `* (1.0/255.0)` is one rounding, and the RGB
+/// `* a` is the second — the same order the sequence performs. Alpha is
+/// scaled but not multiplied, matching the scalar body.
+#[archmage::arcane]
+pub(crate) fn u8_to_f32_premultiply_row_neon(token: NeonToken, input: &[u8], output: &mut [f32]) {
+    debug_assert_eq!(input.len(), output.len());
+    // 16 RGBA pixels per iteration: `vld4q_u8` is the widest deinterleaving
+    // load the safe wrapper exposes (the 64-bit `vld4_u8` is not wrapped).
+    const STRIDE: usize = 64;
+    let full = input.len() / STRIDE * STRIDE;
+    let inv255 = vdupq_n_f32(1.0 / 255.0);
+
+    let (in_body, in_tail) = input.split_at(full);
+    let (out_body, out_tail) = output.split_at_mut(full);
+
+    // One u8x16 channel -> four f32x4, already scaled by 1/255.
+    let widen = |v: uint8x16_t| -> [float32x4_t; 4] {
+        let lo = vmovl_u8(vget_low_u8(v));
+        let hi = vmovl_u8(vget_high_u8(v));
+        let q = |u: uint16x8_t, high: bool| {
+            let w = if high { vmovl_u16(vget_high_u16(u)) } else { vmovl_u16(vget_low_u16(u)) };
+            vmulq_f32(vcvtq_f32_u32(w), inv255)
+        };
+        [q(lo, false), q(lo, true), q(hi, false), q(hi, true)]
+    };
+
+    for (ichunk, ochunk) in in_body
+        .chunks_exact(STRIDE)
+        .zip(out_body.chunks_exact_mut(STRIDE))
+    {
+        let ib: &[u8; STRIDE] = ichunk.try_into().unwrap();
+        let p = vld4q_u8(ib);
+        let (r, g, b, a) = (widen(p.0), widen(p.1), widen(p.2), widen(p.3));
+        for k in 0..4 {
+            let ob: &mut [f32; 16] = (&mut ochunk[k * 16..(k + 1) * 16]).try_into().unwrap();
+            vst4q_f32(
+                ob,
+                float32x4x4_t(
+                    vmulq_f32(r[k], a[k]),
+                    vmulq_f32(g[k], a[k]),
+                    vmulq_f32(b[k], a[k]),
+                    a[k],
+                ),
+            );
+        }
+    }
+
+    if !in_tail.is_empty() {
+        super::wide_kernels::u8_to_f32_row_impl_neon(token, in_tail, out_tail);
+        premultiply_alpha_row_neon(token, out_tail);
+    }
+}
+
+#[cfg(test)]
+mod fused_u8_premul_gate {
+    use super::*;
+
+    /// The fused kernel must equal `u8_to_f32_row` followed by
+    /// `premultiply_alpha_row`, BIT-FOR-BIT.
+    ///
+    /// This is the whole risk of fusing: it is only a valid optimisation if the
+    /// rounding sequence is unchanged. Each channel is `(b as f32) * (1/255)`
+    /// and then RGB `* a` — two roundings, that order. Doing the multiply
+    /// before the scale, or folding `a/255` into one constant, would round
+    /// differently and this test is what catches it.
+    ///
+    /// Lengths straddle the 64-byte (16-pixel) stride so the tail path — which
+    /// runs the ORIGINAL two kernels — is exercised at many remainders,
+    /// including 0.
+    #[test]
+    fn fused_u8_premul_matches_sequence() {
+        use archmage::SimdToken;
+        let Some(t) = NeonToken::summon() else {
+            panic!("aarch64 must have NEON; this test must not skip silently");
+        };
+        let mut s = 0x1357_9BDFu32;
+        let mut checked = 0usize;
+        // 1..=40 pixels covers every remainder against the 16-pixel stride.
+        for px in 1usize..=40 {
+            let n = px * 4;
+            let src: Vec<u8> = (0..n)
+                .map(|i| {
+                    s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    // Force the extremes into every 4th lane: 0 and 255 alpha
+                    // are where premultiply's behaviour is most distinctive.
+                    match i % 8 {
+                        0 => 0u8,
+                        1 => 255,
+                        _ => (s >> 24) as u8,
+                    }
+                })
+                .collect();
+
+            let mut fused = vec![0f32; n];
+            u8_to_f32_premultiply_row_neon(t, &src, &mut fused);
+
+            let mut seq = vec![0f32; n];
+            super::super::u8_to_f32_row(&src, &mut seq);
+            super::super::premultiply_alpha_row(&mut seq);
+
+            let a: Vec<u32> = fused.iter().map(|v| v.to_bits()).collect();
+            let b: Vec<u32> = seq.iter().map(|v| v.to_bits()).collect();
+            assert_eq!(a, b, "fused diverges from the two-kernel sequence at {px} px");
+            checked += 1;
+        }
+        assert_eq!(checked, 40);
     }
 }

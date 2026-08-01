@@ -1297,6 +1297,9 @@ impl<B: Background> StreamingResize<B> {
                 &mut self.temp_input_f32[..pixel_len],
             );
         } else {
+            // Set by the arms that fuse premultiply into their conversion, so
+            // the trailing premultiply pass is not run twice.
+            let mut premul_done = false;
             match tf {
                 TransferFunction::Srgb => {
                     color::srgb_u8_to_linear_f32(
@@ -1307,7 +1310,18 @@ impl<B: Background> StreamingResize<B> {
                     );
                 }
                 TransferFunction::Linear => {
-                    simd::u8_to_f32_row(pixel_data, &mut self.temp_input_f32[..pixel_len]);
+                    // Fused u8->f32 + premultiply: see transfer.rs. `premul_done`
+                    // suppresses the trailing pass below so the work is not
+                    // repeated.
+                    if self.needs_premul {
+                        simd::u8_to_f32_premultiply_row(
+                            pixel_data,
+                            &mut self.temp_input_f32[..pixel_len],
+                        );
+                        premul_done = true;
+                    } else {
+                        simd::u8_to_f32_row(pixel_data, &mut self.temp_input_f32[..pixel_len]);
+                    }
                 }
                 TransferFunction::Bt709 => {
                     Bt709.u8_to_linear_f32(
@@ -1340,11 +1354,19 @@ impl<B: Background> StreamingResize<B> {
                     );
                 }
                 _ => {
-                    simd::u8_to_f32_row(pixel_data, &mut self.temp_input_f32[..pixel_len]);
+                    if self.needs_premul {
+                        simd::u8_to_f32_premultiply_row(
+                            pixel_data,
+                            &mut self.temp_input_f32[..pixel_len],
+                        );
+                        premul_done = true;
+                    } else {
+                        simd::u8_to_f32_row(pixel_data, &mut self.temp_input_f32[..pixel_len]);
+                    }
                 }
             }
 
-            if self.needs_premul {
+            if self.needs_premul && !premul_done {
                 simd::premultiply_alpha_row(&mut self.temp_input_f32[..pixel_len]);
             }
         }

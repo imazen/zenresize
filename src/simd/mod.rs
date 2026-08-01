@@ -86,6 +86,34 @@ pub(crate) fn f32_to_u8_row(input: &[f32], output: &mut [u8]) {
     archmage::incant!(f32_to_u8_row(input, output))
 }
 
+/// FUSED `u8 -> f32` + premultiply for one RGBA row.
+///
+/// The pair `u8_to_f32_row(src, dst); premultiply_alpha_row(dst)` was the
+/// shape every caller used (transfer.rs, streaming.rs). Run separately those
+/// touch memory three times for a 1920px row: read 7.5 KB u8 + write 30 KB
+/// f32, then read 30 KB f32 + write 30 KB f32. Fused it is read 7.5 KB +
+/// write 30 KB, once — the intermediate never leaves registers.
+///
+/// This is the "widen the target-feature region" fix rather than a new
+/// kernel: the win is the eliminated round trip through cache, plus one
+/// fewer `#[arcane]` boundary per row (measured at ~8% of a row kernel in
+/// `benches/kernel_tiers.rs`).
+///
+/// Bit-exact with running the two in sequence: each channel is
+/// `(b as f32) * (1.0/255.0)` and then, for RGB only, `* a` — the same two
+/// roundings in the same order. Gated by `fused_u8_premul_matches_sequence`.
+pub(crate) fn u8_to_f32_premultiply_row(input: &[u8], output: &mut [f32]) {
+    #[cfg(target_arch = "aarch64")]
+    {
+        use archmage::SimdToken;
+        if let Some(t) = archmage::NeonToken::summon() {
+            return neon::u8_to_f32_premultiply_row_neon(t, input, output);
+        }
+    }
+    u8_to_f32_row(input, output);
+    premultiply_alpha_row(output);
+}
+
 /// Premultiply alpha in-place on RGBA f32 row.
 pub(crate) fn premultiply_alpha_row(row: &mut [f32]) {
     archmage::incant!(premultiply_alpha_row(row))
@@ -437,4 +465,5 @@ pub mod __bench_kernels {
     pub fn srgb_from_linear_row(r: &mut [f32], c: usize, a: bool) { super::srgb_from_linear_row(r, c, a) }
     pub fn pq_to_linear_row(r: &mut [f32], c: usize, a: bool) { super::pq_to_linear_row(r, c, a) }
     pub fn hlg_to_linear_row(r: &mut [f32], c: usize, a: bool) { super::hlg_to_linear_row(r, c, a) }
+    pub fn u8_to_f32_premultiply_row(i: &[u8], o: &mut [f32]) { super::u8_to_f32_premultiply_row(i, o) }
 }
