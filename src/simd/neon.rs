@@ -39,17 +39,52 @@ pub(crate) fn f32_to_u8_row_neon(_token: NeonToken, input: &[f32], output: &mut 
     super::wide_kernels::f32_to_u8_row_impl_neon(_token, input, output)
 }
 
-/// Portable body, deliberately.
+/// Hand-written NEON premultiply: 4 f32 pixels per `vld4q_f32`.
 ///
-/// A hand-written `vld4q_f32` version was tried and MEASURED NO GAIN: 1.00x
-/// against the forced-scalar tier both before and after (CI straddling zero,
-/// reproduced across runs). NEON is baseline on aarch64, so LLVM already
-/// vectorizes this loop about as well as the intrinsics do — see
-/// `unpremultiply_alpha_row_neon` below for the case where hand-writing DOES
-/// pay, and why the two differ.
+/// CORRECTED 2026-08-01. This previously ran the portable body with a comment
+/// stating a hand-written `vld4q_f32` version had been "MEASURED NO GAIN:
+/// 1.00x ... reproduced across runs". **That measurement was invalid** — it
+/// was taken on the version of `benches/kernel_tiers.rs` that cloned the 30 KB
+/// row INSIDE the timed region. The allocation was a large constant added to
+/// both arms, which compresses every ratio toward 1.00x and hid two separate
+/// facts:
+///
+///   1. the portable body was actually 0.92x — SLOWER than the plain scalar
+///      loop it dispatches away from, i.e. a shipped aarch64 regression; and
+///   2. the hand-written version it rejected does in fact win.
+///
+/// Both only became visible once the clone moved into the untimed
+/// `with_input` closure. The lesson is recorded in `docs/` as well: a
+/// benchmark artifact that inflates both arms does not merely add noise, it
+/// manufactures false 1.00x verdicts that then get written down as decisions.
+///
+/// Bit-exact with the scalar body: that computes `pixel[c] *= a` for c in
+/// 0..3 and leaves alpha alone; this issues the same single `vmulq_f32` per
+/// channel against the same alpha lane, and copies alpha through untouched.
+/// There is no threshold, divide, or reassociation involved — unlike
+/// `unpremultiply_alpha_row_neon` below, which needs a select to preserve NaN
+/// payloads. Gated by `premultiply_neon_matches_scalar_bitexact`.
 #[archmage::arcane]
-pub(crate) fn premultiply_alpha_row_neon(_token: NeonToken, row: &mut [f32]) {
-    super::wide_kernels::premultiply_alpha_row_impl_neon(_token, row)
+pub(crate) fn premultiply_alpha_row_neon(token: NeonToken, row: &mut [f32]) {
+    const PX: usize = 4;
+    let full = row.len() / (PX * 4) * (PX * 4);
+    let (body, tail) = row.split_at_mut(full);
+    for chunk in body.chunks_exact_mut(PX * 4) {
+        let block: &mut [f32; PX * 4] = chunk.try_into().unwrap();
+        let p = vld4q_f32(block);
+        vst4q_f32(
+            block,
+            float32x4x4_t(
+                vmulq_f32(p.0, p.3),
+                vmulq_f32(p.1, p.3),
+                vmulq_f32(p.2, p.3),
+                p.3,
+            ),
+        );
+    }
+    if !tail.is_empty() {
+        super::wide_kernels::premultiply_alpha_row_impl_neon(token, tail);
+    }
 }
 
 /// Hand-written NEON unpremultiply: 4 f32 pixels per `vld4q_f32`.
@@ -474,4 +509,62 @@ pub(crate) fn linear_f32_to_srgb_u8_neon(
     has_alpha: bool,
 ) {
     crate::color::linear_f32_to_srgb_u8_impl(input, output, channels, has_alpha);
+}
+
+#[cfg(test)]
+mod premultiply_neon_gate {
+    use super::*;
+
+    /// The hand-written NEON premultiply must equal the scalar body BIT-FOR-BIT.
+    ///
+    /// Premultiplied alpha feeds every downstream resample, so a one-ULP drift
+    /// here is a wrong pixel that propagates — zero tolerance, not "close".
+    ///
+    /// Lengths straddle the 4-pixel (16-float) stride so the scalar tail runs at
+    /// every remainder, and the inputs include the values where a reassociation
+    /// or a stray select would show up: 0.0, -0.0, subnormals, 1.0, and NaN
+    /// (whose payload the scalar path preserves by never touching alpha).
+    #[test]
+    fn premultiply_neon_matches_scalar_bitexact() {
+        use archmage::SimdToken;
+        let Some(token) = NeonToken::summon() else {
+            panic!("aarch64 must have NEON; this test must not skip silently");
+        };
+
+        let specials = [
+            0.0f32, -0.0, 1.0, 0.5, -1.0, f32::MIN_POSITIVE, f32::MIN_POSITIVE / 2.0,
+            f32::MAX, f32::INFINITY, f32::NEG_INFINITY, f32::NAN, 1.0 / 1024.0,
+        ];
+        let mut s = 0x2545_F491u32;
+        let mut checked = 0usize;
+
+        for px in 1usize..=17 {
+            let n = px * 4;
+            let mut row = Vec::with_capacity(n);
+            for i in 0..n {
+                s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                row.push(if i % 3 == 0 {
+                    specials[(s >> 8) as usize % specials.len()]
+                } else {
+                    ((s >> 8) as f32 / 8_388_608.0) - 1.0
+                });
+            }
+            let mut got = row.clone();
+            let mut want = row.clone();
+            premultiply_alpha_row_neon(token, &mut got);
+            for pixel in want.chunks_exact_mut(4) {
+                let a = pixel[3];
+                pixel[0] *= a;
+                pixel[1] *= a;
+                pixel[2] *= a;
+            }
+            // Compare BIT PATTERNS: `==` says NaN != NaN and 0.0 == -0.0, either
+            // of which would let a real divergence pass.
+            let g: Vec<u32> = got.iter().map(|v| v.to_bits()).collect();
+            let w: Vec<u32> = want.iter().map(|v| v.to_bits()).collect();
+            assert_eq!(g, w, "NEON premultiply diverges from scalar at {px} pixels");
+            checked += 1;
+        }
+        assert_eq!(checked, 17);
+    }
 }
