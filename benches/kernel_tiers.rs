@@ -8,6 +8,35 @@
 //!
 //! Run: `cargo bench --bench kernel_tiers`
 //! Do NOT pass `-C target-cpu=native` (the tier then cannot be disabled).
+//!
+//! # READING THESE RATIOS: they are biased AGAINST the SIMD arm
+//!
+//! Measured 2026-08-01 while fixing `premultiply_alpha_row`. Point BOTH arms at
+//! byte-identical source and the ratio is still **0.92x**, not 1.00x (597/550,
+//! 596/552 ns, reproduced). The forced-scalar arm resolves to a plain
+//! `pub(crate) fn` that INLINES into this bench's loop; the dispatched arm is a
+//! real function carrying `target_feature` and cannot. The gap is the boundary,
+//! not the kernel.
+//!
+//! Consequences when reading any number here:
+//!
+//! - **1.00x is a PASS, not a tie.** The vector body has already paid back the
+//!   ~8% boundary cost. `premultiply_alpha_row` and `u8_to_f32_row` sit here.
+//! - **Below ~0.95x is the finding** — the body is not covering the boundary.
+//! - A ratio cannot be improved past the boundary by editing the kernel alone;
+//!   that needs a caller-side fix (hoist the token, widen the `#[arcane]` region
+//!   to cover more work). Same conclusion zenwebp reached for `dequantize_block`.
+//!
+//! # The trap that produced a false verdict here
+//!
+//! An earlier revision cloned the 30 KB row INSIDE the timed region. A large
+//! constant added to both arms compresses every ratio toward 1.00x, which does
+//! not merely add noise — it MANUFACTURES "no gain" verdicts that then get
+//! written into source as decisions. That is exactly what happened to
+//! `premultiply_alpha_row`: the comment said a hand-written `vld4q_f32` version
+//! had been measured at 1.00x and rejected, while the shipped path was actually
+//! 0.92x and that rejected kernel was the fix. Keep every buffer setup inside
+//! `with_input` (untimed) — see the `ab!` / `ab_inplace!` macros below.
 
 use zenbench::prelude::*;
 use zenresize::simd::__bench_kernels as k;
