@@ -27,7 +27,6 @@ mod wide_kernels;
 
 // Portable transfer function SIMD kernels via magetypes f32x4
 #[cfg(any(target_arch = "aarch64", target_arch = "wasm32"))]
-#[allow(clippy::excessive_precision)]
 mod tf_portable;
 
 #[cfg(target_arch = "aarch64")]
