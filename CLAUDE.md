@@ -72,6 +72,17 @@ masked multiplier — `c * (inv & mask)` zeroes below-threshold RGB and turns
 ±inf into NaN. The x86-64 kernel did exactly that until 4a60578 and the test
 was red on every x86-64 CI lane; on an aarch64 host that only shows up in CI.
 
+Two more x86-64 kernels had the same disease, masked behind that failure
+(`cargo test` stops at the first failing test binary, so anything after
+`alpha_f32_exact` alphabetically was never reached): `filter_h_4ch_to_f16`
+fused four 8-tap accumulators (1 f16 ULP off `tests/f16_hfilter_exact.rs`,
+fixed in e02ef6c) and `unpremultiply_u8_row_v3` used `_mm_rcp_ps` + Newton +
+`+0.5` (one below the integer formula on some pairs,
+`tests/unpremul_u8_exhaustive.rs`, fixed in 8935e5e). Rule: an exactness
+test written for one tier binds every tier; when adding one, run it on x86
+too. Only the f32 H/V convolutions may fuse — they are pinned by per-path
+golden checksums, not by cross-tier exactness tests.
+
 **Rosetta on the M4 Pro exposes SSE4.2 but no AVX2/FMA**, so
 `cargo test --target x86_64-apple-darwin` runs the x86 build on the scalar
 tier only — it compiles the V3 kernels but does not execute them. The
