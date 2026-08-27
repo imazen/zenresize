@@ -60,6 +60,23 @@ prior guards — the default build is `#![forbid(unsafe_code)]`.
 
 `tests/golden_outputs.rs` — Exact-match checksums for all paths. Stored in `test_outputs/` (gitignored). Must regenerate after any change to FMA accumulation order or numerical behavior in f32/4ch kernels.
 
+### Alpha (un)premultiply tiers are bit-identical — by construction, and tested
+
+`tests/alpha_f32_exact.rs` asserts every tier of `premultiply_alpha_row` /
+`unpremultiply_alpha_row` equals the scalar body bit-for-bit, over denormals,
+the exact `1/1024` threshold, ±0, ±inf and out-of-range alpha. Two rules keep
+that true: (1) unpremultiply is one IEEE `1.0 / a` then one `c * inv_a` — no
+reciprocal approximation, no FMA, no `c / a`; (2) the threshold branch is a
+**select over the original lanes** (`vbslq_f32` / `_mm_blendv_ps`), never a
+masked multiplier — `c * (inv & mask)` zeroes below-threshold RGB and turns
+±inf into NaN. The x86-64 kernel did exactly that until 4a60578 and the test
+was red on every x86-64 CI lane; on an aarch64 host that only shows up in CI.
+
+**Rosetta on the M4 Pro exposes SSE4.2 but no AVX2/FMA**, so
+`cargo test --target x86_64-apple-darwin` runs the x86 build on the scalar
+tier only — it compiles the V3 kernels but does not execute them. The
+x86-64 CI lanes are the only place the AVX2 bodies run from this machine.
+
 ## Build Rules
 
 **NEVER compile with `-Ctarget-cpu=native` except for diagnostics (e.g., `cargo asm`).** We will never deploy "native" binaries. All production and benchmark builds must use dynamic dispatch via `incant!`/`arcane`/`rite`. Performance must be verified on every token tier using `dangerously_disable_token_process_wide(true)` — not just the highest tier the machine supports. Use `testable_dispatch` feature in dev-dependencies if needed to override compile-time feature guarantees.
