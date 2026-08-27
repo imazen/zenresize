@@ -805,13 +805,13 @@ mod imgref_impl {
             .expect("resize_4ch: out_width * out_height overflows usize");
         let mut out_pixels = Vec::with_capacity(out_pixel_count);
         for row in img.rows() {
-            for (px, chunk) in row.iter().zip(row_buf.chunks_exact_mut(4)) {
+            for (px, chunk) in row.iter().zip(row_buf.as_chunks_mut::<4>().0) {
                 chunk.copy_from_slice(px.as_slice());
             }
             resizer.push_row(&row_buf).unwrap();
             while let Some(out_row) = resizer.next_output_row() {
                 debug_assert_eq!(out_row.len(), out_row_len);
-                for chunk in out_row.chunks_exact(4) {
+                for chunk in out_row.as_chunks::<4>().0 {
                     let mut px = P::default();
                     px.as_mut_slice().copy_from_slice(chunk);
                     out_pixels.push(px);
@@ -821,7 +821,7 @@ mod imgref_impl {
         resizer.finish();
         while let Some(out_row) = resizer.next_output_row() {
             debug_assert_eq!(out_row.len(), out_row_len);
-            for chunk in out_row.chunks_exact(4) {
+            for chunk in out_row.as_chunks::<4>().0 {
                 let mut px = P::default();
                 px.as_mut_slice().copy_from_slice(chunk);
                 out_pixels.push(px);
@@ -862,13 +862,13 @@ mod imgref_impl {
             .expect("resize_3ch: out_width * out_height overflows usize");
         let mut out_pixels = Vec::with_capacity(out_pixel_count);
         for row in img.rows() {
-            for (px, chunk) in row.iter().zip(row_buf.chunks_exact_mut(3)) {
+            for (px, chunk) in row.iter().zip(row_buf.as_chunks_mut::<3>().0) {
                 chunk.copy_from_slice(px.as_slice());
             }
             resizer.push_row(&row_buf).unwrap();
             while let Some(out_row) = resizer.next_output_row() {
                 debug_assert_eq!(out_row.len(), out_row_len);
-                for chunk in out_row.chunks_exact(3) {
+                for chunk in out_row.as_chunks::<3>().0 {
                     let mut px = P::default();
                     px.as_mut_slice().copy_from_slice(chunk);
                     out_pixels.push(px);
@@ -878,7 +878,7 @@ mod imgref_impl {
         resizer.finish();
         while let Some(out_row) = resizer.next_output_row() {
             debug_assert_eq!(out_row.len(), out_row_len);
-            for chunk in out_row.chunks_exact(3) {
+            for chunk in out_row.as_chunks::<3>().0 {
                 let mut px = P::default();
                 px.as_mut_slice().copy_from_slice(chunk);
                 out_pixels.push(px);
@@ -1559,7 +1559,7 @@ mod tests {
     fn test_resize_constant_color() {
         let config = test_config(20, 20, 10, 10);
         let mut input = vec![0u8; 20 * 20 * 4];
-        for pixel in input.chunks_exact_mut(4) {
+        for pixel in input.as_chunks_mut::<4>().0 {
             pixel[0] = 128;
             pixel[1] = 128;
             pixel[2] = 128;
@@ -1569,7 +1569,7 @@ mod tests {
         let output = Resizer::new(&config).resize(&input);
         assert_eq!(output.len(), 10 * 10 * 4);
 
-        for pixel in output.chunks_exact(4) {
+        for pixel in output.as_chunks::<4>().0 {
             assert!(
                 (pixel[0] as i16 - 128).unsigned_abs() <= 2,
                 "R off: {}",
@@ -1695,7 +1695,7 @@ mod tests {
     fn no_background_matches_new() {
         let config = test_config(20, 20, 10, 10);
         let mut input = vec![0u8; 20 * 20 * 4];
-        for pixel in input.chunks_exact_mut(4) {
+        for pixel in input.as_chunks_mut::<4>().0 {
             pixel[0] = 128;
             pixel[1] = 64;
             pixel[2] = 32;
@@ -1720,7 +1720,7 @@ mod tests {
 
         // Semi-transparent input
         let mut input = vec![0u8; 10 * 10 * 4];
-        for pixel in input.chunks_exact_mut(4) {
+        for pixel in input.as_chunks_mut::<4>().0 {
             pixel[0] = 128;
             pixel[1] = 64;
             pixel[2] = 32;
@@ -1733,7 +1733,7 @@ mod tests {
             .resize(&input);
         assert_eq!(output.len(), 10 * 10 * 4);
 
-        for pixel in output.chunks_exact(4) {
+        for pixel in output.as_chunks::<4>().0 {
             assert_eq!(pixel[3], 255, "output alpha must be 255 with opaque bg");
             assert!(pixel[0] > 0, "R should have content");
         }
@@ -1748,7 +1748,7 @@ mod tests {
             .build();
 
         let mut input = vec![0u8; 20 * 20 * 4];
-        for pixel in input.chunks_exact_mut(4) {
+        for pixel in input.as_chunks_mut::<4>().0 {
             pixel[0] = 100;
             pixel[1] = 150;
             pixel[2] = 200;
@@ -1824,7 +1824,7 @@ mod tests {
 
         // Semi-transparent input: RGBA = [0.5, 0.3, 0.1, 0.5]
         let mut input = vec![0.0f32; 10 * 10 * 4];
-        for pixel in input.chunks_exact_mut(4) {
+        for pixel in input.as_chunks_mut::<4>().0 {
             pixel[0] = 0.5;
             pixel[1] = 0.3;
             pixel[2] = 0.1;
@@ -1837,7 +1837,7 @@ mod tests {
             .resize_f32(&input);
         assert_eq!(output.len(), 10 * 10 * 4);
 
-        for pixel in output.chunks_exact(4) {
+        for pixel in output.as_chunks::<4>().0 {
             // After composite + unpremultiply, alpha should be 1.0
             assert!(
                 (pixel[3] - 1.0).abs() < 0.02,
@@ -1857,7 +1857,7 @@ mod tests {
             .build();
 
         let mut input = vec![0u16; 20 * 20 * 4];
-        for pixel in input.chunks_exact_mut(4) {
+        for pixel in input.as_chunks_mut::<4>().0 {
             pixel[0] = 32768; // ~50% sRGB
             pixel[1] = 32768;
             pixel[2] = 32768;
@@ -1867,7 +1867,7 @@ mod tests {
         let output = Resizer::new(&config).resize_u16(&input);
         assert_eq!(output.len(), 10 * 10 * 4);
 
-        for pixel in output.chunks_exact(4) {
+        for pixel in output.as_chunks::<4>().0 {
             assert!(
                 (pixel[0] as i32 - 32768).unsigned_abs() <= 100,
                 "R off: {} (expected ~32768)",
@@ -1905,7 +1905,7 @@ mod tests {
             .build();
 
         let mut input = vec![0u16; 10 * 10 * 4];
-        for pixel in input.chunks_exact_mut(4) {
+        for pixel in input.as_chunks_mut::<4>().0 {
             pixel[0] = 50000;
             pixel[1] = 30000;
             pixel[2] = 10000;
@@ -1933,7 +1933,7 @@ mod tests {
             .build();
 
         let mut input = vec![0u16; 16 * 16 * 3];
-        for pixel in input.chunks_exact_mut(3) {
+        for pixel in input.as_chunks_mut::<3>().0 {
             pixel[0] = 40000;
             pixel[1] = 20000;
             pixel[2] = 60000;
@@ -1942,7 +1942,7 @@ mod tests {
         let output = Resizer::new(&config).resize_u16(&input);
         assert_eq!(output.len(), 8 * 8 * 3);
 
-        for pixel in output.chunks_exact(3) {
+        for pixel in output.as_chunks::<3>().0 {
             assert!(
                 (pixel[0] as i32 - 40000).unsigned_abs() <= 200,
                 "R off: {}",
@@ -1997,7 +1997,7 @@ mod tests {
     fn hfirst_streaming_succeeds_on_normal_input() {
         let cfg = test_config(20, 20, 10, 10);
         let mut input = vec![0u8; 20 * 20 * 4];
-        for px in input.chunks_exact_mut(4) {
+        for px in input.as_chunks_mut::<4>().0 {
             px[0] = 100;
             px[1] = 100;
             px[2] = 100;

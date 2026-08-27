@@ -48,7 +48,9 @@ fn unpremultiply_u8_exact_over_complete_domain() {
         }
     }
     let expect: Vec<u8> = row
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|p| {
             [
                 reference_pixel(p[0], p[3]),
@@ -92,7 +94,13 @@ fn unpremultiply_u8_preserves_alpha_and_edge_branches() {
     let orig = row.clone();
     k::unpremultiply_u8_row(&mut row);
 
-    for (i, (p, o)) in row.chunks_exact(4).zip(orig.chunks_exact(4)).enumerate() {
+    for (i, (p, o)) in row
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(orig.as_chunks::<4>().0)
+        .enumerate()
+    {
         assert_eq!(p[3], o[3], "alpha modified at pixel {i}");
         match o[3] {
             0 => assert_eq!(&p[..3], &[0, 0, 0], "a==0 must zero RGB, pixel {i}"),
@@ -117,7 +125,9 @@ fn unpremultiply_u8_tail_lengths_exact() {
             row.extend_from_slice(&[(i * 13 % 256) as u8, (i * 91 % 256) as u8, 200, a]);
         }
         let expect: Vec<u8> = row
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|p| {
                 [
                     reference_pixel(p[0], p[3]),

@@ -21,7 +21,7 @@ use zenresize::simd::__bench_kernels as k;
 /// Verbatim transcription of the original scalar bodies.
 mod reference {
     pub fn premultiply(row: &mut [f32]) {
-        for pixel in row.chunks_exact_mut(4) {
+        for pixel in row.as_chunks_mut::<4>().0 {
             let a = pixel[3];
             pixel[0] *= a;
             pixel[1] *= a;
@@ -29,7 +29,7 @@ mod reference {
         }
     }
     pub fn unpremultiply(row: &mut [f32]) {
-        for pixel in row.chunks_exact_mut(4) {
+        for pixel in row.as_chunks_mut::<4>().0 {
             let a = pixel[3];
             if a > 1.0 / 1024.0 {
                 let inv_a = 1.0 / a;

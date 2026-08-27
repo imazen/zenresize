@@ -13,7 +13,12 @@ use std::hint::black_box;
 /// Copied verbatim from pre-zenblend `composite.rs`.
 #[inline(never)]
 fn old_composite_over_premul(src: &mut [f32], bg: &[f32]) {
-    for (s, b) in src.chunks_exact_mut(4).zip(bg.chunks_exact(4)) {
+    for (s, b) in src
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(bg.as_chunks::<4>().0)
+    {
         let inv_a = 1.0 - s[3];
         s[0] += b[0] * inv_a;
         s[1] += b[1] * inv_a;
@@ -25,7 +30,7 @@ fn old_composite_over_premul(src: &mut [f32], bg: &[f32]) {
 /// Old scalar solid source-over.
 #[inline(never)]
 fn old_composite_over_solid_premul(src: &mut [f32], pixel: &[f32; 4]) {
-    for s in src.chunks_exact_mut(4) {
+    for s in src.as_chunks_mut::<4>().0 {
         let inv_a = 1.0 - s[3];
         s[0] += pixel[0] * inv_a;
         s[1] += pixel[1] * inv_a;
@@ -37,7 +42,7 @@ fn old_composite_over_solid_premul(src: &mut [f32], pixel: &[f32; 4]) {
 /// Old scalar solid opaque source-over.
 #[inline(never)]
 fn old_composite_over_solid_opaque_premul(src: &mut [f32], pixel: &[f32; 4]) {
-    for s in src.chunks_exact_mut(4) {
+    for s in src.as_chunks_mut::<4>().0 {
         let inv_a = 1.0 - s[3];
         s[0] += pixel[0] * inv_a;
         s[1] += pixel[1] * inv_a;

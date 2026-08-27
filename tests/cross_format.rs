@@ -19,7 +19,7 @@ const CH: usize = 4;
 
 fn make_u8_image(r: u8, g: u8, b: u8, a: u8) -> Vec<u8> {
     let mut img = vec![0u8; IN_W as usize * IN_H as usize * CH];
-    for pixel in img.chunks_exact_mut(CH) {
+    for pixel in img.as_chunks_mut::<CH>().0 {
         pixel[0] = r;
         pixel[1] = g;
         pixel[2] = b;
@@ -30,7 +30,7 @@ fn make_u8_image(r: u8, g: u8, b: u8, a: u8) -> Vec<u8> {
 
 fn make_f32_image(r: f32, g: f32, b: f32, a: f32) -> Vec<f32> {
     let mut img = vec![0.0f32; IN_W as usize * IN_H as usize * CH];
-    for pixel in img.chunks_exact_mut(CH) {
+    for pixel in img.as_chunks_mut::<CH>().0 {
         pixel[0] = r;
         pixel[1] = g;
         pixel[2] = b;
@@ -41,7 +41,7 @@ fn make_f32_image(r: f32, g: f32, b: f32, a: f32) -> Vec<f32> {
 
 fn make_u16_image(r: u16, g: u16, b: u16, a: u16) -> Vec<u16> {
     let mut img = vec![0u16; IN_W as usize * IN_H as usize * CH];
-    for pixel in img.chunks_exact_mut(CH) {
+    for pixel in img.as_chunks_mut::<CH>().0 {
         pixel[0] = r;
         pixel[1] = g;
         pixel[2] = b;
@@ -64,7 +64,7 @@ fn same_format_u8_srgb() {
     let input = make_u8_image(128, 64, 32, 255);
     let output = Resizer::new(&config).resize(&input);
     assert_eq!(output.len(), OUT_W as usize * OUT_H as usize * CH);
-    for pixel in output.chunks_exact(CH) {
+    for pixel in output.as_chunks::<CH>().0 {
         assert!(
             (pixel[0] as i16 - 128).unsigned_abs() <= 2,
             "R: {}",
@@ -92,7 +92,7 @@ fn same_format_f32_linear() {
         .build();
     let input = make_f32_image(0.5, 0.3, 0.1, 1.0);
     let output = Resizer::new(&config).resize_f32(&input);
-    for pixel in output.chunks_exact(CH) {
+    for pixel in output.as_chunks::<CH>().0 {
         assert!((pixel[0] - 0.5).abs() < 0.02, "R: {}", pixel[0]);
         assert!((pixel[1] - 0.3).abs() < 0.02, "G: {}", pixel[1]);
         assert!((pixel[2] - 0.1).abs() < 0.02, "B: {}", pixel[2]);
@@ -108,7 +108,7 @@ fn same_format_u16_encoded() {
         .build();
     let input = make_u16_image(32768, 16384, 8192, 65535);
     let output = Resizer::new(&config).resize_u16(&input);
-    for pixel in output.chunks_exact(CH) {
+    for pixel in output.as_chunks::<CH>().0 {
         assert!(
             (pixel[0] as i32 - 32768).unsigned_abs() <= 100,
             "R: {}",
@@ -148,7 +148,7 @@ fn cross_u8_to_f32() {
     let output = Resizer::new(&config).resize_u8_to_f32(&input);
     assert_eq!(output.len(), OUT_W as usize * OUT_H as usize * CH);
     // 128 sRGB ≈ 0.216 linear
-    for pixel in output.chunks_exact(CH) {
+    for pixel in output.as_chunks::<CH>().0 {
         assert!(pixel[0] > 0.19 && pixel[0] < 0.24, "R: {}", pixel[0]);
         assert!((pixel[3] - 1.0).abs() < 0.01, "A: {}", pixel[3]);
     }
@@ -166,7 +166,7 @@ fn cross_f32_to_u8() {
     let input = make_f32_image(0.2158605, 0.05126946, 0.01444384, 1.0);
     let output = Resizer::new(&config).resize_f32_to_u8(&input);
     assert_eq!(output.len(), OUT_W as usize * OUT_H as usize * CH);
-    for pixel in output.chunks_exact(CH) {
+    for pixel in output.as_chunks::<CH>().0 {
         assert!(
             (pixel[0] as i16 - 128).unsigned_abs() <= 2,
             "R: {}",
@@ -198,7 +198,7 @@ fn cross_u8_to_u16() {
     let output = Resizer::new(&config).resize_u8_to_u16(&input);
     assert_eq!(output.len(), OUT_W as usize * OUT_H as usize * CH);
     // sRGB 128 ≈ Encoded16 32768 (both ~50% in their encoded space)
-    for pixel in output.chunks_exact(CH) {
+    for pixel in output.as_chunks::<CH>().0 {
         assert!(
             (pixel[0] as i32 - 32768).unsigned_abs() <= 300,
             "R: {} (expected ~32768)",
@@ -224,7 +224,7 @@ fn cross_u16_to_u8() {
     let output = Resizer::new(&config).resize_u16_to_u8(&input);
     assert_eq!(output.len(), OUT_W as usize * OUT_H as usize * CH);
     // Encoded16 32768 ≈ sRGB 128
-    for pixel in output.chunks_exact(CH) {
+    for pixel in output.as_chunks::<CH>().0 {
         assert!(
             (pixel[0] as i16 - 128).unsigned_abs() <= 2,
             "R: {} (expected ~128)",
@@ -245,7 +245,7 @@ fn cross_u16_to_f32() {
     let output = Resizer::new(&config).resize_u16_to_f32(&input);
     assert_eq!(output.len(), OUT_W as usize * OUT_H as usize * CH);
     // 32768/65535 ≈ 0.5 encoded → ~0.214 linear (sRGB)
-    for pixel in output.chunks_exact(CH) {
+    for pixel in output.as_chunks::<CH>().0 {
         assert!(pixel[0] > 0.2 && pixel[0] < 0.25, "R: {}", pixel[0]);
         assert!(pixel[1].abs() < 0.01, "G: {}", pixel[1]);
         assert!((pixel[2] - 1.0).abs() < 0.02, "B: {}", pixel[2]);
@@ -264,7 +264,7 @@ fn cross_f32_to_u16() {
     let input = make_f32_image(0.5, 0.0, 1.0, 1.0);
     let output = Resizer::new(&config).resize_f32_to_u16(&input);
     assert_eq!(output.len(), OUT_W as usize * OUT_H as usize * CH);
-    for pixel in output.chunks_exact(CH) {
+    for pixel in output.as_chunks::<CH>().0 {
         assert!(
             pixel[0] > 45000 && pixel[0] < 50000,
             "R: {} (expected ~48163)",
@@ -389,7 +389,7 @@ fn tf_srgb_decode_linear_output() {
     let output = Resizer::new(&config).resize_u8_to_f32(&input);
 
     // 128 sRGB → ~0.216 linear
-    for pixel in output.chunks_exact(CH) {
+    for pixel in output.as_chunks::<CH>().0 {
         assert!(pixel[0] > 0.19 && pixel[0] < 0.24, "R: {}", pixel[0]);
     }
 }
@@ -406,7 +406,7 @@ fn tf_linear_input_srgb_encode() {
     let input = make_f32_image(0.2158605, 0.2158605, 0.2158605, 1.0);
     let output = Resizer::new(&config).resize_f32_to_u8(&input);
 
-    for pixel in output.chunks_exact(CH) {
+    for pixel in output.as_chunks::<CH>().0 {
         assert!(
             (pixel[0] as i16 - 128).unsigned_abs() <= 2,
             "R: {} (expected ~128)",
@@ -455,7 +455,7 @@ fn tf_u16_srgb_to_u8_srgb() {
     let input = make_u16_image(32768, 32768, 32768, 65535);
     let output = Resizer::new(&config).resize_u16_to_u8(&input);
 
-    for pixel in output.chunks_exact(CH) {
+    for pixel in output.as_chunks::<CH>().0 {
         assert!(
             (pixel[0] as i16 - 128).unsigned_abs() <= 2,
             "R: {} (expected ~128)",
@@ -478,7 +478,7 @@ fn tf_u16_none_to_u8_none() {
     let input = make_u16_image(32768, 16384, 65535, 65535);
     let output = Resizer::new(&config).resize_u16_to_u8(&input);
 
-    for pixel in output.chunks_exact(CH) {
+    for pixel in output.as_chunks::<CH>().0 {
         assert!(
             (pixel[0] as i16 - 128).unsigned_abs() <= 2,
             "R: {} (expected ~128 from identity)",
@@ -732,7 +732,7 @@ fn transfer_matrix_u8_to_u8() {
             );
             // All output pixels should be consistent (constant color in → constant color out)
             let first = &output[..CH];
-            for (px_idx, pixel) in output.chunks_exact(CH).enumerate() {
+            for (px_idx, pixel) in output.as_chunks::<CH>().0.iter().enumerate() {
                 for c in 0..CH {
                     assert!(
                         (pixel[c] as i16 - first[c] as i16).unsigned_abs() <= 2,
@@ -769,7 +769,7 @@ fn transfer_matrix_u16_to_u16() {
             );
             // Verify consistency
             let first = &output[..CH];
-            for (px_idx, pixel) in output.chunks_exact(CH).enumerate() {
+            for (px_idx, pixel) in output.as_chunks::<CH>().0.iter().enumerate() {
                 for c in 0..CH {
                     assert!(
                         (pixel[c] as i32 - first[c] as i32).unsigned_abs() <= 100,

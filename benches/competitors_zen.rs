@@ -205,7 +205,9 @@ fn fir_f32(src_f32: &[f32], iw: u32, ih: u32, ow: u32, oh: u32) -> Vec<f32> {
     resizer.resize(&src_img, &mut dst, &opts).unwrap();
     let dst_bytes = dst.into_vec();
     let dst_f32: Vec<f32> = dst_bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     dst_f32

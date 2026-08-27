@@ -16,7 +16,12 @@ use zenresize::{AlphaMode, Filter, PixelDescriptor, ResizeConfig, Resizer};
 fn unpremul_encode_u8(premul: &[f32], threshold: f32) -> Vec<u8> {
     let mut out = vec![0u8; premul.len()];
 
-    for (px_in, px_out) in premul.chunks_exact(4).zip(out.chunks_exact_mut(4)) {
+    for (px_in, px_out) in premul
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(out.as_chunks_mut::<4>().0)
+    {
         let a = px_in[3];
         if a > threshold {
             let inv_a = 1.0 / a;
@@ -42,7 +47,12 @@ fn compare_outputs(reference: &[u8], candidate: &[u8]) -> (usize, u8, usize) {
     let mut visible_max_delta: u8 = 0;
     let mut invisible_diff = 0usize;
 
-    for (ref_px, cand_px) in reference.chunks_exact(4).zip(candidate.chunks_exact(4)) {
+    for (ref_px, cand_px) in reference
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(candidate.as_chunks::<4>().0)
+    {
         let ref_a = ref_px[3];
         let cand_a = cand_px[3]; // alpha should be identical (same threshold for alpha encode)
         debug_assert_eq!(ref_a, cand_a);

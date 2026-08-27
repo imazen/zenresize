@@ -113,7 +113,7 @@ pub(crate) fn premultiply_alpha_row_v3(_token: X64V3Token, row: &mut [f32]) {
         _mm256_storeu_ps(chunk, mask);
     }
     // Scalar tail for remaining pixels
-    for pixel in tail.chunks_exact_mut(4) {
+    for pixel in tail.as_chunks_mut::<4>().0 {
         let a = pixel[3];
         pixel[0] *= a;
         pixel[1] *= a;
@@ -354,7 +354,7 @@ pub(crate) fn filter_v_row_f32_v3(
         // Process 32 floats (4×8) at a time for ILP
         let (out_blocks, out_rem) = output[..base8].as_chunks_mut::<32>();
 
-        for (out_block, row_block) in out_blocks.iter_mut().zip(row_chunks.chunks_exact(4)) {
+        for (out_block, row_block) in out_blocks.iter_mut().zip(row_chunks.as_chunks::<4>().0) {
             let s0 = _mm256_loadu_ps(&row_block[0]);
             let s1 = _mm256_loadu_ps(&row_block[1]);
             let s2 = _mm256_loadu_ps(&row_block[2]);
@@ -424,8 +424,10 @@ pub(crate) fn premultiply_u8_row_v3(_token: X64V3Token, input: &[u8], output: &m
     // Scalar tail
     let tail = in_chunks.len() * 8;
     for pixel in input[tail..]
-        .chunks_exact(4)
-        .zip(output[tail..].chunks_exact_mut(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(output[tail..].as_chunks_mut::<4>().0)
     {
         let (inp, out) = pixel;
         let a = inp[3] as u16;
@@ -1449,7 +1451,10 @@ pub(crate) fn filter_v_all_u8_i16_v3(
                 let mut acc_lo = _mm256_setzero_si256();
                 let mut acc_hi = _mm256_setzero_si256();
 
-                for (pw, ri_pair) in paired_wts_a[..pairs].iter().zip(tap_rows.chunks_exact(2)) {
+                for (pw, ri_pair) in paired_wts_a[..pairs]
+                    .iter()
+                    .zip(tap_rows.as_chunks::<2>().0)
+                {
                     let src0 = _mm_loadu_si128(idx(ri_pair[0], ci));
                     let src1 = _mm_loadu_si128(idx(ri_pair[1], ci));
 
@@ -1674,7 +1679,9 @@ pub(crate) fn filter_v_all_u8_i16_tiled_v3(
                     let mut acc_lo = _mm256_setzero_si256();
                     let mut acc_hi = _mm256_setzero_si256();
 
-                    for (pw, ri_pair) in paired_wts_a[..pairs].iter().zip(tap_rows.chunks_exact(2))
+                    for (pw, ri_pair) in paired_wts_a[..pairs]
+                        .iter()
+                        .zip(tap_rows.as_chunks::<2>().0)
                     {
                         let src0 = _mm_loadu_si128(idx(ri_pair[0], ci));
                         let src1 = _mm_loadu_si128(idx(ri_pair[1], ci));
@@ -2119,7 +2126,10 @@ pub(crate) fn filter_v_all_i16_i16_v3(
             for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
                 let mut acc_lo = _mm256_setzero_si256();
 
-                for (pw, ri_pair) in paired_wts_a[..pairs].iter().zip(tap_rows.chunks_exact(2)) {
+                for (pw, ri_pair) in paired_wts_a[..pairs]
+                    .iter()
+                    .zip(tap_rows.as_chunks::<2>().0)
+                {
                     let src0 = _mm_loadu_si128(idx(ri_pair[0], ci));
                     let src1 = _mm_loadu_si128(idx(ri_pair[1], ci));
                     let il_lo = _mm_unpacklo_epi16(src0, src1);
@@ -2217,7 +2227,7 @@ pub(crate) fn filter_v_row_u8_i16_v3(
         let mut acc_lo = _mm256_setzero_si256();
         let mut acc_hi = _mm256_setzero_si256();
 
-        for (pw, row_pair) in paired_wts.iter().zip(row_chunks.chunks_exact(2)) {
+        for (pw, row_pair) in paired_wts.iter().zip(row_chunks.as_chunks::<2>().0) {
             let src0 = _mm_loadu_si128(idx(row_pair[0], ci));
             let src1 = _mm_loadu_si128(idx(row_pair[1], ci));
 
@@ -2327,7 +2337,7 @@ pub(crate) fn filter_v_row_i16_v3(
     for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
         let mut acc = _mm256_setzero_si256();
 
-        for (pw, row_pair) in paired_wts.iter().zip(row_chunks.chunks_exact(2)) {
+        for (pw, row_pair) in paired_wts.iter().zip(row_chunks.as_chunks::<2>().0) {
             let src0 = _mm_loadu_si128(idx(row_pair[0], ci));
             let src1 = _mm_loadu_si128(idx(row_pair[1], ci));
 
@@ -2574,7 +2584,7 @@ pub(crate) fn filter_v_row_f16_v3(
         // Process 32 f16 values (4×8) at a time for ILP
         let (out_blocks, out_rem) = output[..base8].as_chunks_mut::<32>();
 
-        for (out_block, row_block) in out_blocks.iter_mut().zip(row_chunks.chunks_exact(4)) {
+        for (out_block, row_block) in out_blocks.iter_mut().zip(row_chunks.as_chunks::<4>().0) {
             // Load 4 groups of 8 f16, convert to f32, FMA accumulate
             let h0 = _mm_loadu_si128(&row_block[0]);
             let h1 = _mm_loadu_si128(&row_block[1]);
@@ -2663,7 +2673,7 @@ pub(crate) fn filter_v_all_f16_v3(
             // Process 32 elements (4×8) at a time for ILP
             let (out_blocks, out_rem) = output[out_start..out_start + base8].as_chunks_mut::<32>();
 
-            for (out_block, row_block) in out_blocks.iter_mut().zip(row_chunks.chunks_exact(4)) {
+            for (out_block, row_block) in out_blocks.iter_mut().zip(row_chunks.as_chunks::<4>().0) {
                 let h0 = _mm_loadu_si128(&row_block[0]);
                 let h1 = _mm_loadu_si128(&row_block[1]);
                 let h2 = _mm_loadu_si128(&row_block[2]);
@@ -2828,7 +2838,7 @@ fn tf_row_inplace(
         }
 
         // Scalar tail: 0 or 1 pixel (4 floats)
-        for pixel in tail.chunks_exact_mut(4) {
+        for pixel in tail.as_chunks_mut::<4>().0 {
             for v in &mut pixel[..3] {
                 *v = tf_scalar(*v);
             }
@@ -3290,7 +3300,7 @@ pub(crate) fn filter_v_row_i16_v4(
         let mut acc_lo = _mm512_setzero_si512();
         let mut acc_hi = _mm512_setzero_si512();
 
-        for (pw, row_pair) in paired_wts.iter().zip(row_chunks.chunks_exact(2)) {
+        for (pw, row_pair) in paired_wts.iter().zip(row_chunks.as_chunks::<2>().0) {
             let src0 = _mm512_loadu_si512(idx(row_pair[0], ci));
             let src1 = _mm512_loadu_si512(idx(row_pair[1], ci));
 

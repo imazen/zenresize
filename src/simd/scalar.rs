@@ -76,7 +76,7 @@ pub(crate) fn f32_to_u8_row_scalar(_token: ScalarToken, input: &[f32], output: &
 
 /// Premultiply alpha in-place, scalar fallback.
 pub(crate) fn premultiply_alpha_row_scalar(_token: ScalarToken, row: &mut [f32]) {
-    for pixel in row.chunks_exact_mut(4) {
+    for pixel in row.as_chunks_mut::<4>().0 {
         let a = pixel[3];
         pixel[0] *= a;
         pixel[1] *= a;
@@ -86,7 +86,7 @@ pub(crate) fn premultiply_alpha_row_scalar(_token: ScalarToken, row: &mut [f32])
 
 /// Unpremultiply alpha in-place, scalar fallback.
 pub(crate) fn unpremultiply_alpha_row_scalar(_token: ScalarToken, row: &mut [f32]) {
-    for pixel in row.chunks_exact_mut(4) {
+    for pixel in row.as_chunks_mut::<4>().0 {
         let a = pixel[3];
         if a > 1.0 / 1024.0 {
             let inv_a = 1.0 / a;
@@ -604,7 +604,12 @@ pub(crate) fn filter_v_row_i16_scalar(
 /// Premultiply alpha on RGBA u8 row: input → output, scalar fallback.
 pub(crate) fn premultiply_u8_row_scalar(_token: ScalarToken, input: &[u8], output: &mut [u8]) {
     debug_assert_eq!(input.len(), output.len());
-    for (inp, out) in input.chunks_exact(4).zip(output.chunks_exact_mut(4)) {
+    for (inp, out) in input
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(output.as_chunks_mut::<4>().0)
+    {
         let a = inp[3] as u16;
         // (c * a + 127) / 255 — exact for all u8 inputs
         out[0] = ((inp[0] as u16 * a + 127) / 255) as u8;
@@ -616,7 +621,7 @@ pub(crate) fn premultiply_u8_row_scalar(_token: ScalarToken, input: &[u8], outpu
 
 /// Unpremultiply alpha in-place on RGBA u8 row, scalar fallback.
 pub(crate) fn unpremultiply_u8_row_scalar(_token: ScalarToken, row: &mut [u8]) {
-    for pixel in row.chunks_exact_mut(4) {
+    for pixel in row.as_chunks_mut::<4>().0 {
         let a = pixel[3];
         if a == 0 {
             pixel[0] = 0;

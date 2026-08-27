@@ -77,7 +77,9 @@ fn main() {
         .srgb()
         .build();
     let rgba3: Vec<u8> = rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|c| &c[..3])
         .copied()
         .collect();

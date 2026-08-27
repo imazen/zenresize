@@ -415,7 +415,7 @@ fn resize_large_downscale() {
     assert_eq!(output.len(), 10 * 10 * 4);
 
     // Constant input → output should be close to constant
-    for px in output.chunks_exact(4) {
+    for px in output.as_chunks::<4>().0 {
         assert!(
             (px[0] as i16 - 128).unsigned_abs() <= 3,
             "pixel value drifted: {}",
@@ -469,7 +469,7 @@ fn resize_rgbx_no_premul() {
         .build();
 
     let mut input = vec![0u8; 20 * 20 * 4];
-    for px in input.chunks_exact_mut(4) {
+    for px in input.as_chunks_mut::<4>().0 {
         px[0] = 128;
         px[1] = 64;
         px[2] = 32;
@@ -488,7 +488,7 @@ fn resize_premultiplied_alpha() {
         .build();
 
     let mut input = vec![0u8; 20 * 20 * 4];
-    for px in input.chunks_exact_mut(4) {
+    for px in input.as_chunks_mut::<4>().0 {
         px[0] = 64; // R * A/255 = 128 * 128/255 ≈ 64
         px[1] = 32;
         px[2] = 16;
@@ -498,7 +498,7 @@ fn resize_premultiplied_alpha() {
     assert_eq!(output.len(), 10 * 10 * 4);
 
     // Constant input → output should be close to constant
-    for px in output.chunks_exact(4) {
+    for px in output.as_chunks::<4>().0 {
         assert!((px[0] as i16 - 64).unsigned_abs() <= 3, "R: {}", px[0]);
         assert!((px[3] as i16 - 128).unsigned_abs() <= 2, "A: {}", px[3]);
     }
@@ -799,7 +799,7 @@ fn bgra_preserves_channel_order() {
     let w = 20u32;
     let h = 20u32;
     let mut bgra_input = vec![0u8; (w * h * 4) as usize];
-    for px in bgra_input.chunks_exact_mut(4) {
+    for px in bgra_input.as_chunks_mut::<4>().0 {
         px[0] = 200; // B
         px[1] = 100; // G
         px[2] = 50; // R
@@ -816,7 +816,7 @@ fn bgra_preserves_channel_order() {
     assert_eq!(output.len(), 10 * 10 * 4);
 
     // Output preserves BGRA order
-    for px in output.chunks_exact(4) {
+    for px in output.as_chunks::<4>().0 {
         assert!((px[0] as i16 - 200).unsigned_abs() <= 3, "B: {}", px[0]);
         assert!((px[1] as i16 - 100).unsigned_abs() <= 3, "G: {}", px[1]);
         assert!((px[2] as i16 - 50).unsigned_abs() <= 3, "R: {}", px[2]);
@@ -831,7 +831,7 @@ fn bgrx_as_4ch_no_alpha() {
     let w = 20u32;
     let h = 20u32;
     let mut bgrx_input = vec![0u8; (w * h * 4) as usize];
-    for px in bgrx_input.chunks_exact_mut(4) {
+    for px in bgrx_input.as_chunks_mut::<4>().0 {
         px[0] = 200; // B
         px[1] = 100; // G
         px[2] = 50; // R
@@ -847,7 +847,7 @@ fn bgrx_as_4ch_no_alpha() {
     assert_eq!(output.len(), 10 * 10 * 4);
 
     // Channel order preserved, X stays ~0 (it was 0 in constant input)
-    for px in output.chunks_exact(4) {
+    for px in output.as_chunks::<4>().0 {
         assert!((px[0] as i16 - 200).unsigned_abs() <= 3, "B: {}", px[0]);
         assert!((px[1] as i16 - 100).unsigned_abs() <= 3, "G: {}", px[1]);
         assert!((px[2] as i16 - 50).unsigned_abs() <= 3, "R: {}", px[2]);
@@ -863,7 +863,7 @@ fn bgra_linear_preserves_order() {
     let w = 20u32;
     let h = 20u32;
     let mut bgra_input = vec![0u8; (w * h * 4) as usize];
-    for px in bgra_input.chunks_exact_mut(4) {
+    for px in bgra_input.as_chunks_mut::<4>().0 {
         px[0] = 200; // B
         px[1] = 100; // G
         px[2] = 50; // R
@@ -877,7 +877,7 @@ fn bgra_linear_preserves_order() {
 
     let output = Resizer::new(&config).resize(&bgra_input);
 
-    for px in output.chunks_exact(4) {
+    for px in output.as_chunks::<4>().0 {
         assert!((px[0] as i16 - 200).unsigned_abs() <= 3, "B: {}", px[0]);
         assert!((px[1] as i16 - 100).unsigned_abs() <= 3, "G: {}", px[1]);
         assert!((px[2] as i16 - 50).unsigned_abs() <= 3, "R: {}", px[2]);

@@ -7,8 +7,13 @@
 #[cfg(not(feature = "std"))]
 use alloc::{vec, vec::Vec};
 
+#[cfg(any(target_arch = "x86_64", target_arch = "wasm32"))]
 use core::ops::Range;
 
+// `idx`/`idx_mut` are used by the x86-64 kernels and `sub` by the x86-64 and
+// wasm128 kernels; on other targets they would be dead code under
+// `-D warnings`, so gate them to the tiers that call them.
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 pub(crate) fn idx<T>(slice: &[T], i: usize) -> &T {
     debug_assert!(i < slice.len(), "proven::idx: {i} >= {}", slice.len());
@@ -22,6 +27,7 @@ pub(crate) fn idx<T>(slice: &[T], i: usize) -> &T {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 pub(crate) fn idx_mut<T>(slice: &mut [T], i: usize) -> &mut T {
     debug_assert!(i < slice.len(), "proven::idx_mut: {i} >= {}", slice.len());
@@ -35,6 +41,7 @@ pub(crate) fn idx_mut<T>(slice: &mut [T], i: usize) -> &mut T {
     }
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "wasm32"))]
 #[inline(always)]
 pub(crate) fn sub<T>(slice: &[T], range: Range<usize>) -> &[T] {
     debug_assert!(

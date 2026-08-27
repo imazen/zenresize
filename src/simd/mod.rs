@@ -70,14 +70,16 @@ pub(crate) fn u8_to_f32_row(input: &[u8], output: &mut [f32]) {
     #[cfg(target_arch = "aarch64")]
     {
         use archmage::SimdToken;
-        return crate::simd::scalar::u8_to_f32_row_scalar(
+        crate::simd::scalar::u8_to_f32_row_scalar(
             archmage::ScalarToken::summon().expect("scalar token is infallible"),
             input,
             output,
-        );
+        )
     }
     #[cfg(not(target_arch = "aarch64"))]
-    archmage::incant!(u8_to_f32_row(input, output))
+    {
+        archmage::incant!(u8_to_f32_row(input, output))
+    }
 }
 
 /// Convert a row of f32 pixels to u8 (multiply by 255, round, clamp).

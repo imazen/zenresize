@@ -33,7 +33,12 @@ pub(crate) fn srgb_u8_to_linear_f32_impl(
 
     // Fix alpha: should be linear scale (v/255), not sRGB curve
     if has_alpha && channels == 4 {
-        for (chunk_in, chunk_out) in input.chunks_exact(4).zip(output.chunks_exact_mut(4)) {
+        for (chunk_in, chunk_out) in input
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(output.as_chunks_mut::<4>().0)
+        {
             chunk_out[3] = chunk_in[3] as f32 / 255.0;
         }
     }
@@ -57,7 +62,12 @@ pub(crate) fn srgb_u8_to_linear_f32_impl(
 pub(crate) fn srgb_u8_to_linear_premultiply_f32_impl(input: &[u8], output: &mut [f32]) {
     debug_assert_eq!(input.len(), output.len());
     linear_srgb::default::srgb_u8_to_linear_slice(input, output);
-    for (chunk_in, chunk_out) in input.chunks_exact(4).zip(output.chunks_exact_mut(4)) {
+    for (chunk_in, chunk_out) in input
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(output.as_chunks_mut::<4>().0)
+    {
         let a = chunk_in[3] as f32 / 255.0;
         chunk_out[0] *= a;
         chunk_out[1] *= a;
@@ -82,7 +92,12 @@ pub(crate) fn linear_f32_to_srgb_u8_impl(
 
     // Fix alpha: should be linear scale (v*255+0.5), not sRGB curve
     if has_alpha && channels == 4 {
-        for (chunk_in, chunk_out) in input.chunks_exact(4).zip(output.chunks_exact_mut(4)) {
+        for (chunk_in, chunk_out) in input
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(output.as_chunks_mut::<4>().0)
+        {
             chunk_out[3] = (chunk_in[3] * 255.0 + 0.5) as u8;
         }
     }
@@ -112,7 +127,7 @@ pub fn f32_to_srgb_u8(input: &[f32], output: &mut [u8]) {
 #[cfg(test)]
 pub fn premultiply_alpha_f32(row: &mut [f32], channels: usize) {
     debug_assert_eq!(channels, 4);
-    for pixel in row.chunks_exact_mut(4) {
+    for pixel in row.as_chunks_mut::<4>().0 {
         let a = pixel[3];
         pixel[0] *= a;
         pixel[1] *= a;
@@ -126,7 +141,7 @@ pub fn premultiply_alpha_f32(row: &mut [f32], channels: usize) {
 #[cfg(test)]
 pub fn unpremultiply_alpha_f32(row: &mut [f32], channels: usize) {
     debug_assert_eq!(channels, 4);
-    for pixel in row.chunks_exact_mut(4) {
+    for pixel in row.as_chunks_mut::<4>().0 {
         let a = pixel[3];
         if a > 1.0 / 1024.0 {
             let inv_a = 1.0 / a;
@@ -483,7 +498,7 @@ mod srgb_premul_fusion_gate {
 
             let mut seq = vec![0f32; n];
             srgb_u8_to_linear_f32_impl(&src, &mut seq, 4, true);
-            for p in seq.chunks_exact_mut(4) {
+            for p in seq.as_chunks_mut::<4>().0 {
                 let a = p[3];
                 p[0] *= a;
                 p[1] *= a;

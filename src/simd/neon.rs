@@ -88,8 +88,7 @@ pub(crate) fn premultiply_alpha_row_neon(token: NeonToken, row: &mut [f32]) {
     const PX: usize = 4;
     let full = row.len() / (PX * 4) * (PX * 4);
     let (body, tail) = row.split_at_mut(full);
-    for chunk in body.chunks_exact_mut(PX * 4) {
-        let block: &mut [f32; PX * 4] = chunk.try_into().unwrap();
+    for block in body.as_chunks_mut::<{ PX * 4 }>().0 {
         let p = vld4q_f32(block);
         vst4q_f32(
             block,
@@ -123,8 +122,7 @@ pub(crate) fn unpremultiply_alpha_row_neon(token: NeonToken, row: &mut [f32]) {
     let (body, tail) = row.split_at_mut(full);
     let thresh = vdupq_n_f32(1.0 / 1024.0);
     let one = vdupq_n_f32(1.0);
-    for chunk in body.chunks_exact_mut(PX * 4) {
-        let block: &mut [f32; PX * 4] = chunk.try_into().unwrap();
+    for block in body.as_chunks_mut::<{ PX * 4 }>().0 {
         let p = vld4q_f32(block);
         // Select on the RESULT, not on the multiplier: below the threshold the
         // scalar branch leaves the channel completely untouched, and `c * 1.0`
@@ -310,8 +308,7 @@ pub(crate) fn unpremultiply_u8_row_neon(token: NeonToken, row: &mut [u8]) {
     let full = row.len() / (PX * 4) * (PX * 4);
     let (body, tail) = row.split_at_mut(full);
 
-    for chunk in body.chunks_exact_mut(PX * 4) {
-        let block: &mut [u8; PX * 4] = chunk.try_into().unwrap();
+    for block in body.as_chunks_mut::<{ PX * 4 }>().0 {
         let p = vld4q_u8(block);
         let a_groups = widen_u8x16(token, p.3);
 
@@ -583,7 +580,7 @@ mod premultiply_neon_gate {
             let mut got = row.clone();
             let mut want = row.clone();
             premultiply_alpha_row_neon(token, &mut got);
-            for pixel in want.chunks_exact_mut(4) {
+            for pixel in want.as_chunks_mut::<4>().0 {
                 let a = pixel[3];
                 pixel[0] *= a;
                 pixel[1] *= a;
@@ -640,11 +637,12 @@ pub(crate) fn u8_to_f32_premultiply_row_neon(token: NeonToken, input: &[u8], out
     };
 
     for (ichunk, ochunk) in in_body
-        .chunks_exact(STRIDE)
-        .zip(out_body.chunks_exact_mut(STRIDE))
+        .as_chunks::<STRIDE>()
+        .0
+        .iter()
+        .zip(out_body.as_chunks_mut::<STRIDE>().0.iter_mut())
     {
-        let ib: &[u8; STRIDE] = ichunk.try_into().unwrap();
-        let p = vld4q_u8(ib);
+        let p = vld4q_u8(ichunk);
         let (r, g, b, a) = (widen(p.0), widen(p.1), widen(p.2), widen(p.3));
         for k in 0..4 {
             let ob: &mut [f32; 16] = (&mut ochunk[k * 16..(k + 1) * 16]).try_into().unwrap();

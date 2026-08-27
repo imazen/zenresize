@@ -59,14 +59,14 @@ fn filter_h_4ch<T: magetypes::simd::backends::F32x4Backend>(
     let (in_pixels, _) = input.as_chunks::<4>();
     let (out_pixels, _) = output.as_chunks_mut::<4>();
 
-    for out_x in 0..weights.len() {
+    for (out_x, out_px) in out_pixels[..weights.len()].iter_mut().enumerate() {
         let left = weights.left[out_x] as usize;
         let w = weights.weights(out_x);
         let mut acc = f32x4::zero(token);
         for (t, &weight) in w.iter().enumerate() {
             acc += f32x4::from_array(token, in_pixels[left + t]) * f32x4::splat(token, weight);
         }
-        out_pixels[out_x] = acc.to_array();
+        *out_px = acc.to_array();
     }
 }
 
@@ -256,7 +256,7 @@ pub(super) fn f32_to_u8_row_impl(token: Token, input: &[f32], output: &mut [u8])
 #[magetypes(neon, wasm128)]
 #[inline(always)]
 pub(super) fn premultiply_alpha_row_impl(_token: Token, row: &mut [f32]) {
-    for pixel in row.chunks_exact_mut(4) {
+    for pixel in row.as_chunks_mut::<4>().0 {
         let a = pixel[3];
         pixel[0] *= a;
         pixel[1] *= a;
@@ -268,7 +268,7 @@ pub(super) fn premultiply_alpha_row_impl(_token: Token, row: &mut [f32]) {
 #[magetypes(neon, wasm128)]
 #[inline(always)]
 pub(super) fn unpremultiply_alpha_row_impl(_token: Token, row: &mut [f32]) {
-    for pixel in row.chunks_exact_mut(4) {
+    for pixel in row.as_chunks_mut::<4>().0 {
         let a = pixel[3];
         if a > 1.0 / 1024.0 {
             let inv_a = 1.0 / a;
@@ -394,10 +394,10 @@ fn filter_h_u8_i16_4ch<T: magetypes::simd::backends::I32x4Backend>(
         let w = weights.weights_padded(out_x);
         let mut acc = i32x4::zero(token);
 
-        for t in 0..max_taps {
+        for (t, &wt) in w[..max_taps].iter().enumerate() {
             let off = (left + t) * 4;
             let pixel = load_u8x4_as_i32x4(token, input, off);
-            acc += pixel * w[t] as i32;
+            acc += pixel * wt as i32;
         }
 
         let rounded = (acc + half).shr_arithmetic_const::<{ I16_PRECISION }>();
@@ -491,10 +491,10 @@ fn filter_h_u8_to_i16_4ch<T: magetypes::simd::backends::I32x4Backend>(
         let w = weights.weights_padded(out_x);
         let mut acc = i32x4::zero(token);
 
-        for t in 0..max_taps {
+        for (t, &wt) in w[..max_taps].iter().enumerate() {
             let off = (left + t) * 4;
             let pixel = load_u8x4_as_i32x4(token, input, off);
-            acc += pixel * w[t] as i32;
+            acc += pixel * wt as i32;
         }
 
         let rounded = (acc + half).shr_arithmetic_const::<{ I16_PRECISION }>();
@@ -595,10 +595,10 @@ fn v_filter_chunk_16<T: magetypes::simd::backends::I32x4Backend>(
     weights: &[i16],
     acc: &mut [GenericI32x4<T>; 4],
 ) {
-    for t in 0..tap_count {
+    for (t, &wt) in weights[..tap_count].iter().enumerate() {
         let in_y_idx = (left + t as i32).clamp(0, in_h_i32) as usize;
         let off = in_y_idx * h_row_len + x;
-        let w = weights[t] as i32;
+        let w = wt as i32;
 
         // Each group: single u32 load + shift extraction instead of 4 scalar loads
         acc[0] += load_u8x4_as_i32x4(token, intermediate, off) * w;
@@ -985,7 +985,7 @@ fn filter_h_i16_i16_4ch<T: magetypes::simd::backends::I32x4Backend>(
         let w = weights.weights_padded(out_x);
         let mut acc = i32x4::zero(token);
 
-        for t in 0..max_taps {
+        for (t, &wt) in w[..max_taps].iter().enumerate() {
             let off = (left + t) * 4;
             let pixel = i32x4::from_array(
                 token,
@@ -996,7 +996,7 @@ fn filter_h_i16_i16_4ch<T: magetypes::simd::backends::I32x4Backend>(
                     input[off + 3] as i32,
                 ],
             );
-            acc += pixel * w[t] as i32;
+            acc += pixel * wt as i32;
         }
 
         let rounded = (acc + half).shr_arithmetic_const::<{ I16_PRECISION }>();
@@ -1157,7 +1157,12 @@ pub(super) fn filter_v_all_i16_i16_impl(
 #[inline(always)]
 pub(super) fn premultiply_u8_row_impl(_token: Token, input: &[u8], output: &mut [u8]) {
     debug_assert_eq!(input.len(), output.len());
-    for (inp, out) in input.chunks_exact(4).zip(output.chunks_exact_mut(4)) {
+    for (inp, out) in input
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(output.as_chunks_mut::<4>().0)
+    {
         let a = inp[3] as u16;
         out[0] = ((inp[0] as u16 * a + 127) / 255) as u8;
         out[1] = ((inp[1] as u16 * a + 127) / 255) as u8;
@@ -1170,7 +1175,7 @@ pub(super) fn premultiply_u8_row_impl(_token: Token, input: &[u8], output: &mut 
 #[magetypes(neon, wasm128)]
 #[inline(always)]
 pub(super) fn unpremultiply_u8_row_impl(_token: Token, row: &mut [u8]) {
-    for pixel in row.chunks_exact_mut(4) {
+    for pixel in row.as_chunks_mut::<4>().0 {
         let a = pixel[3];
         if a == 0 {
             pixel[0] = 0;
@@ -1317,7 +1322,7 @@ pub(super) fn filter_h_row_f32_to_f16_impl(
         type f32x4<U> = GenericF32x4<U>;
         let (in_pixels, _) = input.as_chunks::<4>();
         let (out_pixels, _) = output.as_chunks_mut::<4>();
-        for out_x in 0..out_width {
+        for (out_x, out_px) in out_pixels[..out_width].iter_mut().enumerate() {
             let left = weights.left[out_x] as usize;
             let w = weights.weights(out_x);
             let mut acc = f32x4::zero(token);
@@ -1325,7 +1330,7 @@ pub(super) fn filter_h_row_f32_to_f16_impl(
                 acc += f32x4::from_array(token, in_pixels[left + t]) * f32x4::splat(token, weight);
             }
             let packed = acc.to_f16().to_array();
-            out_pixels[out_x] = [
+            *out_px = [
                 packed[0] as u16,
                 packed[1] as u16,
                 packed[2] as u16,
@@ -1349,8 +1354,8 @@ pub(super) fn filter_h_row_f32_to_f16_impl(
         output[i + 2] = packed[2] as u16;
         output[i + 3] = packed[3] as u16;
     }
-    for i in (chunks * 4)..total {
-        output[i] = super::scalar::f32_to_f16_soft(acc_at(i));
+    for (i, o) in output[..total].iter_mut().enumerate().skip(chunks * 4) {
+        *o = super::scalar::f32_to_f16_soft(acc_at(i));
     }
 }
 
@@ -1450,8 +1455,9 @@ pub(super) fn filter_v_all_f16_impl(
                 );
                 let vals = bits.f16_to_f32();
                 let wv = GenericF32x4::splat(token, weight);
-                // Non-fused multiply then add, matching the scalar `acc += v*w`.
-                acc = acc + (vals * wv);
+                // Non-fused multiply then add, matching the scalar `acc += v*w`
+                // (magetypes' `AddAssign` is `*self = *self + rhs`, same op).
+                acc += vals * wv;
             }
             let mut tmp = [0.0f32; 4];
             acc.store(&mut tmp);

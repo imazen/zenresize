@@ -135,7 +135,7 @@ fn bench_batch_to_linear(c: &mut Criterion) {
         let mut row = encoded_row.clone();
         b.iter(|| {
             row.copy_from_slice(&encoded_row);
-            for pixel in row.chunks_exact_mut(4) {
+            for pixel in row.as_chunks_mut::<4>().0 {
                 for v in &mut pixel[..3] {
                     *v = srgb_to_linear_powf(*v);
                 }
@@ -158,7 +158,7 @@ fn bench_batch_to_linear(c: &mut Criterion) {
         let mut row = encoded_row.clone();
         b.iter(|| {
             row.copy_from_slice(&encoded_row);
-            for pixel in row.chunks_exact_mut(4) {
+            for pixel in row.as_chunks_mut::<4>().0 {
                 for v in &mut pixel[..3] {
                     *v = colorutils_rs::srgb_to_linear(*v);
                 }
@@ -180,7 +180,7 @@ fn bench_batch_to_linear(c: &mut Criterion) {
         let mut row = encoded_row.clone();
         b.iter(|| {
             row.copy_from_slice(&encoded_row);
-            for pixel in row.chunks_exact_mut(4) {
+            for pixel in row.as_chunks_mut::<4>().0 {
                 for v in &mut pixel[..3] {
                     *v = lsrgb::srgb_to_linear(*v);
                 }
@@ -194,7 +194,7 @@ fn bench_batch_to_linear(c: &mut Criterion) {
         let mut row = encoded_row.clone();
         b.iter(|| {
             row.copy_from_slice(&encoded_row);
-            for pixel in row.chunks_exact_mut(4) {
+            for pixel in row.as_chunks_mut::<4>().0 {
                 for v in &mut pixel[..3] {
                     *v = bt709_to_linear_powf(*v);
                 }
@@ -217,7 +217,7 @@ fn bench_batch_to_linear(c: &mut Criterion) {
         let mut row = encoded_row.clone();
         b.iter(|| {
             row.copy_from_slice(&encoded_row);
-            for pixel in row.chunks_exact_mut(4) {
+            for pixel in row.as_chunks_mut::<4>().0 {
                 for v in &mut pixel[..3] {
                     *v = colorutils_rs::rec709_to_linear(*v);
                 }
@@ -231,7 +231,7 @@ fn bench_batch_to_linear(c: &mut Criterion) {
         let mut row = encoded_row.clone();
         b.iter(|| {
             row.copy_from_slice(&encoded_row);
-            for pixel in row.chunks_exact_mut(4) {
+            for pixel in row.as_chunks_mut::<4>().0 {
                 for v in &mut pixel[..3] {
                     *v = pq_to_linear_powf(*v);
                 }
@@ -254,7 +254,7 @@ fn bench_batch_to_linear(c: &mut Criterion) {
         let mut row = encoded_row.clone();
         b.iter(|| {
             row.copy_from_slice(&encoded_row);
-            for pixel in row.chunks_exact_mut(4) {
+            for pixel in row.as_chunks_mut::<4>().0 {
                 for v in &mut pixel[..3] {
                     *v = colorutils_rs::pq_to_linear(*v);
                 }
@@ -268,7 +268,7 @@ fn bench_batch_to_linear(c: &mut Criterion) {
         let mut row = encoded_row.clone();
         b.iter(|| {
             row.copy_from_slice(&encoded_row);
-            for pixel in row.chunks_exact_mut(4) {
+            for pixel in row.as_chunks_mut::<4>().0 {
                 for v in &mut pixel[..3] {
                     *v = hlg_to_linear_powf(*v);
                 }
@@ -291,7 +291,7 @@ fn bench_batch_to_linear(c: &mut Criterion) {
         let mut row = encoded_row.clone();
         b.iter(|| {
             row.copy_from_slice(&encoded_row);
-            for pixel in row.chunks_exact_mut(4) {
+            for pixel in row.as_chunks_mut::<4>().0 {
                 for v in &mut pixel[..3] {
                     *v = colorutils_rs::hlg_to_linear(*v);
                 }
@@ -316,7 +316,7 @@ fn bench_batch_from_linear(c: &mut Criterion) {
         let mut row = linear_data.clone();
         b.iter(|| {
             row.copy_from_slice(&linear_data);
-            for pixel in row.chunks_exact_mut(4) {
+            for pixel in row.as_chunks_mut::<4>().0 {
                 for v in &mut pixel[..3] {
                     *v = srgb_from_linear_powf(*v);
                 }
@@ -339,7 +339,7 @@ fn bench_batch_from_linear(c: &mut Criterion) {
         let mut row = linear_data.clone();
         b.iter(|| {
             row.copy_from_slice(&linear_data);
-            for pixel in row.chunks_exact_mut(4) {
+            for pixel in row.as_chunks_mut::<4>().0 {
                 for v in &mut pixel[..3] {
                     *v = colorutils_rs::srgb_from_linear(*v);
                 }
@@ -361,7 +361,7 @@ fn bench_batch_from_linear(c: &mut Criterion) {
         let mut row = linear_data.clone();
         b.iter(|| {
             row.copy_from_slice(&linear_data);
-            for pixel in row.chunks_exact_mut(4) {
+            for pixel in row.as_chunks_mut::<4>().0 {
                 for v in &mut pixel[..3] {
                     *v = lsrgb::linear_to_srgb(*v);
                 }
@@ -375,7 +375,7 @@ fn bench_batch_from_linear(c: &mut Criterion) {
         let mut row = linear_data.clone();
         b.iter(|| {
             row.copy_from_slice(&linear_data);
-            for pixel in row.chunks_exact_mut(4) {
+            for pixel in row.as_chunks_mut::<4>().0 {
                 for v in &mut pixel[..3] {
                     *v = bt709_from_linear_powf(*v);
                 }
@@ -398,7 +398,7 @@ fn bench_batch_from_linear(c: &mut Criterion) {
         let mut row = linear_data.clone();
         b.iter(|| {
             row.copy_from_slice(&linear_data);
-            for pixel in row.chunks_exact_mut(4) {
+            for pixel in row.as_chunks_mut::<4>().0 {
                 for v in &mut pixel[..3] {
                     *v = colorutils_rs::rec709_from_linear(*v);
                 }
@@ -412,7 +412,7 @@ fn bench_batch_from_linear(c: &mut Criterion) {
         let mut row = linear_data.clone();
         b.iter(|| {
             row.copy_from_slice(&linear_data);
-            for pixel in row.chunks_exact_mut(4) {
+            for pixel in row.as_chunks_mut::<4>().0 {
                 for v in &mut pixel[..3] {
                     *v = pq_from_linear_powf(*v);
                 }
@@ -435,7 +435,7 @@ fn bench_batch_from_linear(c: &mut Criterion) {
         let mut row = linear_data.clone();
         b.iter(|| {
             row.copy_from_slice(&linear_data);
-            for pixel in row.chunks_exact_mut(4) {
+            for pixel in row.as_chunks_mut::<4>().0 {
                 for v in &mut pixel[..3] {
                     *v = colorutils_rs::pq_from_linear(*v);
                 }
@@ -449,7 +449,7 @@ fn bench_batch_from_linear(c: &mut Criterion) {
         let mut row = linear_data.clone();
         b.iter(|| {
             row.copy_from_slice(&linear_data);
-            for pixel in row.chunks_exact_mut(4) {
+            for pixel in row.as_chunks_mut::<4>().0 {
                 for v in &mut pixel[..3] {
                     *v = hlg_from_linear_powf(*v);
                 }
@@ -472,7 +472,7 @@ fn bench_batch_from_linear(c: &mut Criterion) {
         let mut row = linear_data.clone();
         b.iter(|| {
             row.copy_from_slice(&linear_data);
-            for pixel in row.chunks_exact_mut(4) {
+            for pixel in row.as_chunks_mut::<4>().0 {
                 for v in &mut pixel[..3] {
                     *v = colorutils_rs::hlg_from_linear(*v);
                 }
