@@ -533,6 +533,8 @@ pub(crate) fn linear_f32_to_srgb_u8_neon(
 #[cfg(test)]
 mod premultiply_neon_gate {
     use super::*;
+    #[cfg(not(feature = "std"))]
+    use alloc::vec::Vec;
 
     /// The hand-written NEON premultiply must equal the scalar body BIT-FOR-BIT.
     ///
@@ -667,6 +669,8 @@ pub(crate) fn u8_to_f32_premultiply_row_neon(token: NeonToken, input: &[u8], out
 #[cfg(test)]
 mod fused_u8_premul_gate {
     use super::*;
+    #[cfg(not(feature = "std"))]
+    use alloc::{vec, vec::Vec};
 
     /// The fused kernel must equal `u8_to_f32_row` followed by
     /// `premultiply_alpha_row`, BIT-FOR-BIT.

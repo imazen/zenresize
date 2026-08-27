@@ -446,6 +446,8 @@ mod tests {
 #[cfg(test)]
 mod srgb_premul_fusion_gate {
     use super::*;
+    #[cfg(not(feature = "std"))]
+    use alloc::{vec, vec::Vec};
 
     /// The fused sRGB+premultiply must equal `srgb_u8_to_linear_f32_impl`
     /// followed by a premultiply, BIT-FOR-BIT.
