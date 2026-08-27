@@ -551,8 +551,18 @@ mod premultiply_neon_gate {
         };
 
         let specials = [
-            0.0f32, -0.0, 1.0, 0.5, -1.0, f32::MIN_POSITIVE, f32::MIN_POSITIVE / 2.0,
-            f32::MAX, f32::INFINITY, f32::NEG_INFINITY, f32::NAN, 1.0 / 1024.0,
+            0.0f32,
+            -0.0,
+            1.0,
+            0.5,
+            -1.0,
+            f32::MIN_POSITIVE,
+            f32::MIN_POSITIVE / 2.0,
+            f32::MAX,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+            1.0 / 1024.0,
         ];
         let mut s = 0x2545_F491u32;
         let mut checked = 0usize;
@@ -617,7 +627,11 @@ pub(crate) fn u8_to_f32_premultiply_row_neon(token: NeonToken, input: &[u8], out
         let lo = vmovl_u8(vget_low_u8(v));
         let hi = vmovl_u8(vget_high_u8(v));
         let q = |u: uint16x8_t, high: bool| {
-            let w = if high { vmovl_u16(vget_high_u16(u)) } else { vmovl_u16(vget_low_u16(u)) };
+            let w = if high {
+                vmovl_u16(vget_high_u16(u))
+            } else {
+                vmovl_u16(vget_low_u16(u))
+            };
             vmulq_f32(vcvtq_f32_u32(w), inv255)
         };
         [q(lo, false), q(lo, true), q(hi, false), q(hi, true)]
@@ -699,7 +713,10 @@ mod fused_u8_premul_gate {
 
             let a: Vec<u32> = fused.iter().map(|v| v.to_bits()).collect();
             let b: Vec<u32> = seq.iter().map(|v| v.to_bits()).collect();
-            assert_eq!(a, b, "fused diverges from the two-kernel sequence at {px} px");
+            assert_eq!(
+                a, b,
+                "fused diverges from the two-kernel sequence at {px} px"
+            );
             checked += 1;
         }
         assert_eq!(checked, 40);

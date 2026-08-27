@@ -95,7 +95,10 @@ fn bench_tiers(c: &mut Criterion) {
     for &(label, w, h, ow, oh) in CASES {
         let src = make_gradient(w, h);
         for (mode, f) in [
-            ("srgb", resize_srgb as fn(&[u8], u32, u32, u32, u32) -> Vec<u8>),
+            (
+                "srgb",
+                resize_srgb as fn(&[u8], u32, u32, u32, u32) -> Vec<u8>,
+            ),
             ("linear", resize_linear),
         ] {
             let mut group = c.benchmark_group(format!("{label}/{mode}"));

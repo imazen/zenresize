@@ -47,7 +47,11 @@ type TierToken = archmage::NeonToken;
 type TierToken = archmage::X64V3Token;
 
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-const TIER_NAME: &str = if cfg!(target_arch = "aarch64") { "neon" } else { "v3(avx2)" };
+const TIER_NAME: &str = if cfg!(target_arch = "aarch64") {
+    "neon"
+} else {
+    "v3(avx2)"
+};
 
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 fn set_simd(on: bool) -> bool {
@@ -55,7 +59,9 @@ fn set_simd(on: bool) -> bool {
     TierToken::dangerously_disable_token_process_wide(!on).is_ok()
 }
 #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
-fn set_simd(_on: bool) -> bool { false }
+fn set_simd(_on: bool) -> bool {
+    false
+}
 
 const W: usize = 1920;
 
@@ -69,8 +75,18 @@ fn bench_kernels(suite: &mut Suite) {
 
     let n = W * 4;
     const PAD: usize = 512; // H kernels over-read to `max_taps`; see the note below.
-    let u8src: &'static [u8] = Box::leak((0..n + PAD).map(|i| if i < n { (i % 251) as u8 } else { 0 }).collect::<Vec<_>>().into_boxed_slice());
-    let fsrc: &'static [f32] = Box::leak((0..n + PAD).map(|i| if i < n { (i % 251) as f32 / 251.0 } else { 0.0 }).collect::<Vec<_>>().into_boxed_slice());
+    let u8src: &'static [u8] = Box::leak(
+        (0..n + PAD)
+            .map(|i| if i < n { (i % 251) as u8 } else { 0 })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
+    let fsrc: &'static [f32] = Box::leak(
+        (0..n + PAD)
+            .map(|i| if i < n { (i % 251) as f32 / 251.0 } else { 0.0 })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
 
     // In-place kernels: the buffer clone is a 30 KB allocation + copy, which
     // dominates a sub-microsecond kernel and made both arms move ~30% between
@@ -104,7 +120,9 @@ fn bench_kernels(suite: &mut Suite) {
     // `ab!` kept as a thin alias of `ab_out!` so every call site gets the
     // untimed allocation. Same signature: (name, output-expr, call).
     macro_rules! ab {
-        ($name:expr, $out:expr, $call:expr) => { ab_out!($name, $out, $call) };
+        ($name:expr, $out:expr, $call:expr) => {
+            ab_out!($name, $out, $call)
+        };
     }
 
     macro_rules! ab_out {
@@ -129,8 +147,12 @@ fn bench_kernels(suite: &mut Suite) {
 
     let u8src2 = u8src.clone();
     let u8src3 = u8src.clone();
-    ab_out!("u8_to_f32_row", vec![0f32; n], |o: &mut Vec<f32>| k::u8_to_f32_row(&u8src[..n], o));
-    ab_out!("f32_to_u8_row", vec![0u8; n], |o: &mut Vec<u8>| k::f32_to_u8_row(&fsrc[..n], o));
+    ab_out!("u8_to_f32_row", vec![0f32; n], |o: &mut Vec<f32>| {
+        k::u8_to_f32_row(&u8src[..n], o)
+    });
+    ab_out!("f32_to_u8_row", vec![0u8; n], |o: &mut Vec<u8>| {
+        k::f32_to_u8_row(&fsrc[..n], o)
+    });
     // The FUSION, against the two-kernel sequence it replaces. Not a tier A/B:
     // both arms run the shipped dispatch. This measures whether widening the
     // #[arcane] region (and eliminating a 120 KB write+read round trip through
@@ -180,18 +202,35 @@ fn bench_kernels(suite: &mut Suite) {
     // That is what decides whether a hand-written body is worth keeping, which
     // a single-row measurement cannot answer when the effect is ~8% and this
     // host's run-to-run drift is comparable.
-    let big: &'static [f32] = Box::leak((0..n * 64).map(|i| (i % 251) as f32 / 251.0).collect::<Vec<_>>().into_boxed_slice());
+    let big: &'static [f32] = Box::leak(
+        (0..n * 64)
+            .map(|i| (i % 251) as f32 / 251.0)
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
     suite.compare("premultiply_alpha_row/64rows", |g| {
         g.throughput(Throughput::Bytes((n * 64) as u64));
         for (arm, simd) in [(TIER_NAME, true), ("scalar", false)] {
             g.bench(arm, move |b| {
-                b.with_input(move || { set_simd(simd); big.to_vec() })
-                    .run(move |mut r| { k::premultiply_alpha_row(&mut r); r })
+                b.with_input(move || {
+                    set_simd(simd);
+                    big.to_vec()
+                })
+                .run(move |mut r| {
+                    k::premultiply_alpha_row(&mut r);
+                    r
+                })
             });
         }
     });
-    ab_inplace!("unpremultiply_alpha_row", fsrc[..n], k::unpremultiply_alpha_row);
-    ab_out!("premultiply_u8_row", vec![0u8; n], |o: &mut Vec<u8>| k::premultiply_u8_row(&u8src[..n], o));
+    ab_inplace!(
+        "unpremultiply_alpha_row",
+        fsrc[..n],
+        k::unpremultiply_alpha_row
+    );
+    ab_out!("premultiply_u8_row", vec![0u8; n], |o: &mut Vec<u8>| {
+        k::premultiply_u8_row(&u8src[..n], o)
+    });
     ab_inplace!("unpremultiply_u8_row", u8src[..n], k::unpremultiply_u8_row);
 
     // ── The convolutions. A 1920 -> 960 downscale (the common web case) with
@@ -214,17 +253,33 @@ fn bench_kernels(suite: &mut Suite) {
     // groups4 is private; PAD (512) covers groups4*16 for these sizes with margin.
     let pad = PAD;
     let i16src: &'static [i16] = Box::leak(
-        (0..n + pad).map(|i| if i < n { (i % 4095) as i16 } else { 0 }).collect::<Vec<_>>().into_boxed_slice(),
+        (0..n + pad)
+            .map(|i| if i < n { (i % 4095) as i16 } else { 0 })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
     );
     let f16src: &'static [u16] = Box::leak(
-        (0..n + PAD).map(|i| if i < n { (i % 251) as u16 + 0x3800 } else { 0 }).collect::<Vec<_>>().into_boxed_slice(),
+        (0..n + PAD)
+            .map(|i| if i < n { (i % 251) as u16 + 0x3800 } else { 0 })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
     );
 
-    ab!("filter_h_row_f32", vec![0f32; on], |o: &mut _| k::filter_h_row_f32(fsrc, o, wf, 4));
-    ab!("filter_h_u8_i16", vec![0u8; on], |o: &mut _| k::filter_h_u8_i16(u8src, o, wi, 4));
-    ab!("filter_h_u8_to_i16", vec![0i16; on], |o: &mut _| k::filter_h_u8_to_i16(u8src, o, wi, 4));
-    ab!("filter_h_i16_i16", vec![0i16; on], |o: &mut _| k::filter_h_i16_i16(i16src, o, wi, 4));
-    ab!("filter_h_row_f32_to_f16", vec![0u16; on], |o: &mut _| k::filter_h_row_f32_to_f16(fsrc, o, wf, 4));
+    ab!("filter_h_row_f32", vec![0f32; on], |o: &mut _| {
+        k::filter_h_row_f32(fsrc, o, wf, 4)
+    });
+    ab!("filter_h_u8_i16", vec![0u8; on], |o: &mut _| {
+        k::filter_h_u8_i16(u8src, o, wi, 4)
+    });
+    ab!("filter_h_u8_to_i16", vec![0i16; on], |o: &mut _| {
+        k::filter_h_u8_to_i16(u8src, o, wi, 4)
+    });
+    ab!("filter_h_i16_i16", vec![0i16; on], |o: &mut _| {
+        k::filter_h_i16_i16(i16src, o, wi, 4)
+    });
+    ab!("filter_h_row_f32_to_f16", vec![0u16; on], |o: &mut _| {
+        k::filter_h_row_f32_to_f16(fsrc, o, wf, 4)
+    });
     ab!(
         "filter_h_u8_i16_4rows",
         (vec![0u8; on], vec![0u8; on], vec![0u8; on], vec![0u8; on]),
@@ -234,7 +289,12 @@ fn bench_kernels(suite: &mut Suite) {
     );
     ab!(
         "filter_h_u8_to_i16_4rows",
-        (vec![0i16; on], vec![0i16; on], vec![0i16; on], vec![0i16; on]),
+        (
+            vec![0i16; on],
+            vec![0i16; on],
+            vec![0i16; on],
+            vec![0i16; on]
+        ),
         |o: &mut (Vec<i16>, Vec<i16>, Vec<i16>, Vec<i16>)| k::filter_h_u8_to_i16_4rows(
             u8src, u8src, u8src, u8src, &mut o.0, &mut o.1, &mut o.2, &mut o.3, wi
         )
@@ -247,36 +307,64 @@ fn bench_kernels(suite: &mut Suite) {
     // timed body, so every V-filter number also charged a 6-element Vec alloc.
     ab!(
         "filter_v_row_f32",
-        ((0..6).map(|_| &fsrc[..n]).collect::<Vec<&[f32]>>(), vec![0f32; n]),
+        (
+            (0..6).map(|_| &fsrc[..n]).collect::<Vec<&[f32]>>(),
+            vec![0f32; n]
+        ),
         |o: &mut (Vec<&[f32]>, Vec<f32>)| k::filter_v_row_f32(&o.0, &mut o.1, vw_f32)
     );
     ab!(
         "filter_v_row_u8_i16",
-        ((0..6).map(|_| &u8src[..n]).collect::<Vec<&[u8]>>(), vec![0u8; n]),
+        (
+            (0..6).map(|_| &u8src[..n]).collect::<Vec<&[u8]>>(),
+            vec![0u8; n]
+        ),
         |o: &mut (Vec<&[u8]>, Vec<u8>)| k::filter_v_row_u8_i16(&o.0, &mut o.1, vw_i16)
     );
     ab!(
         "filter_v_row_i16",
-        ((0..6).map(|_| &i16src[..n]).collect::<Vec<&[i16]>>(), vec![0i16; n]),
+        (
+            (0..6).map(|_| &i16src[..n]).collect::<Vec<&[i16]>>(),
+            vec![0i16; n]
+        ),
         |o: &mut (Vec<&[i16]>, Vec<i16>)| k::filter_v_row_i16(&o.0, &mut o.1, vw_i16)
     );
     ab!(
         "filter_v_row_f16",
-        ((0..6).map(|_| &f16src[..n]).collect::<Vec<&[u16]>>(), vec![0f32; n]),
+        (
+            (0..6).map(|_| &f16src[..n]).collect::<Vec<&[u16]>>(),
+            vec![0f32; n]
+        ),
         |o: &mut (Vec<&[u16]>, Vec<f32>)| k::filter_v_row_f16(&o.0, &mut o.1, vw_f32)
     );
 
     // ── f16 conversions
-    ab!("f32_to_f16_row", vec![0u16; n], |o: &mut _| k::f32_to_f16_row(&fsrc[..n], o));
-    ab!("f16_to_f32_row", vec![0f32; n], |o: &mut _| k::f16_to_f32_row(&f16src[..n], o));
+    ab!("f32_to_f16_row", vec![0u16; n], |o: &mut _| {
+        k::f32_to_f16_row(&fsrc[..n], o)
+    });
+    ab!("f16_to_f32_row", vec![0f32; n], |o: &mut _| {
+        k::f16_to_f32_row(&f16src[..n], o)
+    });
 
     // ── colour / transfer
-    ab!("srgb_u8_to_linear_f32", vec![0f32; n], |o: &mut _| k::srgb_u8_to_linear_f32(&u8src[..n], o, 4, true));
-    ab!("linear_f32_to_srgb_u8", vec![0u8; n], |o: &mut _| k::linear_f32_to_srgb_u8(&fsrc[..n], o, 4, true));
-    ab!("srgb_to_linear_row", fsrc[..n].to_vec(), |r: &mut _| k::srgb_to_linear_row(r, 4, true));
-    ab!("srgb_from_linear_row", fsrc[..n].to_vec(), |r: &mut _| k::srgb_from_linear_row(r, 4, true));
-    ab!("pq_to_linear_row", fsrc[..n].to_vec(), |r: &mut _| k::pq_to_linear_row(r, 4, true));
-    ab!("hlg_to_linear_row", fsrc[..n].to_vec(), |r: &mut _| k::hlg_to_linear_row(r, 4, true));
+    ab!("srgb_u8_to_linear_f32", vec![0f32; n], |o: &mut _| {
+        k::srgb_u8_to_linear_f32(&u8src[..n], o, 4, true)
+    });
+    ab!("linear_f32_to_srgb_u8", vec![0u8; n], |o: &mut _| {
+        k::linear_f32_to_srgb_u8(&fsrc[..n], o, 4, true)
+    });
+    ab!("srgb_to_linear_row", fsrc[..n].to_vec(), |r: &mut _| {
+        k::srgb_to_linear_row(r, 4, true)
+    });
+    ab!("srgb_from_linear_row", fsrc[..n].to_vec(), |r: &mut _| {
+        k::srgb_from_linear_row(r, 4, true)
+    });
+    ab!("pq_to_linear_row", fsrc[..n].to_vec(), |r: &mut _| {
+        k::pq_to_linear_row(r, 4, true)
+    });
+    ab!("hlg_to_linear_row", fsrc[..n].to_vec(), |r: &mut _| {
+        k::hlg_to_linear_row(r, 4, true)
+    });
 
     set_simd(true);
 }

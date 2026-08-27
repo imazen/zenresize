@@ -27,7 +27,12 @@ use zenresize::weights::F32WeightTable;
 /// reference must produce them the same way. Rather than duplicate the soft
 /// encoder, the reference accumulates in scalar f32 and defers to the crate's
 /// own f32->f16 row kernel for the conversion.
-fn reference(input: &[f32], out_width: usize, weights: &F32WeightTable, channels: usize) -> Vec<u16> {
+fn reference(
+    input: &[f32],
+    out_width: usize,
+    weights: &F32WeightTable,
+    channels: usize,
+) -> Vec<u16> {
     let total = out_width * channels;
     // Verbatim from the original implementation.
     let acc_at = |i: usize| -> f32 {
@@ -92,7 +97,13 @@ fn f16_h_filter_bit_identical_to_scalar_formulation() {
             // Pad the row: the 4ch kernel reads to `max_taps`.
             let n = in_w as usize * 4;
             let input: Vec<f32> = (0..n + 512)
-                .map(|i| if i < n { rng.f32_unit() * 4.0 - 1.0 } else { 0.0 })
+                .map(|i| {
+                    if i < n {
+                        rng.f32_unit() * 4.0 - 1.0
+                    } else {
+                        0.0
+                    }
+                })
                 .collect();
 
             let expect = reference(&input, out_w as usize, &w, 4);

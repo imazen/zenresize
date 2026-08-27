@@ -47,16 +47,16 @@ fn alphas() -> Vec<f32> {
     vec![
         0.0,
         -0.0,
-        f32::MIN_POSITIVE,          // smallest normal
-        f32::from_bits(1),          // smallest denormal
-        t,                          // exactly the threshold — must NOT be live
+        f32::MIN_POSITIVE,               // smallest normal
+        f32::from_bits(1),               // smallest denormal
+        t,                               // exactly the threshold — must NOT be live
         f32::from_bits(t.to_bits() - 1), // just below
         f32::from_bits(t.to_bits() + 1), // just above — must be live
         0.001,
         0.5,
         1.0,
-        2.0,      // alpha > 1 (out of range but must not be special-cased)
-        -1.0,     // negative alpha
+        2.0,  // alpha > 1 (out of range but must not be special-cased)
+        -1.0, // negative alpha
         1e-20,
         1e20,
         f32::INFINITY,
