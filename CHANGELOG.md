@@ -20,6 +20,16 @@
 - Exclude `tests/` (405 KB of weights fixtures) and `benches/` from published package tarball; local targets unaffected (declarations kept, `benches/` dir present → `cargo bench`/`cargo test` work as before).
 
 ### Fixed
+- `ResizeConfig::validate()` now bounds the full **padded** canvas: the
+  `max_output_pixels` cap applies to `total_output_width * total_output_height`
+  (not just `out_width * out_height`), and the canvas byte size
+  (`pixels * channels * elem_size`) must fit `usize` on the target. Previously a
+  1×1 resize padded to 2^31 × 2^31 passed validation and the allocating
+  `Resizer::resize*()` methods computed `total_output_height as usize *
+  total_output_row_len` unchecked — a wrapped, undersized allocation followed by
+  an out-of-bounds row copy (on 64-bit too, not only i686/wasm32). Those nine
+  allocation sites now use a checked multiply (#10, part 3; parts 1–2 shipped
+  via `try_new` and `max_output_pixels`).
 - The allocating `Resizer::resize()` / `resize_into()` (and every `resize_*`
   type and cross-format variant) now honor canvas padding (`.padding()` /
   `.padding_color()`): the output buffer is sized to the full padded canvas

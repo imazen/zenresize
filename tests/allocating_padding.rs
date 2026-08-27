@@ -82,3 +82,33 @@ fn allocating_resize_no_padding_unchanged() {
         "solid color preserved"
     );
 }
+
+/// Regression for #10 (part 3): padding can inflate the canvas past the
+/// output-pixel cap and past `usize`. `try_new` must surface the validation
+/// error; before the fix the config validated and the allocating `resize()`
+/// computed `total_output_height as usize * total_output_row_len` unchecked.
+#[test]
+fn try_new_rejects_padded_canvas_that_overflows_usize() {
+    let cfg = ResizeConfig::builder(1, 1, 1, 1)
+        .format(PixelDescriptor::RGBA8_SRGB)
+        .padding(1 << 31, 0, 0, 1 << 31)
+        .max_output_pixels(None)
+        .build();
+    assert!(
+        Resizer::try_new(&cfg).is_err(),
+        "a padded canvas whose byte size overflows usize must be rejected"
+    );
+}
+
+#[test]
+fn try_new_rejects_padded_canvas_over_pixel_cap() {
+    // Inner 1 MP passes the cap on its own; the 400 MP padded canvas must not.
+    let cfg = ResizeConfig::builder(100, 100, 1000, 1000)
+        .format(PixelDescriptor::RGBA8_SRGB)
+        .padding(9500, 9500, 9500, 9500)
+        .build();
+    assert!(
+        Resizer::try_new(&cfg).is_err(),
+        "the output-pixel cap must cover the padded canvas"
+    );
+}

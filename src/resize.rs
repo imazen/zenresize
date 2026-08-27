@@ -185,8 +185,7 @@ impl<B: Background> Resizer<B> {
             self.config.input.channel_type() == ChannelType::U8,
             "resize() requires Srgb8 format; use resize_f32() for LinearF32 or resize_u16() for Encoded16"
         );
-        let out_row_len = self.config.total_output_row_len();
-        let len = self.config.total_output_height() as usize * out_row_len;
+        let len = self.config.total_output_len();
         let mut output = proven::alloc_output::<u8>(len);
         self.resize_into(input, &mut output);
         output
@@ -267,8 +266,7 @@ impl<B: Background> Resizer<B> {
             self.config.input.channel_type() == ChannelType::F32,
             "resize_f32() requires LinearF32 format; use resize() for Srgb8 or resize_u16() for Encoded16"
         );
-        let out_row_len = self.config.total_output_row_len();
-        let len = self.config.total_output_height() as usize * out_row_len;
+        let len = self.config.total_output_len();
         let mut output = vec![0.0f32; len];
         self.resize_f32_into(input, &mut output);
         output
@@ -351,8 +349,7 @@ impl<B: Background> Resizer<B> {
             self.config.input.channel_type() == ChannelType::U16,
             "resize_u16() requires Encoded16 format"
         );
-        let out_row_len = self.config.total_output_row_len();
-        let len = self.config.total_output_height() as usize * out_row_len;
+        let len = self.config.total_output_len();
         let mut output = vec![0u16; len];
         self.resize_u16_into(input, &mut output);
         output
@@ -413,7 +410,7 @@ impl<B: Background> Resizer<B> {
             self.config.output.channel_type() == ChannelType::F32,
             "output must be LinearF32"
         );
-        let len = self.config.total_output_height() as usize * self.config.total_output_row_len();
+        let len = self.config.total_output_len();
         let mut output = vec![0.0f32; len];
         self.resize_u8_to_f32_into(input, &mut output);
         output
@@ -471,7 +468,7 @@ impl<B: Background> Resizer<B> {
             self.config.output.channel_type() == ChannelType::U8,
             "output must be u8"
         );
-        let len = self.config.total_output_height() as usize * self.config.total_output_row_len();
+        let len = self.config.total_output_len();
         let mut output = proven::alloc_output::<u8>(len);
         self.resize_f32_to_u8_into(input, &mut output);
         output
@@ -529,7 +526,7 @@ impl<B: Background> Resizer<B> {
             self.config.output.channel_type() == ChannelType::U16,
             "output must be Encoded16"
         );
-        let len = self.config.total_output_height() as usize * self.config.total_output_row_len();
+        let len = self.config.total_output_len();
         let mut output = vec![0u16; len];
         self.resize_u8_to_u16_into(input, &mut output);
         output
@@ -587,7 +584,7 @@ impl<B: Background> Resizer<B> {
             self.config.output.channel_type() == ChannelType::U8,
             "output must be u8"
         );
-        let len = self.config.total_output_height() as usize * self.config.total_output_row_len();
+        let len = self.config.total_output_len();
         let mut output = proven::alloc_output::<u8>(len);
         self.resize_u16_to_u8_into(input, &mut output);
         output
@@ -645,7 +642,7 @@ impl<B: Background> Resizer<B> {
             self.config.output.channel_type() == ChannelType::F32,
             "output must be LinearF32"
         );
-        let len = self.config.total_output_height() as usize * self.config.total_output_row_len();
+        let len = self.config.total_output_len();
         let mut output = vec![0.0f32; len];
         self.resize_u16_to_f32_into(input, &mut output);
         output
@@ -703,7 +700,7 @@ impl<B: Background> Resizer<B> {
             self.config.output.channel_type() == ChannelType::U16,
             "output must be Encoded16"
         );
-        let len = self.config.total_output_height() as usize * self.config.total_output_row_len();
+        let len = self.config.total_output_len();
         let mut output = vec![0u16; len];
         self.resize_f32_to_u16_into(input, &mut output);
         output

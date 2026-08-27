@@ -324,6 +324,12 @@ pub struct ResizeConfig {
     /// force a multi-gigabyte `vec![0; out_w * out_h * channels]`. This cap
     /// closes that gap.
     ///
+    /// The cap applies both to `out_width * out_height` and to the full
+    /// padded canvas (`total_output_width * total_output_height`), so
+    /// [`Padding`] cannot inflate the allocation past it. Independently of
+    /// the cap, `validate` rejects any canvas whose byte size would not fit
+    /// `usize` on the current target (relevant on 32-bit / wasm32).
+    ///
     /// Defaults to `Some(120_000_000)` (120 MP — admits 108 MP phone photos).
     /// Set to `None` to disable the cap (not recommended for untrusted dims).
     pub max_output_pixels: Option<u64>,
@@ -507,6 +513,31 @@ impl ResizeConfig {
                 return Err("padded output height overflows u32");
             }
         }
+
+        // Bound the TOTAL (padded) output canvas. The `max_output_pixels`
+        // check above covers `out_width * out_height`, but `Padding` fields
+        // are independent `u32`s, so a 1×1 resize padded to 2^31 × 2^31 would
+        // pass it and then wrap `total_output_height * total_output_row_len`
+        // (an unchecked `usize` multiply) — undersized allocation followed by
+        // an out-of-bounds row copy. Even under the cap, on 32-bit targets
+        // `pixels * channels * elem_size` can exceed `usize`. Compute in u64
+        // with checked arithmetic and require the byte count to fit an
+        // allocation on this target (`Vec` is limited to `isize::MAX` bytes).
+        // Must run after the padding checks: `total_output_*` add unchecked.
+        let total_pixels = self.total_output_width() as u64 * self.total_output_height() as u64;
+        if let Some(max) = self.max_output_pixels
+            && total_pixels > max
+        {
+            return Err("total padded output pixel count exceeds max_output_pixels cap");
+        }
+        let elem_size = self.output.channel_type().byte_size() as u64;
+        if total_pixels
+            .checked_mul(self.output.channels() as u64)
+            .and_then(|v| v.checked_mul(elem_size))
+            .is_none_or(|bytes| bytes > isize::MAX as u64)
+        {
+            return Err("total output buffer size overflows usize on this target");
+        }
         Ok(())
     }
 
@@ -571,6 +602,19 @@ impl ResizeConfig {
     /// Row length for the total output including padding.
     pub fn total_output_row_len(&self) -> usize {
         self.total_output_width() as usize * self.output.channels()
+    }
+
+    /// Element count of the full padded output buffer
+    /// (`total_output_height * total_output_row_len`), with a checked multiply.
+    ///
+    /// [`validate`](Self::validate) guarantees this fits `usize`; the checked
+    /// multiply turns a violated invariant into a panic instead of a wrapped,
+    /// undersized allocation (which would surface later as an out-of-bounds
+    /// row copy on 32-bit targets).
+    pub(crate) fn total_output_len(&self) -> usize {
+        (self.total_output_height() as usize)
+            .checked_mul(self.total_output_row_len())
+            .expect("total output buffer size overflows usize; ResizeConfig::validate rejects this")
     }
 
     /// Whether linear-light processing is needed.
@@ -1038,6 +1082,61 @@ mod validate_tests {
             cfg.validate().is_ok(),
             "disabling the cap must allow large upscales"
         );
+    }
+
+    // Regression for #10 (part 3): the output-pixel cap must cover the full
+    // PADDED canvas, and the canvas byte size must fit `usize`. Before the
+    // fix, `validate` capped only `out_width * out_height`, so padding could
+    // inflate the canvas without bound and `total_output_height as usize *
+    // total_output_row_len` wrapped (undersized allocation, then an
+    // out-of-bounds row copy) — on 64-bit too, not just i686/wasm32.
+    #[test]
+    fn rejects_padded_canvas_exceeding_pixel_cap() {
+        // Inner 1000x1000 = 1 MP is well under the cap; padding to a
+        // 20000x20000 canvas (400 MP) must be rejected by the default cap.
+        let cfg = ResizeConfig::builder(100, 100, 1000, 1000)
+            .padding(9500, 9500, 9500, 9500)
+            .build();
+        assert_eq!(
+            cfg.validate(),
+            Err("total padded output pixel count exceeds max_output_pixels cap")
+        );
+    }
+
+    #[test]
+    fn accepts_padded_canvas_within_pixel_cap() {
+        // 1000x1000 inner padded to 10000x10000 = 100 MP: under the cap.
+        let cfg = ResizeConfig::builder(100, 100, 1000, 1000)
+            .padding(4500, 4500, 4500, 4500)
+            .build();
+        assert_eq!(cfg.validate(), Ok(()));
+    }
+
+    #[test]
+    fn rejects_padded_canvas_overflowing_usize_even_without_cap() {
+        // 1x1 resize padded to (2^31 + 1)^2 pixels x 4 channels x 1 byte
+        // ≈ 2^64 bytes: exceeds isize::MAX on every target. With the cap
+        // disabled, only the usize-fit check can reject it.
+        let cfg = ResizeConfig::builder(1, 1, 1, 1)
+            .format(zenpixels::PixelDescriptor::RGBA8_SRGB)
+            .padding(1 << 31, 0, 0, 1 << 31)
+            .max_output_pixels(None)
+            .build();
+        assert_eq!(
+            cfg.validate(),
+            Err("total output buffer size overflows usize on this target")
+        );
+    }
+
+    #[test]
+    fn padded_canvas_len_is_checked_for_valid_config() {
+        let cfg = ResizeConfig::builder(4, 4, 2, 2)
+            .format(zenpixels::PixelDescriptor::RGBA8_SRGB)
+            .padding(1, 2, 3, 4)
+            .build();
+        assert_eq!(cfg.validate(), Ok(()));
+        // (2 + 4 + 2) wide x (1 + 2 + 3) tall x 4 channels
+        assert_eq!(cfg.total_output_len(), 8 * 6 * 4);
     }
 
     #[test]
