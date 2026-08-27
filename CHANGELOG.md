@@ -20,6 +20,11 @@
 - Exclude `tests/` (405 KB of weights fixtures) and `benches/` from published package tarball; local targets unaffected (declarations kept, `benches/` dir present → `cargo bench`/`cargo test` work as before).
 
 ### Fixed
+- x86-64 `unpremultiply_alpha_row` (the AVX2 tier) now leaves a pixel whose
+  alpha is at or below the `1/1024` threshold untouched, like the scalar, NEON
+  and wasm128 tiers. It previously AND-masked the reciprocal, multiplying such
+  RGB lanes by 0 (zeroing them, and turning ±inf into NaN); the cross-tier
+  bit-identity test `tests/alpha_f32_exact.rs` failed on every x86-64 CI lane.
 - `ResizeConfig::validate()` now bounds the full **padded** canvas: the
   `max_output_pixels` cap applies to `total_output_width * total_output_height`
   (not just `out_width * out_height`), and the canvas byte size

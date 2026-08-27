@@ -122,6 +122,14 @@ pub(crate) fn premultiply_alpha_row_v3(_token: X64V3Token, row: &mut [f32]) {
 }
 
 /// Unpremultiply alpha in-place using SSE (1 pixel at a time due to division).
+///
+/// Bit-identical to the scalar body (`tests/alpha_f32_exact.rs`): the same
+/// IEEE `1.0 / a` then `c * inv_a`, two roundings in that order, and the
+/// `a > 1/1024` branch is a select over the ORIGINAL lanes so a pixel at or
+/// below the threshold is returned untouched. An earlier version AND-masked
+/// the reciprocal instead, which multiplied below-threshold RGB by 0 — that
+/// zeroed them (and turned ±inf into NaN) where every other tier leaves them
+/// alone.
 #[archmage::arcane]
 pub(crate) fn unpremultiply_alpha_row_v3(_token: X64V3Token, row: &mut [f32]) {
     let threshold = _mm_set1_ps(1.0 / 1024.0);
@@ -132,11 +140,12 @@ pub(crate) fn unpremultiply_alpha_row_v3(_token: X64V3Token, row: &mut [f32]) {
     for chunk in chunks.iter_mut() {
         let px = _mm_loadu_ps(chunk);
         let alpha = _mm_shuffle_ps::<0xFF>(px, px);
-        let mask = _mm_cmpgt_ps(alpha, threshold);
+        let live = _mm_cmpgt_ps(alpha, threshold);
         let inv_alpha = _mm_div_ps(one, alpha);
-        let inv_alpha_masked = _mm_and_ps(inv_alpha, mask);
-        let unpremul = _mm_mul_ps(px, inv_alpha_masked);
-        let result = _mm_blend_ps::<0b1000>(unpremul, px);
+        let unpremul = _mm_mul_ps(px, inv_alpha);
+        // Alpha lane keeps px; RGB lanes take the quotient only where live.
+        let rgb = _mm_blendv_ps(px, unpremul, live);
+        let result = _mm_blend_ps::<0b1000>(rgb, px);
         _mm_storeu_ps(chunk, result);
     }
 }
