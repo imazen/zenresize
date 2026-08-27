@@ -1,0 +1,47 @@
+# zenresize with_mask cost on the I16Srgb config — the f32 fallback is NOT a bottleneck on aarch64
+date:  2026-08-27
+host:  Apple M4 Pro (12 core), macOS, aarch64
+build: bench profile (release), NO -C target-cpu=native, runtime dispatch (incant!)
+lib:   zenresize @ ed8e5c33 + benches/mask_e2e.rs (this commit)
+bench: nice -n 19 cargo bench -j 4 --bench mask_e2e
+issue: https://github.com/imazen/zenresize/issues/3
+
+## Question
+
+Issue #3 proposes applying masks on the i16 paths so that `with_mask()` no longer
+forces the f32 path ("avoids f32 conversion overhead for the common case of
+rounded corners + solid background -> JPEG"). Before building that, measure what
+the f32 fallback actually costs. Both arms use the same RGBA8_SRGB `.srgb()`
+config (opaque gradient input, Lanczos); `no_mask` takes I16Srgb, `rounded_mask`
+takes F32 (paths printed by the bench, verified in the log).
+
+## Result (in-run paired ratio, rounded_mask vs no_mask)
+
+| scenario         | no_mask (I16Srgb) | rounded_mask (F32) | 95% CI vs no_mask |
+|------------------|-------------------|--------------------|-------------------|
+| 4K -> 1080p      | 79.7 ±1.4 ms      | 71.3 ±1.5 ms       | -11.4% .. -9.6%   |
+| 1080p -> 4K up   | 79.3 ±1.9 ms      | 57.3 ±1.9 ms       | -29.1% .. -26.5%  |
+| 800x600 -> 400x300 | 8.0 ±1.1 ms     | 8.6 ±0.9 ms        | +5.7% .. +10.2%   |
+
+The f32 path WITH a mask is faster than the i16 path WITHOUT one at >= 1080p on
+this machine; it costs ~0.6 ms (+8%) on the small image. So on aarch64 an i16
+mask path would make masked resizes slower at production sizes, and less precise
+(u8 premultiplied double rounding vs the f32 path's single rounding).
+
+The I16Srgb kernels are NEON-vectorised here (`filter_h_u8_to_i16_neon`,
+`filter_v_row_i16_neon`) — this is not a missing-kernel artefact.
+
+## Sanity check
+
+A first run accidentally left the builder default `linear = true`, which puts
+BOTH arms on F32 (RGBA straight alpha needs premul -> not I16Linear). That run
+measured 1.00x on all three scenarios (CI crossing zero), i.e. the mask itself
+is free on the f32 path; the bench now prints each arm's `working_format()` so a
+flat ratio cannot be mistaken for "the mask is free" again.
+
+## Not measured
+
+x86-64 (AVX2 / AVX-512). CLAUDE.md records I16Srgb as "~2x faster" than f32,
+which was measured on x86. If the i16 path is faster there, the i16 mask path
+may still pay on x86 — run this bench on the 7950X before deciding. Absolute
+timings drift between runs on this machine; only the in-run ratio is comparable.

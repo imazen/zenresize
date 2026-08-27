@@ -1,0 +1,39 @@
+[mask_e2e] 4K→1080p: no_mask=I16Srgb rounded_mask=F32
+[mask_e2e] 1080p→4K up: no_mask=I16Srgb rounded_mask=F32
+[mask_e2e] 800x600→400x300: no_mask=I16Srgb rounded_mask=F32
+[zenbench] calibration: int=0.33ns/iter mem_bw=98.1GiB/s mem_lat=7.5ns
+[zenbench] timer resolution: 41ns, loop overhead: 0.32ns/iter, TSC: 1.000 ticks/ns (invariant)
+[zenbench] results → /var/folders/sc/m9jbk0qj0jz4w09h7gg8v3p80000gn/T/zenbench/zenbench-1787830085-d374.txt
+
+═══════════════════════════════════════════════════════════════
+  zenbench  1787830085-d374
+  git: ed8e5c33dba69c8ef15b04e2804097b52c8ae423
+═══════════════════════════════════════════════════════════════
+
+  4K→1080p  40 rounds × 1 calls
+                   mean ±mad ms  95% CI vs base    iB/s
+  ├─ no_mask        79.7 ±1.4ms  [79.3–80.1]ms     397M
+  ╰─ rounded_mask   71.3 ±1.5ms  [-11.4%–-9.6%]    444M
+
+  rounded_mask  ██████████████████████████████████████████████████████ 444 MiB/s
+  no_mask       ████████████████████████████████████████████████ 397 MiB/s
+
+  1080p→4K up  30 rounds × 1 calls
+                   mean ±mad ms  95% CI vs base      iB/s
+  ├─ no_mask        79.3 ±1.9ms  [78.9–79.8]ms      99.7M
+  ╰─ rounded_mask   57.3 ±1.9ms  [-29.1%–-26.5%]     138M
+
+  rounded_mask  █████████████████████████████████████████████████████ 138 MiB/s
+  no_mask       ██████████████████████████████████████ 99.7 MiB/s
+
+  800x600→400x300  200 rounds × 1 calls
+                   mean ±mad ms  95% CI vs base    iB/s
+  ├─ no_mask        8.0 ±1.1ms  [7.8–8.1]ms       230M
+  ╰─ rounded_mask   8.6 ±0.9ms  [+5.7%–+10.2%]    213M
+
+  no_mask       ██████████████████████████████████████████████████████ 230 MiB/s
+  rounded_mask  ██████████████████████████████████████████████████ 213 MiB/s
+
+  total: 43.4s  (24 noisy rounds)
+═══════════════════════════════════════════════════════════════
+  filter: cargo bench -- --group=NAME  format: --format=llm|csv|md|json

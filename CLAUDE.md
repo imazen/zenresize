@@ -90,6 +90,13 @@ No new dependencies. Pure math with MaskFill hints for uniform-row optimization.
 background → JPEG gets white corners (not transparent-over-black). Forces f32
 path when mask present. Re-exports MaskSource, MaskFill, RoundedRectMask,
 LinearGradientMask, RadialGradientMask from zenblend.
+Issue #3 asks for an i16 mask path to avoid that f32 fallback. **Measured
+2026-08-27 on M4 Pro (`benches/mask_e2e.rs`,
+`benchmarks/mask_e2e_aarch64_2026-08-27.meta`): the f32 path WITH a mask is
+faster than I16Srgb WITHOUT one at ≥1080p (-10% at 4K→1080p, -28% at
+1080p→4K), +8% (~0.6 ms) only at 800×600.** Not worth building on aarch64;
+re-measure on x86 (7950X) before deciding — the "~2x faster" i16 figure below
+is an x86 number.
 
 **Phase 5:** `zenpipe::sources::MaskTransformSource` for standalone no-resize masking.
 Requires RGBAF32_LINEAR_PREMUL upstream.
@@ -101,6 +108,14 @@ Requires RGBAF32_LINEAR_PREMUL upstream.
 - `filter_v_row_f16` / `filter_h_row_f32_to_f16` — f32 path
 
 ## aarch64 / NEON (2026-07-28 sweep)
+
+**I16Srgb is NOT faster than F32 end-to-end on Apple M4 Pro** (2026-08-27,
+`cargo bench --bench mask_e2e`, RGBA8_SRGB `.srgb()`, Lanczos): I16Srgb no-mask
+79.7 ms vs F32-with-mask 71.3 ms at 4K→1080p, 79.3 vs 57.3 ms at 1080p→4K; only the
+800×600→400×300 case favours i16 (8.0 vs 8.6 ms). Both i16 kernels are NEON
+(`filter_h_u8_to_i16_neon`, `filter_v_row_i16_neon`). Don't assume the x86
+"i16 ≈ 2× faster" ratio here; the automatic path selection may be picking the
+slower path on aarch64 at production sizes — an open question, not yet acted on.
 
 **NEON is BASELINE on aarch64.** `#[target_feature(enable="neon")]` is a no-op,
 so the "scalar" tier is autovectorized too. A 1.00x NEON-vs-forced-scalar

@@ -145,6 +145,10 @@ harness = false
 name = "composite_e2e"
 harness = false
 
+[[bench]]
+name = "mask_e2e"
+harness = false
+
 [package.metadata.superwork.ci]
 strategy = "strip_path"
 
