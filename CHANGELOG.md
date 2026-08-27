@@ -30,6 +30,12 @@
   tap at a time, so it is bit-identical to the scalar formulation and to the
   NEON/wasm128 kernel (`tests/f16_hfilter_exact.rs`). The previous fused
   four-accumulator form differed from them by 1 f16 ULP on some elements.
+- x86-64 `unpremultiply_u8_row` now computes exactly the integer formula
+  `min(255, (c*255 + a/2) / a)` of the scalar and NEON tiers (an IEEE divide on
+  exactly-representable operands), verified over the whole 256x256 domain by
+  `tests/unpremul_u8_exhaustive.rs`. The previous `_mm_rcp_ps` + Newton-step
+  approximation with `+0.5` truncation was one below the reference on some
+  pairs (e.g. c=1, a=2 gave 127 instead of 128).
 - `ResizeConfig::validate()` now bounds the full **padded** canvas: the
   `max_output_pixels` cap applies to `total_output_width * total_output_height`
   (not just `out_width * out_height`), and the canvas byte size

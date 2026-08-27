@@ -440,14 +440,18 @@ pub(crate) fn premultiply_u8_row_v3(_token: X64V3Token, input: &[u8], output: &m
 
 /// Unpremultiply alpha in-place on RGBA u8 row using SSE4.1.
 ///
-/// For each pixel: `C = min(C' * 255 / A, 255)` where A > 0.
-/// Uses float reciprocal (_mm_rcp_ps) for throughput.
+/// Exactly the integer formula of the scalar tier, `min(255, (c*255 + a/2) / a)`
+/// for `0 < a < 255` (`tests/unpremul_u8_exhaustive.rs` enumerates the whole
+/// 256x256 domain): `num = c*255 + a/2` is built in integer, and since
+/// `num <= 65152 < 2^24` and `a <= 254` are exact in f32, the IEEE `_mm_div_ps`
+/// quotient is correctly rounded and truncating it equals integer floor — the
+/// same argument the NEON kernel's `unpremul_group` rests on. An earlier
+/// version used `_mm_rcp_ps` + one Newton step and `+0.5` truncation, which
+/// is a different rounding and lands one below the reference where the
+/// approximation falls just short of an integer (c=1, a=2: 127 for 128).
 #[archmage::arcane]
 pub(crate) fn unpremultiply_u8_row_v3(_token: X64V3Token, row: &mut [u8]) {
-    let scale = _mm_set1_ps(255.0);
-    let zero_f = _mm_setzero_ps();
-    let max_val = _mm_set1_ps(255.0);
-    let half = _mm_set1_ps(0.5);
+    let k255 = _mm_set1_epi32(255);
 
     let (chunks, _) = row.as_chunks_mut::<4>();
 
@@ -465,15 +469,12 @@ pub(crate) fn unpremultiply_u8_row_v3(_token: X64V3Token, row: &mut [u8]) {
 
         let bytes = _mm_loadu_si32(chunk);
         let ext = _mm_cvtepu8_epi32(bytes);
-        let fpixel = _mm_cvtepi32_ps(ext);
 
-        let fa = _mm_set1_ps(a as f32);
-        let inv_a = _mm_rcp_ps(fa);
-        let refined = _mm_mul_ps(inv_a, _mm_sub_ps(_mm_set1_ps(2.0), _mm_mul_ps(fa, inv_a)));
-        let result = _mm_add_ps(_mm_mul_ps(_mm_mul_ps(fpixel, scale), refined), half);
-        let clamped = _mm_min_ps(_mm_max_ps(result, zero_f), max_val);
-
-        let ints = _mm_cvttps_epi32(clamped);
+        // num = c*255 + a/2, exact in i32 and in f32.
+        let num = _mm_add_epi32(_mm_mullo_epi32(ext, k255), _mm_set1_epi32((a >> 1) as i32));
+        let q = _mm_div_ps(_mm_cvtepi32_ps(num), _mm_set1_ps(a as f32));
+        // Truncation is floor here (q >= 0); the alpha lane is replaced below.
+        let ints = _mm_min_epi32(_mm_cvttps_epi32(q), k255);
         let packed16 = _mm_packs_epi32(ints, ints);
         let packed8 = _mm_packus_epi16(packed16, packed16);
         let val = _mm_cvtsi128_si32(packed8) as u32;
