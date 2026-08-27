@@ -25,6 +25,11 @@
   and wasm128 tiers. It previously AND-masked the reciprocal, multiplying such
   RGB lanes by 0 (zeroing them, and turning ±inf into NaN); the cross-tier
   bit-identity test `tests/alpha_f32_exact.rs` failed on every x86-64 CI lane.
+- x86-64 `filter_h_row_f32_to_f16` (the f16-intermediate H filter used by the
+  fullframe `Resizer`) now accumulates each output pixel non-fused, one actual
+  tap at a time, so it is bit-identical to the scalar formulation and to the
+  NEON/wasm128 kernel (`tests/f16_hfilter_exact.rs`). The previous fused
+  four-accumulator form differed from them by 1 f16 ULP on some elements.
 - `ResizeConfig::validate()` now bounds the full **padded** canvas: the
   `max_output_pixels` cap applies to `total_output_width * total_output_height`
   (not just `out_width * out_height`), and the canvas byte size

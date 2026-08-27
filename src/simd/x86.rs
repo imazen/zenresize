@@ -2418,7 +2418,20 @@ pub(crate) fn filter_h_row_f32_to_f16_v3(
 }
 
 /// 4-channel horizontal filter: f32 → f16 output.
-/// Same accumulation as filter_h_4ch but stores via vcvtps2ph.
+///
+/// Bit-identical to the scalar formulation (`tests/f16_hfilter_exact.rs`),
+/// like the NEON/wasm128 kernel in `wide_kernels`: one output pixel per
+/// 128-bit register, and for each ACTUAL tap (the unpadded `weights(out_x)`
+/// list, in order) a separate `_mm_mul_ps` then `_mm_add_ps` — the same
+/// non-fused multiply-add sequence the scalar closure performs per channel.
+/// The f32 sibling `filter_h_4ch` fuses (`_mm256_fmadd_ps`) across four 8-tap
+/// accumulators and is pinned only by its own golden checksums; this kernel
+/// used to share that shape and diverged from the reference by 1 f16 ULP
+/// (1920->960 LanczosSharp, element 831), which the exactness test rejects.
+/// The store is F16C `vcvtps2ph` round-to-nearest-even, the same conversion
+/// `f32_to_f16_row` performs. Consecutive pixels are independent chains that
+/// the out-of-order window overlaps; not benchmarked against the fused
+/// version (this change was made on an aarch64 host).
 #[archmage::rite]
 fn filter_h_4ch_to_f16(
     _token: X64V3Token,
@@ -2427,71 +2440,21 @@ fn filter_h_4ch_to_f16(
     weights: &F32WeightTable,
 ) {
     let out_width = weights.len();
-    let max_taps = weights.max_taps;
-
     let in_pixels_arr: &[[f32; 4]] = input.as_chunks().0;
     let (out_pixels, _) = output.as_chunks_mut::<4>();
 
-    let chunks8 = max_taps / 8;
-    let remainder = max_taps - chunks8 * 8;
-
-    let perm01 = _mm256_set_epi32(1, 1, 1, 1, 0, 0, 0, 0);
-    let perm23 = _mm256_set_epi32(3, 3, 3, 3, 2, 2, 2, 2);
-    let perm45 = _mm256_set_epi32(5, 5, 5, 5, 4, 4, 4, 4);
-    let perm67 = _mm256_set_epi32(7, 7, 7, 7, 6, 6, 6, 6);
-
     for out_x in 0..out_width {
         let left = weights.left[out_x] as usize;
-        let w = weights.weights_padded(out_x);
+        let w = weights.weights(out_x);
 
-        let flat_start = left * 4;
-        let input_window = &input[flat_start..flat_start + max_taps * 4];
-        let (pairs, _) = input_window.as_chunks::<8>();
-        let (w_chunks, _) = w.as_chunks::<8>();
-
-        let mut acc0 = _mm256_setzero_ps();
-        let mut acc1 = _mm256_setzero_ps();
-        let mut acc2 = _mm256_setzero_ps();
-        let mut acc3 = _mm256_setzero_ps();
-
-        for c in 0..chunks8 {
-            let w_vec = _mm256_loadu_ps(idx(w_chunks, c));
-            let w01 = _mm256_permutevar8x32_ps(w_vec, perm01);
-            let w23 = _mm256_permutevar8x32_ps(w_vec, perm23);
-            let w45 = _mm256_permutevar8x32_ps(w_vec, perm45);
-            let w67 = _mm256_permutevar8x32_ps(w_vec, perm67);
-
-            let pi = c * 4;
-            let p01 = _mm256_loadu_ps(idx(pairs, pi));
-            let p23 = _mm256_loadu_ps(idx(pairs, pi + 1));
-            let p45 = _mm256_loadu_ps(idx(pairs, pi + 2));
-            let p67 = _mm256_loadu_ps(idx(pairs, pi + 3));
-
-            acc0 = _mm256_fmadd_ps(p01, w01, acc0);
-            acc1 = _mm256_fmadd_ps(p23, w23, acc1);
-            acc2 = _mm256_fmadd_ps(p45, w45, acc2);
-            acc3 = _mm256_fmadd_ps(p67, w67, acc3);
-        }
-
-        // Reduce 256→128
-        let sum01 = _mm256_add_ps(acc0, acc1);
-        let sum23 = _mm256_add_ps(acc2, acc3);
-        let sum = _mm256_add_ps(sum01, sum23);
-        let lo = _mm256_castps256_ps128(sum);
-        let hi = _mm256_extractf128_ps::<1>(sum);
-        let mut acc_128 = _mm_add_ps(lo, hi);
-
-        // SSE remainder
-        let t_start = chunks8 * 8;
-        for t in 0..remainder {
-            let tt = t_start + t;
-            let w_val = _mm_set1_ps(*idx(w, tt));
-            let pixel = _mm_loadu_ps(idx(in_pixels_arr, left + tt));
-            acc_128 = _mm_fmadd_ps(pixel, w_val, acc_128);
+        let mut acc = _mm_setzero_ps();
+        for (t, &weight) in w.iter().enumerate() {
+            let pixel = _mm_loadu_ps(idx(in_pixels_arr, left + t));
+            acc = _mm_add_ps(acc, _mm_mul_ps(pixel, _mm_set1_ps(weight)));
         }
 
         // Convert 4 f32 → 4 f16 and store as 8 bytes (4 u16)
-        let f16_vec = _mm_cvtps_ph::<0>(acc_128);
+        let f16_vec = _mm_cvtps_ph::<0>(acc);
         _mm_storeu_si64(idx_mut(out_pixels, out_x), f16_vec);
     }
 }
