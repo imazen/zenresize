@@ -18,8 +18,13 @@
   locating the `with_mask()` f32-fallback crossover for #3: on aarch64 I16Srgb is
   ahead only at ≤128×128 (≤4%), 256²–1440×1080 is a wash, and F32 is 15-30%
   faster at 4K — so an i16 mask path would be a regression there. Two runs plus
-  the write-up in `benchmarks/mask_e2e_ladder_aarch64_2026-08-29.meta`; no
-  library behaviour change.
+  the write-up in `benchmarks/mask_e2e_ladder_aarch64_2026-08-29.meta` (0ebe175).
+  x86-64 is unmeasured and may invert the answer, so
+  `.github/workflows/bench-mask.yml` runs the same ladder on x64 runners on
+  `workflow_dispatch`, with an aarch64 control leg; `benchmarks/README.md`'s
+  record index refreshed from 3 entries to all 7 (49d76e9). Implementation shape
+  and the gating mask tests recorded in `CLAUDE.md` (bd7f0e2, 14e5515).
+  No library behaviour change — bench, CI and docs only.
 - Versioned public-API surface snapshot at `docs/public-api/zenresize.txt`, regenerated on every `cargo test` by `tests/public_api_doc.rs` (`ZEN_API_DOC=check` verifies in the CI clippy job, `=off` skips); `justfile` recipes `fmt` / `api-doc` / `api-doc-check`. Dev-only — not part of the published package (include-whitelist already excludes it).
 
 ### Changed
