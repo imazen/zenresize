@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **`zenpixels` requirement now spans the published minor and the next one**: `">=0.2.10, <0.4.0"` (was `"0.2.10"`). For a `0.x` crate Cargo treats the minor as the major, so the plain requirement meant `^0.2.10` = `>=0.2.10, <0.3.0` and a `zenpixels 0.3.0` release would have been invisible until this manifest was hand-edited. The floor is unchanged and nothing newer is published, so resolution is identical — `cargo metadata --all-features` still resolves exactly one `zenpixels 0.2.16`. Widening every consumer uniformly is what prevents two copies of a `0.x` crate coexisting in one graph with non-unifying types. The standing current-plus-next rule is documented in the zencodec repo's `CLAUDE.md`.
+
 ### Fixed
 - **Pushes to `main` now cancel their superseded CI runs.** `ci.yml` keyed its concurrency group on `${{ github.head_ref || github.run_id }}`. `github.head_ref` is populated only for `pull_request` events, so on a push it was empty and the group fell through to `github.run_id` — unique per run, so no two pushes ever shared a group and `cancel-in-progress` could never fire. Every push started a full matrix that ran to completion even when several commits landed seconds apart. Now keyed on `${{ github.ref }}`, which is set for both event types (`refs/heads/main` on push, `refs/pull/N/merge` on a PR), so PR cancellation is unchanged and consecutive pushes supersede each other.
 
