@@ -138,7 +138,11 @@ AVX2/FMA — the V3 kernels compile but never execute), so
 `.github/workflows/bench-mask.yml` runs the same ladder on `ubuntu-latest` /
 `macos-26-intel` on `workflow_dispatch`, with an `ubuntu-24.04-arm` control leg
 that must reproduce the sign of the M4 Pro result before the x64 numbers are
-trusted. Run it, don't guess.
+trusted. Run it, don't guess — `gh workflow run "Bench (mask ladder)"`. Its
+output lives only in that run's step summary and `mask-ladder-*` artifacts, so
+whoever runs it must commit the numbers as
+`benchmarks/mask_e2e_ladder_x86_<YYYY-MM-DD>.{meta,log}` (header per
+`benchmarks/README.md`) or they are lost when the run is garbage-collected.
 
 **If x86 says build it**, the implementation shape (verified against
 `src/streaming.rs` on 2026-08-29): apply the mask to the *premultiplied* u8 row
@@ -153,7 +157,10 @@ I16Linear keeps the f32 fallback (i12, no alpha — nothing to modulate).
 Precision tests can reach an f32 reference on the identical config by calling
 the private `switch_to_f32_path()` from `streaming.rs`'s `mod tests`. Note this
 costs precision: u8-premultiplied double rounding vs the f32 path's single
-rounding.
+rounding. The existing `mask_forces_f32_path` test pins today's behaviour and
+would have to be updated; `mask_only_corner_pixels_transparent` and
+`mask_plus_background_white_corners` are the correctness gates the new path must
+keep passing (all three are identity-scale 20×20, so add a downscaling case).
 
 **Phase 5:** `zenpipe::sources::MaskTransformSource` for standalone no-resize masking.
 Requires RGBAF32_LINEAR_PREMUL upstream.
