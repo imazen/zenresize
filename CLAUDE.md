@@ -132,9 +132,28 @@ rounding vs f32's single rounding), is not justified.
 The earlier 3-point run (`mask_e2e_aarch64_2026-08-27.meta`) reported 800×600 as
 the one i16-favouring size (+8%); **that does not reproduce** — it is a wash in
 both ladder runs (CV 25-26% on the contended one). Its two large anchors do
-reproduce. Still open: x86 (7950X), where the "~2× faster" i16 figure below
-comes from and where the answer may invert. Rosetta cannot answer it (SSE4.2
-only, no AVX2/FMA — the V3 kernels compile but never execute).
+reproduce. Still open: x86, where the "~2× faster" i16 figure below comes from
+and where the answer may invert. Rosetta cannot answer it (SSE4.2 only, no
+AVX2/FMA — the V3 kernels compile but never execute), so
+`.github/workflows/bench-mask.yml` runs the same ladder on `ubuntu-latest` /
+`macos-26-intel` on `workflow_dispatch`, with an `ubuntu-24.04-arm` control leg
+that must reproduce the sign of the M4 Pro result before the x64 numbers are
+trusted. Run it, don't guess.
+
+**If x86 says build it**, the implementation shape (verified against
+`src/streaming.rs` on 2026-08-29): apply the mask to the *premultiplied* u8 row
+in `produce_next_i16_srgb`, at the two points immediately before
+`simd::unpremultiply_u8_row` — the direct row (~line 2560, output row `out_y`)
+and the paired row (~line 2590, output row **`out_y + 1`**, not `out_y`; the
+paired arm is a different output row and needs its own mask row). Use a 16.16
+fixed-point multiply, `(v * mq + 32768) >> 16` with `mq = round(m * 65536)`,
+mirroring `zenblend::apply_mask_spans`' span validation locally —
+`spans_cover_row` is private in zenblend and that repo must not be touched.
+I16Linear keeps the f32 fallback (i12, no alpha — nothing to modulate).
+Precision tests can reach an f32 reference on the identical config by calling
+the private `switch_to_f32_path()` from `streaming.rs`'s `mod tests`. Note this
+costs precision: u8-premultiplied double rounding vs the f32 path's single
+rounding.
 
 **Phase 5:** `zenpipe::sources::MaskTransformSource` for standalone no-resize masking.
 Requires RGBAF32_LINEAR_PREMUL upstream.
