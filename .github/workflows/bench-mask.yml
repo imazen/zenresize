@@ -1,0 +1,97 @@
+# Manual-dispatch only: runs the issue #3 mask ladder (benches/mask_e2e.rs) on
+# x86-64 runners, which have the AVX2 i16 kernels that no machine in the dev
+# fleet's aarch64 half can execute (Rosetta exposes SSE4.2 but not AVX2/FMA, so
+# a local --target x86_64-apple-darwin build compiles the V3 kernels without
+# ever running them).
+#
+# Shared CI runners have noisy ABSOLUTE timings. Only zenbench's in-run paired
+# ratio (rounded_mask vs no_mask) is comparable, which is exactly the statistic
+# this bench reports — see benchmarks/README.md and CLAUDE.md. The aarch64 leg
+# is a control: it should reproduce the sign of the M4 Pro ladder in
+# benchmarks/mask_e2e_ladder_aarch64_2026-08-29.meta before the x64 numbers are
+# trusted.
+#
+# Not on push/PR — benchmarks on shared runners are not a regression gate.
+name: Bench (mask ladder)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mask-ladder:
+    name: mask_e2e (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            os: ubuntu-latest
+          - name: macOS x64
+            os: macos-26-intel
+          - name: Linux aarch64 (control)
+            os: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+
+      # Same as ci.yml: build against published zenblend, not the sibling path dep.
+      - name: Strip local paths
+        shell: bash
+        run: sed -i.bak 's|, path = "../zenblend"||g' Cargo.toml && rm -f Cargo.lock
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Record CPU / ISA
+        shell: bash
+        run: |
+          {
+            echo "runner: ${{ matrix.os }}"
+            echo "rustc:  $(rustc -V)"
+            if [ -r /proc/cpuinfo ]; then
+              echo "cpu:    $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//')"
+              echo -n "isa:    "
+              for f in avx2 fma avx512f neon asimd; do
+                grep -qm1 " $f" /proc/cpuinfo && printf '%s ' "$f"
+              done
+              echo
+            else
+              echo "cpu:    $(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo unknown)"
+              echo "isa:    $(sysctl -n machdep.cpu.leaf7_features 2>/dev/null || echo unknown)"
+            fi
+          } | tee cpu-info.txt
+
+      # No -C target-cpu=native: production and benchmark builds must go through
+      # runtime dispatch (incant!), per CLAUDE.md "Build Rules".
+      - name: Run mask ladder
+        shell: bash
+        run: cargo bench --bench mask_e2e 2>&1 | tee mask_e2e.log
+
+      - name: Summarize paired ratios
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### mask_e2e ladder — ${{ matrix.name }}'
+            echo
+            echo 'Positive CI = the forced f32 fallback is slower, so an i16 mask path could win that much.'
+            echo 'Negative CI = f32 is already faster and an i16 mask path would be a regression.'
+            echo
+            echo '```'
+            cat cpu-info.txt
+            echo '```'
+            echo
+            echo '```'
+            grep -E '^\[mask_e2e\]|no_mask|rounded_mask|rounds ×|total:' mask_e2e.log | grep -v '█' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mask-ladder-${{ matrix.os }}
+          path: |
+            mask_e2e.log
+            cpu-info.txt

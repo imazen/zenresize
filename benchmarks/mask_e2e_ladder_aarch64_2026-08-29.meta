@@ -1,12 +1,15 @@
 # zenresize with_mask cost across a tiny→large size ladder — the i16 mask path of #3 cannot pay on aarch64
 
-date:  2026-08-29
-host:  Apple M4 Pro (12 core), macOS, aarch64
-build: bench profile (release), NO -C target-cpu=native, runtime dispatch (incant!)
-lib:   zenresize @ da03f80 + the extended benches/mask_e2e.rs ladder (this commit)
-bench: nice -n 19 cargo bench -j 4 --bench mask_e2e   (two runs, 110.8 s and 180.4 s)
-logs:  mask_e2e_ladder_aarch64_2026-08-29.run1.log / .run2.log
-issue: https://github.com/imazen/zenresize/issues/3
+date:    2026-08-29
+commit:  da03f80 + the extended benches/mask_e2e.rs ladder (this commit)
+host:    Apple M4 Pro (12 core), macOS 26.5.2, aarch64
+rustc:   rustc 1.98.0 (88d9e12ae 2026-08-18)
+build:   bench profile (release), NO -C target-cpu=native, runtime dispatch (incant!)
+threads: single-threaded resize; `-j 4` is the cargo build job cap, not a runtime knob
+simd:    bench-simd-competitors OFF (no competitor crates in this bench)
+bench:   nice -n 19 cargo bench -j 4 --bench mask_e2e   (two runs, 110.8 s and 180.4 s)
+logs:    mask_e2e_ladder_aarch64_2026-08-29.run1.log / .run2.log
+issue:   https://github.com/imazen/zenresize/issues/3
 
 ## Question
 

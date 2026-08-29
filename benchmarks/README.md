@@ -62,6 +62,13 @@ command, the threading mode, and whether `bench-simd-competitors` was on. Curren
 - `arm_n1_f16_archmage_vs_pr9_2026-06-03.md` — ARM Neoverse-N1 f16 path A/B.
 - `f16_convert_neon_fp16_2026-06-01.md` — NEON-fp16 f16↔f32 conversion.
 - `transfer_bench_2026-03-04.csv` — transfer-function throughput.
+- `neon_kernel_tiers_2026-07-28.{meta,log}` — per-kernel NEON vs forced-scalar tiers.
+- `neon_tier_isolation_2026-07-28.{meta,log}` — tier-isolation follow-up to the above.
+- `mask_e2e_aarch64_2026-08-27.{meta,log}` — first `with_mask()` f32-fallback probe
+  (3 points, 800×600 and up). **Superseded** by the ladder below, which does not
+  reproduce its 800×600 result.
+- `mask_e2e_ladder_aarch64_2026-08-29.{meta,run1.log,run2.log}` — 9-point 64²→4K
+  ladder locating the `with_mask()` f32-fallback crossover for issue #3.
 
 Do not commit numbers you didn't generate, and don't extrapolate one size to
 another — measure each size. Memory claims need heaptrack / `time -v`, not
