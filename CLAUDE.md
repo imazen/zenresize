@@ -119,15 +119,25 @@ background → JPEG gets white corners (not transparent-over-black). Forces f32
 path when mask present. Re-exports MaskSource, MaskFill, RoundedRectMask,
 LinearGradientMask, RadialGradientMask from zenblend.
 Issue #3 asks for an i16 mask path to avoid that f32 fallback. **Measured over a
-9-point 64²→4K ladder, twice, 2026-08-29 on M4 Pro (`benches/mask_e2e.rs`,
-`benchmarks/mask_e2e_ladder_aarch64_2026-08-29.meta`): don't build it on
-aarch64.** Three regimes: i16 wins only at ≤128×128 and by ≤4% (≤2.2 µs — that
-is the whole f32 fallback, so it bounds what an i16 mask path could recover);
-256²–1440×1080 is a wash (every CI straddles zero); at 4K the f32 path is
-15-16% faster downscaling and 28-30% faster upscaling, so moving masked resizes
-onto I16Srgb would cost +12.7 ms on a masked 4K→1080p. A ≤4% thumbnail win for
-a 15-30% large-image regression, at lower precision (u8-premultiplied double
-rounding vs f32's single rounding), is not justified.
+9-point 64²→4K ladder on both architectures, 2026-08-29 — and they disagree in
+SIGN, so #3 is a target-aware design decision, not a yes/no.**
+
+- **aarch64 (M4 Pro, two runs, `benchmarks/mask_e2e_ladder_aarch64_2026-08-29.meta`):
+  don't build it.** i16 wins only at ≤128×128 and by ≤4% (≤2.2 µs — that is the
+  whole f32 fallback, so it bounds the possible win); 256²–1440×1080 is a wash
+  (every CI straddles zero); at 4K the f32 path is 15-16% faster downscaling and
+  28-30% faster upscaling, so moving masked resizes onto I16Srgb would cost
+  +12.7 ms on a masked 4K→1080p.
+- **x86-64 (CI `macos-26-intel`, i7-8700B, AVX2 confirmed executing,
+  `benchmarks/mask_e2e_ladder_x86_2026-08-29.meta`): it pays, a lot.** The f32
+  fallback costs +5% to +22% at nearly every size and **+44% on a masked
+  1080p→4K upscale** (56.7 → 81.9 ms). Only 1024²'s CI crosses zero.
+
+So an unconditional i16 mask path wins 5-45% on x86 and regresses aarch64 masked
+4K by 15-30%; skipping it leaves 5-45% on the floor for every x86 deployment.
+Either way it also costs precision (u8-premultiplied double rounding vs f32's
+single rounding). Pick a target-aware policy — don't build it unconditionally,
+and don't drop it because of the aarch64 number alone.
 
 The earlier 3-point run (`mask_e2e_aarch64_2026-08-27.meta`) reported 800×600 as
 the one i16-favouring size (+8%); **that does not reproduce** — it is a wash in
@@ -173,6 +183,10 @@ Requires RGBAF32_LINEAR_PREMUL upstream.
 
 ## aarch64 / NEON (2026-07-28 sweep)
 
+**This section is aarch64-specific — on x86-64 I16Srgb IS faster at every size
+(see `benchmarks/mask_e2e_ladder_x86_2026-08-29.meta`). Don't generalize either
+way.**
+
 **I16Srgb is NOT faster than F32 end-to-end on Apple M4 Pro above ~256×256**
 (2026-08-29, `cargo bench --bench mask_e2e`, RGBA8_SRGB `.srgb()`, Lanczos, two
 runs; `benchmarks/mask_e2e_ladder_aarch64_2026-08-29.meta`): I16Srgb no-mask
@@ -182,12 +196,15 @@ Both i16 kernels are NEON (`filter_h_u8_to_i16_neon`, `filter_v_row_i16_neon`),
 so this is not a missing-kernel artefact. Don't assume the x86 "i16 ≈ 2× faster"
 ratio here.
 
-**Open question, not yet acted on:** `new_inner()` picks I16Srgb for sRGB 4ch at
-every size, but the ladder above says F32 is 15-30% faster from ~2 MP up — so
-automatic path selection is likely choosing the slower path for production-size
-sRGB resizes on aarch64. Deciding that needs the same ladder on x86 (a
-target-aware threshold, not a flat switch) and is a behaviour change beyond
-issue #3's mask scope.
+**Open question, now with both halves measured — worth its own issue.**
+`new_inner()` picks I16Srgb for sRGB 4ch at every size on every target. The
+2026-08-29 ladders say that is right on x86 at every size, and wrong on aarch64
+above ~2 MP (F32 is 15-30% faster there). In the mask bench `no_mask` is plain
+I16Srgb and `rounded_mask` is plain F32 plus a mask that costs ~0 on the f32
+path, so those columns are close to a straight I16Srgb-vs-F32 comparison of the
+whole resize — i.e. this is about default path selection generally, not just
+masks. Needs a target-aware threshold rather than a flat switch, and it is a
+behaviour change beyond issue #3's mask scope.
 
 **NEON is BASELINE on aarch64.** `#[target_feature(enable="neon")]` is a no-op,
 so the "scalar" tier is autovectorized too. A 1.00x NEON-vs-forced-scalar

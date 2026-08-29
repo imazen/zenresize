@@ -69,6 +69,10 @@ command, the threading mode, and whether `bench-simd-competitors` was on. Curren
   reproduce its 800×600 result.
 - `mask_e2e_ladder_aarch64_2026-08-29.{meta,run1.log,run2.log}` — 9-point 64²→4K
   ladder locating the `with_mask()` f32-fallback crossover for issue #3.
+- `mask_e2e_ladder_x86_2026-08-29.{meta,macos-x64.log,macos-x64.cpu.txt}` — the
+  same ladder on x86-64 (AVX2). **Disagrees in sign with the aarch64 record
+  above at the largest sizes** — read both before drawing any i16-vs-f32
+  conclusion.
 
 Do not commit numbers you didn't generate, and don't extrapolate one size to
 another — measure each size. Memory claims need heaptrack / `time -v`, not

@@ -1,0 +1,83 @@
+# zenresize with_mask cost on x86-64 — the answer INVERTS vs aarch64: an i16 mask path pays here
+
+date:    2026-08-29
+commit:  14e5515 (main)
+host:    GitHub Actions `macos-26-intel` — Intel Core i7-8700B @ 3.20 GHz (Coffee Lake)
+isa:     AVX2 present (BMI1 BMI2 RTM ADX RDSEED …), no AVX-512. Confirmed in
+         mask_e2e_ladder_x86_2026-08-29.macos-x64.cpu.txt — the AVX2 i16 kernels
+         really executed, which is the whole point of running this off-laptop.
+rustc:   rustc 1.98.0 (88d9e12ae 2026-08-18)
+build:   bench profile (release), NO -C target-cpu=native, runtime dispatch (incant!)
+threads: single-threaded resize
+simd:    bench-simd-competitors OFF
+bench:   .github/workflows/bench-mask.yml (workflow_dispatch), run 33236822984
+log:     mask_e2e_ladder_x86_2026-08-29.macos-x64.log  (total 40.9 s)
+issue:   https://github.com/imazen/zenresize/issues/3
+
+## Why this run exists
+
+`mask_e2e_ladder_aarch64_2026-08-29.meta` measured the same ladder on an M4 Pro
+and concluded an i16 mask path was not worth building. That conclusion was
+explicitly scoped to aarch64, because no machine in the aarch64 half of the dev
+fleet can execute the AVX2 i16 kernels — Rosetta exposes SSE4.2 but not
+AVX2/FMA, so a local `--target x86_64-apple-darwin` build compiles the V3
+kernels without ever running them. CI's x64 runners can.
+
+## Result (in-run paired ratio, rounded_mask/F32 vs no_mask/I16Srgb)
+
+Positive = the forced f32 fallback is slower, i.e. what an i16 mask path could
+win. All nine scenarios verified to take I16Srgb / F32 respectively.
+
+| scenario             | no_mask (I16Srgb) | rounded_mask (F32) | 95% CI x86-64    | 95% CI aarch64 (M4, run 2) |
+|----------------------|-------------------|--------------------|------------------|----------------------------|
+| 64x64 -> 32x32       | 71.2 µs           | 86.0 µs            | +21.8% .. +22.5% | +3.0% .. +4.3%             |
+| 128x128 -> 64x64     | 177.0 µs          | 204.8 µs           | +14.3% .. +15.1% | +1.4% .. +5.3%             |
+| 256x256 -> 128x128   | 509.1 µs          | 551.8 µs           | +7.6% .. +8.3%   | -0.7% .. +3.3%             |
+| 512x512 -> 256x256   | 1.6 ms            | 1.7 ms             | +4.9% .. +5.6%   | -0.8% .. +2.8%             |
+| 800x600 -> 400x300   | 2.8 ms            | 3.0 ms             | +5.4% .. +6.1%   | -0.6% .. +3.4%             |
+| 1024x1024 -> 512x512 | 5.9 ms            | 6.0 ms             | +0.7% .. +2.0% * | -1.4% .. +1.8%             |
+| 1440x1080 -> 720x540 | 8.3 ms            | 9.0 ms             | +7.8% .. +9.2%   | -2.0% .. +1.3%             |
+| 4K -> 1080p          | 42.4 ms           | 49.4 ms            | +15.8% .. +17.0% | -16.3% .. -14.7%           |
+| 1080p -> 4K up       | 56.7 ms           | 81.9 ms            | +43.6% .. +45.1% | -30.5% .. -28.5%           |
+
+`*` the only x86 cell whose CI crosses zero.
+
+## Conclusion: the #3 decision is TARGET-DEPENDENT, not a yes/no
+
+On x86-64 the forced f32 fallback costs 5-22% at nearly every size and **+44% on
+a masked 1080p -> 4K upscale** (56.7 -> 81.9 ms). On aarch64 the same fallback is
+*free or better* above ~256x256 and 15-30% FASTER at 4K. The two architectures
+disagree in sign at the two largest sizes, not merely in magnitude.
+
+So:
+
+- Building an unconditional i16 mask path would win 5-45% on x86 and regress
+  aarch64 masked 4K work by 15-30%.
+- Not building it leaves 5-45% on the floor for every x86 deployment.
+- Therefore the i16-vs-f32 choice for masked resizes has to be target-aware, the
+  same way kernel selection already is. That is a design decision (and a
+  precision one — the i16 path is u8-premultiplied double rounding vs f32's
+  single rounding), so it is escalated rather than assumed.
+
+This also confirms the direction of CLAUDE.md's long-standing "i16 ~ 2x faster"
+note as an x86 statement, and confirms that note does NOT transfer to aarch64.
+
+## Bigger finding, beyond masks
+
+`no_mask` here is plain I16Srgb and `rounded_mask` is plain F32 plus a mask whose
+own cost is ~0 (measured on 2026-08-27: the mask is free on the f32 path). So
+these columns are close to a straight I16Srgb-vs-F32 comparison of the whole
+resize, and they say the *automatic path selection* — not just the mask path —
+is architecture-sensitive: I16Srgb is the right default on x86 at every size,
+and the wrong default on aarch64 above ~2 MP (F32 is 15-30% faster there).
+`new_inner()` currently picks I16Srgb for sRGB 4ch on both. Worth its own issue.
+
+## Coverage / caveats
+
+- One x86 microarchitecture only (Coffee Lake, AVX2, no AVX-512). The 7950X has
+  AVX-512 and a much newer core; direction is likely to hold, magnitude may not.
+- Shared CI runner: absolute timings are not comparable to the M4 Pro figures.
+  Only the in-run paired ratio is, which is what the table reports.
+- The same dispatch run also has `ubuntu-latest` (second x64 point) and
+  `ubuntu-24.04-arm` (aarch64 control, which should reproduce the M4 Pro sign)
+  legs; both were still running when this record was committed. Add them here.

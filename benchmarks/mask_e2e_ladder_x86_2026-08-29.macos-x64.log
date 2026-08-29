@@ -1,0 +1,332 @@
+[1m[92m    Updating[0m crates.io index
+[1m[92m     Locking[0m 155 packages to latest Rust 1.93 compatible versions
+[1m[92m      Adding[0m colorutils-rs v0.7.6 [1m[33m(available: v0.8.0)[0m
+[1m[92m      Adding[0m tango-bench v0.7.2 [1m[33m(available: v0.8.0)[0m
+[1m[92m Downloading[0m crates ...
+[1m[92m  Downloaded[0m adler2 v2.0.1
+[1m[92m  Downloaded[0m anstyle-query v1.1.5
+[1m[92m  Downloaded[0m autocfg v1.5.1
+[1m[92m  Downloaded[0m alloca v0.4.0
+[1m[92m  Downloaded[0m anstyle v1.0.14
+[1m[92m  Downloaded[0m anstyle-parse v1.0.0
+[1m[92m  Downloaded[0m clap_lex v1.1.0
+[1m[92m  Downloaded[0m erydanos v0.2.18
+[1m[92m  Downloaded[0m clap_derive v4.6.4
+[1m[92m  Downloaded[0m proc-macro2 v1.0.107
+[1m[92m  Downloaded[0m anyhow v1.0.104
+[1m[92m  Downloaded[0m archmage v0.9.28
+[1m[92m  Downloaded[0m archmage-macros v0.9.28
+[1m[92m  Downloaded[0m colorchoice v1.0.5
+[1m[92m  Downloaded[0m anstream v1.0.0
+[1m[92m  Downloaded[0m by_address v1.2.1
+[1m[92m  Downloaded[0m bytemuck v1.25.2
+[1m[92m  Downloaded[0m bytemuck_derive v1.12.0
+[1m[92m  Downloaded[0m byteorder-lite v0.1.0
+[1m[92m  Downloaded[0m cc v1.4.4
+[1m[92m  Downloaded[0m cfg-if v1.0.4
+[1m[92m  Downloaded[0m clap v4.6.6
+[1m[92m  Downloaded[0m clap_builder v4.6.6
+[1m[92m  Downloaded[0m crossbeam-deque v0.8.7
+[1m[92m  Downloaded[0m document-features v0.2.12
+[1m[92m  Downloaded[0m errno v0.3.14
+[1m[92m  Downloaded[0m litrs v1.0.0
+[1m[92m  Downloaded[0m objc2-core-foundation v0.3.2
+[1m[92m  Downloaded[0m approx v0.5.1
+[1m[92m  Downloaded[0m linear-srgb v0.6.12
+[1m[92m  Downloaded[0m log v0.4.34
+[1m[92m  Downloaded[0m pic-scale v0.7.11
+[1m[92m  Downloaded[0m ppv-lite86 v0.2.21
+[1m[92m  Downloaded[0m serde_core v1.0.229
+[1m[92m  Downloaded[0m utf8parse v0.2.2
+[1m[92m  Downloaded[0m bitflags v2.13.1
+[1m[92m  Downloaded[0m colorutils-rs v0.7.6
+[1m[92m  Downloaded[0m crc32fast v1.5.1
+[1m[92m  Downloaded[0m either v1.18.0
+[1m[92m  Downloaded[0m fdeflate v0.3.7
+[1m[92m  Downloaded[0m getrandom v0.2.17
+[1m[92m  Downloaded[0m glob-match v0.2.1
+[1m[92m  Downloaded[0m libloading v0.8.9
+[1m[92m  Downloaded[0m palette_derive v0.7.7
+[1m[92m  Downloaded[0m palette_math v0.7.7
+[1m[92m  Downloaded[0m shlex v2.0.1
+[1m[92m  Downloaded[0m supports-color v3.0.2
+[1m[92m  Downloaded[0m terminal_size v0.4.4
+[1m[92m  Downloaded[0m thiserror v1.0.69
+[1m[92m  Downloaded[0m colorz v1.1.4
+[1m[92m  Downloaded[0m crossbeam-utils v0.8.22
+[1m[92m  Downloaded[0m find-msvc-tools v0.1.11
+[1m[92m  Downloaded[0m heck v0.5.0
+[1m[92m  Downloaded[0m is_terminal_polyfill v1.70.2
+[1m[92m  Downloaded[0m phf v0.13.1
+[1m[92m  Downloaded[0m rand v0.8.8
+[1m[92m  Downloaded[0m rand_chacha v0.3.1
+[1m[92m  Downloaded[0m rand_core v0.6.4
+[1m[92m  Downloaded[0m rustversion v1.0.23
+[1m[92m  Downloaded[0m thiserror v2.0.20
+[1m[92m  Downloaded[0m thiserror-impl v1.0.69
+[1m[92m  Downloaded[0m thiserror-impl v2.0.20
+[1m[92m  Downloaded[0m zmij v1.0.23
+[1m[92m  Downloaded[0m zune-core v0.5.3
+[1m[92m  Downloaded[0m flate2 v1.1.10
+[1m[92m  Downloaded[0m fs4 v1.1.0
+[1m[92m  Downloaded[0m zerocopy-derive v0.8.56
+[1m[92m  Downloaded[0m is_ci v1.2.0
+[1m[92m  Downloaded[0m strsim v0.11.1
+[1m[92m  Downloaded[0m zenblend v0.1.3
+[1m[92m  Downloaded[0m unicode-ident v1.0.24
+[1m[92m  Downloaded[0m zune-jpeg v0.5.15
+[1m[92m  Downloaded[0m phf_shared v0.13.1
+[1m[92m  Downloaded[0m siphasher v1.0.3
+[1m[92m  Downloaded[0m whereat v0.1.5
+[1m[92m  Downloaded[0m zenpixels v0.2.16
+[1m[92m  Downloaded[0m pic-scale-safe v0.1.12
+[1m[92m  Downloaded[0m zenlayout v0.2.2
+[1m[92m  Downloaded[0m itoa v1.0.18
+[1m[92m  Downloaded[0m zenbench v0.1.9
+[1m[92m  Downloaded[0m quote v1.0.47
+[1m[92m  Downloaded[0m resize v0.8.9
+[1m[92m  Downloaded[0m rgb v0.8.53
+[1m[92m  Downloaded[0m crossbeam-epoch v0.9.20
+[1m[92m  Downloaded[0m imgref v1.12.3
+[1m[92m  Downloaded[0m simd-adler32 v0.3.10
+[1m[92m  Downloaded[0m tango-bench v0.7.2
+[1m[92m  Downloaded[0m num-traits v0.2.19
+[1m[92m  Downloaded[0m serde_derive v1.0.229
+[1m[92m  Downloaded[0m zerocopy v0.8.56
+[1m[92m  Downloaded[0m zlib-rs v0.6.7
+[1m[92m  Downloaded[0m half v2.7.1
+[1m[92m  Downloaded[0m miniz_oxide v0.8.9
+[1m[92m  Downloaded[0m miniz_oxide v0.9.1
+[1m[92m  Downloaded[0m rayon-core v1.13.0
+[1m[92m  Downloaded[0m safe_unaligned_simd v0.2.5
+[1m[92m  Downloaded[0m serde v1.0.229
+[1m[92m  Downloaded[0m colorutils-rs v0.8.0
+[1m[92m  Downloaded[0m memchr v2.8.3
+[1m[92m  Downloaded[0m fast_image_resize v6.1.0
+[1m[92m  Downloaded[0m png v0.18.1
+[1m[92m  Downloaded[0m serde_json v1.0.151
+[1m[92m  Downloaded[0m moxcms v0.8.1
+[1m[92m  Downloaded[0m rayon v1.12.0
+[1m[92m  Downloaded[0m libm v0.2.16
+[1m[92m  Downloaded[0m objc2-io-kit v0.3.2
+[1m[92m  Downloaded[0m sysinfo v0.36.1
+[1m[92m  Downloaded[0m magetypes v0.9.28
+[1m[92m  Downloaded[0m palette v0.7.7
+[1m[92m  Downloaded[0m image v0.25.10
+[1m[92m  Downloaded[0m syn v2.0.119
+[1m[92m  Downloaded[0m syn v3.0.4
+[1m[92m  Downloaded[0m rustix v1.1.4
+[1m[92m  Downloaded[0m pxfm v0.1.30
+[1m[92m  Downloaded[0m libc v0.2.189
+[1m[92m   Compiling[0m proc-macro2 v1.0.107
+[1m[92m   Compiling[0m unicode-ident v1.0.24
+[1m[92m   Compiling[0m quote v1.0.47
+[1m[92m   Compiling[0m autocfg v1.5.1
+[1m[92m   Compiling[0m libm v0.2.16
+[1m[92m   Compiling[0m num-traits v0.2.19
+[1m[92m   Compiling[0m cfg-if v1.0.4
+[1m[92m   Compiling[0m libc v0.2.189
+[1m[92m   Compiling[0m zerocopy v0.8.56
+[1m[92m   Compiling[0m bitflags v2.13.1
+[1m[92m   Compiling[0m crossbeam-utils v0.8.22
+[1m[92m   Compiling[0m syn v2.0.119
+[1m[92m   Compiling[0m syn v3.0.4
+[1m[92m   Compiling[0m crossbeam-epoch v0.9.20
+[1m[92m   Compiling[0m crossbeam-deque v0.8.7
+[1m[92m   Compiling[0m simd-adler32 v0.3.10
+[1m[92m   Compiling[0m utf8parse v0.2.2
+[1m[92m   Compiling[0m rustversion v1.0.23
+[1m[92m   Compiling[0m anstyle-parse v1.0.0
+[1m[92m   Compiling[0m adler2 v2.0.1
+[1m[92m   Compiling[0m serde_core v1.0.229
+[1m[92m   Compiling[0m rayon-core v1.13.0
+[1m[92m   Compiling[0m safe_unaligned_simd v0.2.5
+[1m[92m   Compiling[0m shlex v2.0.1
+[1m[92m   Compiling[0m anstyle-query v1.1.5
+[1m[92m   Compiling[0m rustix v1.1.4
+[1m[92m   Compiling[0m crc32fast v1.5.1
+[1m[92m   Compiling[0m find-msvc-tools v0.1.11
+[1m[92m   Compiling[0m colorchoice v1.0.5
+[1m[92m   Compiling[0m anstyle v1.0.14
+[1m[92m   Compiling[0m is_terminal_polyfill v1.70.2
+[1m[92m   Compiling[0m cc v1.4.4
+[1m[92m   Compiling[0m anstream v1.0.0
+[1m[92m   Compiling[0m bytemuck_derive v1.12.0
+[1m[92m   Compiling[0m errno v0.3.14
+[1m[92m   Compiling[0m getrandom v0.2.17
+[1m[92m   Compiling[0m heck v0.5.0
+[1m[92m   Compiling[0m strsim v0.11.1
+[1m[92m   Compiling[0m clap_lex v1.1.0
+[1m[92m   Compiling[0m zmij v1.0.23
+[1m[92m   Compiling[0m bytemuck v1.25.2
+[1m[92m   Compiling[0m zerocopy-derive v0.8.56
+[1m[92m   Compiling[0m archmage-macros v0.9.28
+[1m[92m   Compiling[0m clap_builder v4.6.6
+[1m[92m   Compiling[0m clap_derive v4.6.4
+[1m[92m   Compiling[0m archmage v0.9.28
+[1m[92m   Compiling[0m magetypes v0.9.28
+[1m[92m   Compiling[0m rand_core v0.6.4
+[1m[92m   Compiling[0m alloca v0.4.0
+[1m[92m   Compiling[0m ppv-lite86 v0.2.21
+[1m[92m   Compiling[0m half v2.7.1
+[1m[92m   Compiling[0m miniz_oxide v0.9.1
+[1m[92m   Compiling[0m erydanos v0.2.18
+[1m[92m   Compiling[0m objc2-core-foundation v0.3.2
+[1m[92m   Compiling[0m is_ci v1.2.0
+[1m[92m   Compiling[0m serde v1.0.229
+[1m[92m   Compiling[0m whereat v0.1.5
+[1m[92m   Compiling[0m thiserror v2.0.20
+[1m[92m   Compiling[0m memchr v2.8.3
+[1m[92m   Compiling[0m either v1.18.0
+[1m[92m   Compiling[0m siphasher v1.0.3
+[1m[92m   Compiling[0m anyhow v1.0.104
+[1m[92m   Compiling[0m pxfm v0.1.30
+[1m[92m   Compiling[0m serde_json v1.0.151
+[1m[92m   Compiling[0m thiserror v1.0.69
+[1m[92m   Compiling[0m phf_shared v0.13.1
+[1m[92m   Compiling[0m rayon v1.12.0
+[1m[92m   Compiling[0m objc2-io-kit v0.3.2
+[1m[92m   Compiling[0m supports-color v3.0.2
+[1m[92m   Compiling[0m flate2 v1.1.10
+[1m[92m   Compiling[0m rand_chacha v0.3.1
+[1m[92m   Compiling[0m clap v4.6.6
+[1m[92m   Compiling[0m rgb v0.8.53
+[1m[92m   Compiling[0m thiserror-impl v1.0.69
+[1m[92m   Compiling[0m thiserror-impl v2.0.20
+[1m[92m   Compiling[0m serde_derive v1.0.229
+[1m[92m   Compiling[0m miniz_oxide v0.8.9
+[1m[92m   Compiling[0m fdeflate v0.3.7
+[1m[92m   Compiling[0m litrs v1.0.0
+[1m[92m   Compiling[0m itoa v1.0.18
+[1m[92m   Compiling[0m tango-bench v0.7.2
+[1m[92m   Compiling[0m zune-core v0.5.3
+[1m[92m   Compiling[0m by_address v1.2.1
+[1m[92m   Compiling[0m zenresize v0.3.1 (/Users/runner/work/zenresize/zenresize)
+[1m[92m   Compiling[0m zune-jpeg v0.5.15
+[1m[92m   Compiling[0m palette_derive v0.7.7
+[1m[92m   Compiling[0m document-features v0.2.12
+[1m[92m   Compiling[0m png v0.18.1
+[1m[92m   Compiling[0m moxcms v0.8.1
+[1m[92m   Compiling[0m rand v0.8.8
+[1m[92m   Compiling[0m colorz v1.1.4
+[1m[92m   Compiling[0m sysinfo v0.36.1
+[1m[92m   Compiling[0m phf v0.13.1
+[1m[92m   Compiling[0m zenpixels v0.2.16
+[1m[92m   Compiling[0m colorutils-rs v0.8.0
+[1m[92m   Compiling[0m linear-srgb v0.6.12
+[1m[92m   Compiling[0m zenblend v0.1.3
+[1m[92m   Compiling[0m fs4 v1.1.0
+[1m[92m   Compiling[0m terminal_size v0.4.4
+[1m[92m   Compiling[0m approx v0.5.1
+[1m[92m   Compiling[0m libloading v0.8.9
+[1m[92m   Compiling[0m byteorder-lite v0.1.0
+[1m[92m   Compiling[0m palette_math v0.7.7
+[1m[92m   Compiling[0m glob-match v0.2.1
+[1m[92m   Compiling[0m imgref v1.12.3
+[1m[92m   Compiling[0m log v0.4.34
+[1m[92m   Compiling[0m palette v0.7.7
+[1m[92m   Compiling[0m image v0.25.10
+[1m[92m   Compiling[0m zenbench v0.1.9
+[1m[92m   Compiling[0m pic-scale v0.7.11
+[1m[92m   Compiling[0m fast_image_resize v6.1.0
+[1m[92m   Compiling[0m resize v0.8.9
+[1m[92m   Compiling[0m colorutils-rs v0.7.6
+[1m[92m   Compiling[0m zenlayout v0.2.2
+[1m[92m   Compiling[0m pic-scale-safe v0.1.12
+[1m[92m    Finished[0m `bench` profile [optimized] target(s) in 2m 23s
+[1m[92m     Running[0m benches/mask_e2e.rs (target/release/deps/mask_e2e-7a493b9885dfaa66)
+[mask_e2e] 64x64→32x32: no_mask=I16Srgb rounded_mask=F32
+[mask_e2e] 128x128→64x64: no_mask=I16Srgb rounded_mask=F32
+[mask_e2e] 256x256→128x128: no_mask=I16Srgb rounded_mask=F32
+[mask_e2e] 512x512→256x256: no_mask=I16Srgb rounded_mask=F32
+[mask_e2e] 800x600→400x300: no_mask=I16Srgb rounded_mask=F32
+[mask_e2e] 1024x1024→512x512: no_mask=I16Srgb rounded_mask=F32
+[mask_e2e] 1440x1080→720x540: no_mask=I16Srgb rounded_mask=F32
+[mask_e2e] 4K→1080p: no_mask=I16Srgb rounded_mask=F32
+[mask_e2e] 1080p→4K up: no_mask=I16Srgb rounded_mask=F32
+[zenbench] calibration: int=0.33ns/iter mem_bw=37.0GiB/s mem_lat=12.0ns
+[zenbench] timer resolution: 35ns, loop overhead: 0.24ns/iter, TSC: unavailable (using Instant)
+[zenbench] results → /var/folders/fq/bhsbs5bd52791c8x2z6s3dh40000gn/T/zenbench/zenbench-1787982565-10a47.txt
+
+═══════════════════════════════════════════════════════════════
+  zenbench  1787982565-10a47
+  git: 49d76e9e57b47c7a279bae8d897af2303e3ffc40
+  ci:  github-actions
+═══════════════════════════════════════════════════════════════
+
+  64x64→32x32  30 rounds × 52 calls
+                    mean ±mad µs  95% CI vs base     iB/s
+  ├─ no_mask        71.2 ±0.3µs  [70.4–72.3]µs      219M
+  ╰─ rounded_mask   86.0 ±0.6µs  [+21.8%–+22.5%]    182M
+
+  no_mask       ██████████████████████████████████████████████████████ 219 MiB/s
+  rounded_mask  █████████████████████████████████████████████ 182 MiB/s
+
+  128x128→64x64  50 rounds × 24 calls
+                     mean ±mad µs  95% CI vs base      iB/s
+  ├─ no_mask        177.0 ±1.5µs  [176.1–178.1]µs     353M
+  ╰─ rounded_mask   204.8 ±1.8µs  [+14.3%–+15.1%]     305M
+
+  no_mask       ██████████████████████████████████████████████████████ 353 MiB/s
+  rounded_mask  ███████████████████████████████████████████████ 305 MiB/s
+
+  256x256→128x128  90 rounds × 9 calls
+                     mean ±mad µs  95% CI vs base      iB/s
+  ├─ no_mask        509.1 ±4.7µs  [506.7–512.0]µs     491M
+  ╰─ rounded_mask   551.8 ±6.2µs  [+7.6%–+8.3%]       453M
+
+  no_mask       ██████████████████████████████████████████████████████ 491 MiB/s
+  rounded_mask  ██████████████████████████████████████████████████ 453 MiB/s
+
+  512x512→256x256  160 rounds × 2 calls
+                   mean ±mad ms  95% CI vs base   iB/s
+  ├─ no_mask        1.6 ±0.0ms  [1.6–1.7]ms      608M
+  ╰─ rounded_mask   1.7 ±0.0ms  [+4.9%–+5.6%]    579M
+
+  no_mask       ██████████████████████████████████████████████████████ 608 MiB/s
+  rounded_mask  ███████████████████████████████████████████████████ 579 MiB/s
+
+  800x600→400x300  150 rounds × 1 calls
+                   mean ±mad ms  95% CI vs base   iB/s
+  ├─ no_mask        2.8 ±0.0ms  [2.8–2.8]ms      652M
+  ╰─ rounded_mask   3.0 ±0.0ms  [+5.4%–+6.1%]    620M
+
+  no_mask       ██████████████████████████████████████████████████████ 652 MiB/s
+  rounded_mask  ███████████████████████████████████████████████████ 620 MiB/s
+
+  1024x1024→512x512  60 rounds × 1 calls
+                   mean ±mad ms  95% CI vs base   iB/s
+  ├─ no_mask        5.9 ±0.1ms  [5.8–5.9]ms      681M
+  ╰─ rounded_mask   6.0 ±0.1ms  [+0.7%–+2.0%]    672M [1]
+
+  no_mask       ██████████████████████████████████████████████████████ 681 MiB/s
+  rounded_mask  █████████████████████████████████████████████████████ 672 MiB/s
+  [1] CI crosses zero
+
+  1440x1080→720x540  50 rounds × 1 calls
+                   mean ±mad ms  95% CI vs base   iB/s
+  ├─ no_mask        8.3 ±0.1ms  [8.3–8.4]ms      712M
+  ╰─ rounded_mask   9.0 ±0.1ms  [+7.8%–+9.2%]    659M
+
+  no_mask       ██████████████████████████████████████████████████████ 712 MiB/s
+  rounded_mask  ██████████████████████████████████████████████████ 659 MiB/s
+
+  4K→1080p  30 rounds × 1 calls
+                   mean ±mad ms  95% CI vs base     iB/s
+  ├─ no_mask        42.4 ±0.3ms  [42.0–42.9]ms      747M
+  ╰─ rounded_mask   49.4 ±1.0ms  [+15.8%–+17.0%]    640M
+
+  no_mask       ██████████████████████████████████████████████████████ 747 MiB/s
+  rounded_mask  ██████████████████████████████████████████████ 640 MiB/s
+
+  1080p→4K up  30 rounds × 1 calls
+                   mean ±mad ms  95% CI vs base      iB/s
+  ├─ no_mask        56.7 ±0.7ms  [56.3–57.3]ms       139M
+  ╰─ rounded_mask   81.9 ±1.0ms  [+43.6%–+45.1%]    96.6M
+
+  no_mask       █████████████████████████████████████████████████████ 139 MiB/s
+  rounded_mask  █████████████████████████████████████ 96.6 MiB/s
+
+  total: 40.9s  (74 noisy rounds)
+═══════════════════════════════════════════════════════════════
+  filter: cargo bench -- --group=NAME  format: --format=llm|csv|md|json

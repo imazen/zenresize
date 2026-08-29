@@ -24,6 +24,10 @@
   `workflow_dispatch`, with an aarch64 control leg; `benchmarks/README.md`'s
   record index refreshed from 3 entries to all 7 (49d76e9). Implementation shape
   and the gating mask tests recorded in `CLAUDE.md` (bd7f0e2, 14e5515).
+  The x86-64 leg then ran and **inverted the conclusion**: on an AVX2 Coffee Lake
+  runner the f32 fallback costs +5%..+22% at nearly every size and +44% on a
+  masked 1080p→4K upscale, so #3 is a target-aware decision rather than a
+  yes/no (`benchmarks/mask_e2e_ladder_x86_2026-08-29.meta`).
   No library behaviour change — bench, CI and docs only.
 - Versioned public-API surface snapshot at `docs/public-api/zenresize.txt`, regenerated on every `cargo test` by `tests/public_api_doc.rs` (`ZEN_API_DOC=check` verifies in the CI clippy job, `=off` skips); `justfile` recipes `fmt` / `api-doc` / `api-doc-check`. Dev-only — not part of the published package (include-whitelist already excludes it).
 
