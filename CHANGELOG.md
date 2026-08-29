@@ -14,6 +14,12 @@
   `benchmarks/README.md` documents the fair-comparison methodology and pinned-commit
   reproduction. Crosslink footer refreshed (fixes the stale `heic` link, adds the
   current zen* crates).
+- `benches/mask_e2e.rs` extended from 3 points to a 9-point 64²→4K size ladder,
+  locating the `with_mask()` f32-fallback crossover for #3: on aarch64 I16Srgb is
+  ahead only at ≤128×128 (≤4%), 256²–1440×1080 is a wash, and F32 is 15-30%
+  faster at 4K — so an i16 mask path would be a regression there. Two runs plus
+  the write-up in `benchmarks/mask_e2e_ladder_aarch64_2026-08-29.meta`; no
+  library behaviour change.
 - Versioned public-API surface snapshot at `docs/public-api/zenresize.txt`, regenerated on every `cargo test` by `tests/public_api_doc.rs` (`ZEN_API_DOC=check` verifies in the CI clippy job, `=off` skips); `justfile` recipes `fmt` / `api-doc` / `api-doc-check`. Dev-only — not part of the published package (include-whitelist already excludes it).
 
 ### Changed

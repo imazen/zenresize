@@ -1,0 +1,88 @@
+# zenresize with_mask cost across a tiny→large size ladder — the i16 mask path of #3 cannot pay on aarch64
+
+date:  2026-08-29
+host:  Apple M4 Pro (12 core), macOS, aarch64
+build: bench profile (release), NO -C target-cpu=native, runtime dispatch (incant!)
+lib:   zenresize @ da03f80 + the extended benches/mask_e2e.rs ladder (this commit)
+bench: nice -n 19 cargo bench -j 4 --bench mask_e2e   (two runs, 110.8 s and 180.4 s)
+logs:  mask_e2e_ladder_aarch64_2026-08-29.run1.log / .run2.log
+issue: https://github.com/imazen/zenresize/issues/3
+
+## Question
+
+Issue #3 proposes applying masks on the i16 paths so `with_mask()` stops forcing
+the f32 path ("avoids f32 conversion overhead for the common case of rounded
+corners + solid background -> JPEG"). The 2026-08-27 run
+(`mask_e2e_aarch64_2026-08-27.meta`) sampled only 800x600 and up and found the
+f32 fallback was already faster at >= 1080p, with 800x600 the single point that
+favoured i16 (+5.7% .. +10.2%). That left the crossover unlocated, and per the
+size-sweep discipline a 3-point grid starting at 0.5 MP cannot separate per-call
+fixed overhead from the per-pixel slope. This run adds the tiny/small end.
+
+Both arms use the same RGBA8_SRGB `.srgb()` config (opaque gradient, Lanczos).
+`no_mask` takes I16Srgb and `rounded_mask` takes F32 in every one of the nine
+scenarios — printed by the bench and verified in both logs.
+
+## Result (in-run paired ratio, rounded_mask/F32 vs no_mask/I16Srgb)
+
+A POSITIVE percentage means the forced f32 fallback is slower, i.e. an i16 mask
+path could win that much. A NEGATIVE percentage means f32 is already faster and
+an i16 mask path would be a regression.
+
+| scenario           | no_mask (I16Srgb) | rounded_mask (F32) | 95% CI run 1     | 95% CI run 2     |
+|--------------------|-------------------|--------------------|------------------|------------------|
+| 64x64 -> 32x32     | 48.9 µs / 97.5 µs | 50.6 µs / 105.1 µs | +2.9% .. +4.5%   | +3.0% .. +4.3%   |
+| 128x128 -> 64x64   | 168.7 / 273.9 µs  | 170.9 / 283.2 µs   | +1.1% .. +2.3%   | +1.4% .. +5.3%   |
+| 256x256 -> 128x128 | 634.0 / 962.9 µs  | 626.9 / 975.4 µs   | -2.1% .. -0.1%   | -0.7% .. +3.3%   |
+| 512x512 -> 256x256 | 2.4 / 3.4 ms      | 2.3 / 3.4 ms       | -0.7% .. -0.0%   | -0.8% .. +2.8%   |
+| 800x600 -> 400x300 | 6.6 / 7.7 ms      | 6.5 / 7.8 ms       | -2.2% .. +1.3%   | -0.6% .. +3.4%   |
+| 1024x1024 -> 512²  | 9.5 / 10.3 ms     | 9.6 / 10.3 ms      | +1.0% .. +1.5%   | -1.4% .. +1.8%   |
+| 1440x1080 -> 720x540 | 14.1 / 14.2 ms  | 14.1 / 14.1 ms     | -1.3% .. +1.8%   | -2.0% .. +1.3%   |
+| 4K -> 1080p        | 81.9 / 81.8 ms    | 69.0 / 69.1 ms     | -16.7% .. -14.8% | -16.3% .. -14.7% |
+| 1080p -> 4K up     | 80.3 / 80.4 ms    | 56.8 / 56.7 ms     | -30.2% .. -28.4% | -30.5% .. -28.5% |
+
+(Two absolute figures per cell: run 1 / run 2. Run 1 shared the box with other
+build agents; run 2 had it to itself. Only the in-run paired ratio is
+comparable across runs — the absolutes drift, as the 64x64 cell shows.)
+
+## Conclusion: do not build the i16 mask path on aarch64
+
+Three regimes, both runs agreeing on all three:
+
+1. **<= 128x128 input: i16 wins, by at most ~4%.** That is the ENTIRE cost of
+   the f32 fallback (linearize + premultiply + f32 kernels + unpremultiply), so
+   it is an upper bound on what an i16 mask path could recover: 1.7 µs at 64x64,
+   2.2 µs at 128x128 in run 1.
+2. **256x256 .. 1440x1080: a wash.** Every CI in run 2 straddles zero.
+3. **>= 4K: f32 is 15-16% faster downscaling and 28-30% faster upscaling.**
+   Moving masked resizes onto I16Srgb would cost +12.7 ms on a masked
+   4K -> 1080p and +23.7 ms on a masked 1080p -> 4K.
+
+So the change proposed by #3 would trade a <= 4% (<= 2.2 µs) win on thumbnails
+for a 15-30% regression on masked 4K work, and it would also be less precise
+(u8-premultiplied double rounding vs the f32 path's single rounding). It is not
+justified by measurement on this architecture at any size.
+
+## Correction to the 2026-08-27 record
+
+The 800x600 -> 400x300 point does NOT reproduce. That run reported
++5.7% .. +10.2% (favouring i16) from a single sample; here it lands at
+-2.2% .. +1.3% (run 1, CV 25-26%) and -0.6% .. +3.4% (run 2) — a wash both
+times. The 08-27 meta's framing of 800x600 as the one i16-favouring size was an
+artefact of that point's variance. The genuine i16-favouring band is
+<= 128x128, and it is far too small to matter.
+
+The two large anchors reproduce well across the two runs here and across the
+08-27 run (4K -> 1080p: -11.4% .. -9.6% on 08-27 vs -16.3% .. -14.7% today;
+1080p -> 4K: -29.1% .. -26.5% vs -30.5% .. -28.5%) — same sign and same order of
+magnitude on a different day and a differently loaded box.
+
+## Still not measured: x86-64
+
+CLAUDE.md records I16Srgb as "~2x faster" than f32, an x86 (AVX2/AVX-512)
+number. If that ratio holds on the 7950X, the f32 fallback there really would
+cost ~2x on masked resizes and the i16 mask path could pay — the opposite
+conclusion to this one. Run this bench on the 7950X before deciding the x86
+half. It cannot be answered from this machine: Rosetta exposes SSE4.2 but no
+AVX2/FMA, so `--target x86_64-apple-darwin` compiles the V3 kernels without
+executing them (see CLAUDE.md), and Rosetta timings would be meaningless anyway.

@@ -118,13 +118,23 @@ No new dependencies. Pure math with MaskFill hints for uniform-row optimization.
 background → JPEG gets white corners (not transparent-over-black). Forces f32
 path when mask present. Re-exports MaskSource, MaskFill, RoundedRectMask,
 LinearGradientMask, RadialGradientMask from zenblend.
-Issue #3 asks for an i16 mask path to avoid that f32 fallback. **Measured
-2026-08-27 on M4 Pro (`benches/mask_e2e.rs`,
-`benchmarks/mask_e2e_aarch64_2026-08-27.meta`): the f32 path WITH a mask is
-faster than I16Srgb WITHOUT one at ≥1080p (-10% at 4K→1080p, -28% at
-1080p→4K), +8% (~0.6 ms) only at 800×600.** Not worth building on aarch64;
-re-measure on x86 (7950X) before deciding — the "~2x faster" i16 figure below
-is an x86 number.
+Issue #3 asks for an i16 mask path to avoid that f32 fallback. **Measured over a
+9-point 64²→4K ladder, twice, 2026-08-29 on M4 Pro (`benches/mask_e2e.rs`,
+`benchmarks/mask_e2e_ladder_aarch64_2026-08-29.meta`): don't build it on
+aarch64.** Three regimes: i16 wins only at ≤128×128 and by ≤4% (≤2.2 µs — that
+is the whole f32 fallback, so it bounds what an i16 mask path could recover);
+256²–1440×1080 is a wash (every CI straddles zero); at 4K the f32 path is
+15-16% faster downscaling and 28-30% faster upscaling, so moving masked resizes
+onto I16Srgb would cost +12.7 ms on a masked 4K→1080p. A ≤4% thumbnail win for
+a 15-30% large-image regression, at lower precision (u8-premultiplied double
+rounding vs f32's single rounding), is not justified.
+
+The earlier 3-point run (`mask_e2e_aarch64_2026-08-27.meta`) reported 800×600 as
+the one i16-favouring size (+8%); **that does not reproduce** — it is a wash in
+both ladder runs (CV 25-26% on the contended one). Its two large anchors do
+reproduce. Still open: x86 (7950X), where the "~2× faster" i16 figure below
+comes from and where the answer may invert. Rosetta cannot answer it (SSE4.2
+only, no AVX2/FMA — the V3 kernels compile but never execute).
 
 **Phase 5:** `zenpipe::sources::MaskTransformSource` for standalone no-resize masking.
 Requires RGBAF32_LINEAR_PREMUL upstream.
@@ -137,13 +147,21 @@ Requires RGBAF32_LINEAR_PREMUL upstream.
 
 ## aarch64 / NEON (2026-07-28 sweep)
 
-**I16Srgb is NOT faster than F32 end-to-end on Apple M4 Pro** (2026-08-27,
-`cargo bench --bench mask_e2e`, RGBA8_SRGB `.srgb()`, Lanczos): I16Srgb no-mask
-79.7 ms vs F32-with-mask 71.3 ms at 4K→1080p, 79.3 vs 57.3 ms at 1080p→4K; only the
-800×600→400×300 case favours i16 (8.0 vs 8.6 ms). Both i16 kernels are NEON
-(`filter_h_u8_to_i16_neon`, `filter_v_row_i16_neon`). Don't assume the x86
-"i16 ≈ 2× faster" ratio here; the automatic path selection may be picking the
-slower path on aarch64 at production sizes — an open question, not yet acted on.
+**I16Srgb is NOT faster than F32 end-to-end on Apple M4 Pro above ~256×256**
+(2026-08-29, `cargo bench --bench mask_e2e`, RGBA8_SRGB `.srgb()`, Lanczos, two
+runs; `benchmarks/mask_e2e_ladder_aarch64_2026-08-29.meta`): I16Srgb no-mask
+81.8 ms vs F32-with-mask 69.1 ms at 4K→1080p, 80.4 vs 56.7 ms at 1080p→4K.
+I16Srgb is ahead only at ≤128×128 (by ≤4%), and 256²–1440×1080 is a wash.
+Both i16 kernels are NEON (`filter_h_u8_to_i16_neon`, `filter_v_row_i16_neon`),
+so this is not a missing-kernel artefact. Don't assume the x86 "i16 ≈ 2× faster"
+ratio here.
+
+**Open question, not yet acted on:** `new_inner()` picks I16Srgb for sRGB 4ch at
+every size, but the ladder above says F32 is 15-30% faster from ~2 MP up — so
+automatic path selection is likely choosing the slower path for production-size
+sRGB resizes on aarch64. Deciding that needs the same ladder on x86 (a
+target-aware threshold, not a flat switch) and is a behaviour change beyond
+issue #3's mask scope.
 
 **NEON is BASELINE on aarch64.** `#[target_feature(enable="neon")]` is a no-op,
 so the "scalar" tier is autovectorized too. A 1.00x NEON-vs-forced-scalar

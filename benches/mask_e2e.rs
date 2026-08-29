@@ -3,9 +3,15 @@
 //! Measures the cost of `StreamingResize::with_mask()` on the default
 //! `RGBA8_SRGB` (non-linear) config, which without a mask takes the I16Srgb
 //! path. The interesting number is the in-run ratio `rounded_mask / no_mask`:
-//! it is ~2x while `with_mask` forces the f32 path, and should collapse to
-//! ~1x once the mask is applied on the i16 path. Absolute timings drift
-//! between runs on this machine; only the paired ratio is comparable.
+//! a ratio > 1 means the forced f32 fallback costs something and an i16 mask
+//! path could pay; a ratio <= 1 means the f32 path is already at least as fast
+//! as i16 end-to-end, and building one would be a regression.
+//!
+//! The size ladder spans tiny (64x64) to large (4K) so per-call fixed overhead
+//! can be separated from the per-pixel slope. The 2026-08-27 run only sampled
+//! 800x600 and up, and 800x600 was the single point that favoured i16 — so the
+//! crossover, if there is one, lies at the small end. Absolute timings drift
+//! between runs on this machine; only the in-run paired ratio is comparable.
 
 use std::hint::black_box;
 
@@ -57,7 +63,58 @@ struct Scenario {
 }
 
 zenbench::main!(|suite| {
+    // Halving ladder from tiny to large, so `total = alpha + beta * pixels`
+    // is separable, plus the two 2026-08-27 anchors for run-to-run continuity.
     let scenarios = [
+        Scenario {
+            label: "64x64→32x32",
+            in_w: 64,
+            in_h: 64,
+            out_w: 32,
+            out_h: 32,
+        },
+        Scenario {
+            label: "128x128→64x64",
+            in_w: 128,
+            in_h: 128,
+            out_w: 64,
+            out_h: 64,
+        },
+        Scenario {
+            label: "256x256→128x128",
+            in_w: 256,
+            in_h: 256,
+            out_w: 128,
+            out_h: 128,
+        },
+        Scenario {
+            label: "512x512→256x256",
+            in_w: 512,
+            in_h: 512,
+            out_w: 256,
+            out_h: 256,
+        },
+        Scenario {
+            label: "800x600→400x300",
+            in_w: 800,
+            in_h: 600,
+            out_w: 400,
+            out_h: 300,
+        },
+        Scenario {
+            label: "1024x1024→512x512",
+            in_w: 1024,
+            in_h: 1024,
+            out_w: 512,
+            out_h: 512,
+        },
+        Scenario {
+            label: "1440x1080→720x540",
+            in_w: 1440,
+            in_h: 1080,
+            out_w: 720,
+            out_h: 540,
+        },
         Scenario {
             label: "4K→1080p",
             in_w: 3840,
@@ -71,13 +128,6 @@ zenbench::main!(|suite| {
             in_h: 1080,
             out_w: 3840,
             out_h: 2160,
-        },
-        Scenario {
-            label: "800x600→400x300",
-            in_w: 800,
-            in_h: 600,
-            out_w: 400,
-            out_h: 300,
         },
     ];
 
