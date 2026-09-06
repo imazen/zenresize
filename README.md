@@ -10,6 +10,27 @@ zenresize = "0.3"
 ```
 
 ```rust
+use zenresize::{ImgRef, RGBA8};
+
+// Pixels carry their own dimensions + stride via ImgRef — nothing to keep in
+// sync, and an oversized/invalid target returns a ConfigError, never a panic.
+let pixels = vec![RGBA8::default(); 1920 * 1080];
+let img = ImgRef::new(&pixels, 1920, 1080);
+
+// Exact resize — Lanczos filter, correct sRGB linear-light:
+let resized = zenresize::resize_rgba8(img, 800, 450)?;
+assert_eq!((resized.width(), resized.height()), (800, 450));
+
+// Or fit within a box, aspect preserved (never upscales past the source):
+let thumb = zenresize::resize_rgba8_to_fit(img, 320, 320)?;
+assert_eq!((thumb.width(), thumb.height()), (320, 180));
+# Ok::<(), zenresize::At<zenresize::ConfigError>>(())
+```
+
+Need a different filter, color space, crop, padding, `Cover`/`Stretch` fit, u16/f32
+I/O, or row-at-a-time streaming? Build a `ResizeConfig` and reuse a `Resizer`:
+
+```rust
 use zenresize::{Resizer, ResizeConfig, Filter, PixelDescriptor};
 
 let input = vec![128u8; 1024 * 768 * 4]; // RGBA pixels
