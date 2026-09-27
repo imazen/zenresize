@@ -11,6 +11,7 @@ use alloc::vec::Vec;
 
 use crate::simd;
 use crate::weights::F32WeightTable;
+use enough::{Stop, StopReason};
 
 /// Maximum blur radius in pixels. Limits kernel to 61 taps (radius=30).
 const MAX_RADIUS: usize = 30;
@@ -67,9 +68,16 @@ pub(crate) fn gaussian_weight_table(size: u32, sigma: f32) -> F32WeightTable {
 /// In-place Gaussian blur of an f32 buffer (width × height × channels).
 ///
 /// Uses separable H+V passes with SIMD-accelerated convolution.
-pub(crate) fn blur_f32(data: &mut [f32], width: u32, height: u32, channels: usize, sigma: f32) {
+pub(crate) fn blur_f32(
+    data: &mut [f32],
+    width: u32,
+    height: u32,
+    channels: usize,
+    sigma: f32,
+    stop: &dyn Stop,
+) -> Result<(), StopReason> {
     if sigma <= 0.0 || width == 0 || height == 0 {
-        return;
+        return Ok(());
     }
     let w = width as usize;
     let h = height as usize;
@@ -92,6 +100,9 @@ pub(crate) fn blur_f32(data: &mut [f32], width: u32, height: u32, channels: usiz
 
     // === Horizontal pass ===
     for y in 0..h {
+        if y & 31 == 0 {
+            stop.check()?;
+        }
         let in_start = y * row_len;
         padded_row[..row_len].copy_from_slice(&data[in_start..in_start + row_len]);
         // Trailing padding is already zero from allocation (and stays zero).
@@ -108,6 +119,9 @@ pub(crate) fn blur_f32(data: &mut [f32], width: u32, height: u32, channels: usiz
     let mut row_ptrs: Vec<&[f32]> = Vec::with_capacity(max_taps);
 
     for out_y in 0..h {
+        if out_y & 31 == 0 {
+            stop.check()?;
+        }
         let left = v_weights.left[out_y];
         let tap_count = v_weights.tap_count(out_y);
         let weights = v_weights.weights(out_y);
@@ -126,15 +140,23 @@ pub(crate) fn blur_f32(data: &mut [f32], width: u32, height: u32, channels: usiz
             weights,
         );
     }
+    Ok(())
 }
 
 /// In-place Gaussian blur of a u8 buffer (width × height × channels).
 ///
 /// Converts to f32, blurs, converts back. The blur operates in the same
 /// color space as the input (typically sRGB gamma).
-pub(crate) fn blur_u8(data: &mut [u8], width: u32, height: u32, channels: usize, sigma: f32) {
+pub(crate) fn blur_u8(
+    data: &mut [u8],
+    width: u32,
+    height: u32,
+    channels: usize,
+    sigma: f32,
+    stop: &dyn Stop,
+) -> Result<(), StopReason> {
     if sigma <= 0.0 || width == 0 || height == 0 {
-        return;
+        return Ok(());
     }
     let len = (width as usize)
         .checked_mul(height as usize)
@@ -146,10 +168,12 @@ pub(crate) fn blur_u8(data: &mut [u8], width: u32, height: u32, channels: usize,
     simd::u8_to_f32_row(&data[..len], &mut f32_buf);
 
     // Blur in f32
-    blur_f32(&mut f32_buf, width, height, channels, sigma);
+    blur_f32(&mut f32_buf, width, height, channels, sigma, stop)?;
 
     // Convert f32 → u8
+    stop.check()?;
     simd::f32_to_u8_row(&f32_buf, &mut data[..len]);
+    Ok(())
 }
 
 /// In-place unsharp mask of a u8 buffer (width × height × channels).
@@ -166,9 +190,10 @@ pub(crate) fn unsharp_mask_u8(
     channels: usize,
     amount: f32,
     sigma: f32,
-) {
+    stop: &dyn Stop,
+) -> Result<(), StopReason> {
     if amount <= 0.0 || sigma <= 0.0 || width == 0 || height == 0 {
-        return;
+        return Ok(());
     }
     let len = (width as usize)
         .checked_mul(height as usize)
@@ -181,16 +206,20 @@ pub(crate) fn unsharp_mask_u8(
 
     // Blur a copy
     let mut blurred = original.clone();
-    blur_f32(&mut blurred, width, height, channels, sigma);
+    blur_f32(&mut blurred, width, height, channels, sigma, stop)?;
 
     // sharp = original + amount * (original - blurred), clamped to [0, 1]
     for i in 0..len {
+        if i & 0x3FFFFF == 0 {
+            stop.check()?;
+        }
         let v = original[i] + amount * (original[i] - blurred[i]);
         original[i] = v.clamp(0.0, 1.0);
     }
 
     // Convert f32 → u8
     simd::f32_to_u8_row(&original, &mut data[..len]);
+    Ok(())
 }
 
 /// In-place unsharp mask of an f32 buffer (width × height × channels).
@@ -203,9 +232,10 @@ pub(crate) fn unsharp_mask_f32(
     channels: usize,
     amount: f32,
     sigma: f32,
-) {
+    stop: &dyn Stop,
+) -> Result<(), StopReason> {
     if amount <= 0.0 || sigma <= 0.0 || width == 0 || height == 0 {
-        return;
+        return Ok(());
     }
     let len = (width as usize)
         .checked_mul(height as usize)
@@ -214,12 +244,16 @@ pub(crate) fn unsharp_mask_f32(
 
     // Blur a copy
     let mut blurred = data[..len].to_vec();
-    blur_f32(&mut blurred, width, height, channels, sigma);
+    blur_f32(&mut blurred, width, height, channels, sigma, stop)?;
 
     // sharp = original + amount * (original - blurred)
     for i in 0..len {
+        if i & 0x3FFFFF == 0 {
+            stop.check()?;
+        }
         data[i] = (data[i] + amount * (data[i] - blurred[i])).clamp(0.0, 1.0);
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -263,7 +297,7 @@ mod tests {
         let original = data.clone();
 
         // sigma=0.1 means radius=ceil(0.3)=1, but center weight dominates
-        blur_f32(&mut data, w as u32, h as u32, ch, 0.1);
+        blur_f32(&mut data, w as u32, h as u32, ch, 0.1, &enough::Unstoppable).unwrap();
 
         let max_diff: f32 = data
             .iter()
@@ -279,7 +313,7 @@ mod tests {
         let h = 16u32;
         let ch = 4usize;
         let mut data = vec![128u8; w as usize * h as usize * ch];
-        blur_u8(&mut data, w, h, ch, 1.5);
+        blur_u8(&mut data, w, h, ch, 1.5, &enough::Unstoppable).unwrap();
         // Uniform input should stay uniform (or very close)
         for &v in &data {
             assert!(

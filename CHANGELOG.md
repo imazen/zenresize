@@ -16,6 +16,23 @@
   panicked on adversarial inputs; they now validate and surface errors.
 
 ### Added
+- **Cooperative cancellation on `Resizer`: `try_resize*` / `try_resize_*_into`
+  variants taking `stop: &dyn enough::Stop`.** All nine `*_into` methods now
+  have a fallible `try_` twin (`try_resize_into`, `try_resize_f32_into`,
+  `try_resize_u16_into`, and the six cross-format `try_resize_*_to_*_into`),
+  plus allocating `try_resize` / `try_resize_f32` / `try_resize_u16`. The token
+  is polled every 16 input rows in the push/drain loop, once after the row
+  drain, and inside the post-resize unsharp-mask and blur passes (which now
+  poll per-32-rows in `blur_f32`'s H and V passes and per-4M-elements in the
+  sharpen blend loop). The existing infallible methods delegate with
+  `Unstoppable` and are byte-identical — the golden-checksum suite (21 tests)
+  and the full 380-test suite are unchanged. New `enough` dependency
+  (`default-features = false`, `no_std`-safe). `StreamingResize` needs no
+  token: each `push_row`/`next_output_row` call bounds work to ~one output
+  row, so callers poll between calls. `resize_4ch`/`resize_3ch`/`resize_gray8`
+  in `imgref_impl` likewise poll between rows internally to the caller-owned
+  loop. A `CountdownStop` regression test proves mid-resize propagation and
+  cancelled-vs-infallible output parity.
 - Split README: `README.md` (GitHub, full badges + benchmarks) and a generated
   `README.crates.md` (crates.io, CI badge only) via `readme = "README.crates.md"`;
   `benchmarks/README.md` documents the fair-comparison methodology and pinned-commit
