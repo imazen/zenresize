@@ -191,11 +191,43 @@ impl<B: Background> Resizer<B> {
         output
     }
 
+    /// `resize` with cooperative cancellation — see [`try_resize_into`](Self::try_resize_into).
+    ///
+    /// # Errors
+    /// Returns [`enough::StopReason`] when `stop` fires mid-resize.
+    pub fn try_resize(
+        &mut self,
+        input: &[u8],
+        stop: &dyn enough::Stop,
+    ) -> Result<Vec<u8>, enough::StopReason> {
+        stop.check()?;
+        let len = self.config.total_output_len();
+        let mut output = proven::alloc_output::<u8>(len);
+        self.try_resize_into(input, &mut output, stop)?;
+        Ok(output)
+    }
+
     /// Resize a u8 image into a caller-provided buffer.
     ///
     /// # Panics
     /// Panics if the config uses `LinearF32` format.
     pub fn resize_into(&mut self, input: &[u8], output: &mut [u8]) {
+        self.try_resize_into(input, output, &enough::Unstoppable)
+            .expect("Unstoppable cannot cancel");
+    }
+
+    /// `resize_into` with cooperative cancellation: polls `stop` every 16
+    /// input rows and inside the post-resize sharpen/blur passes.
+    ///
+    /// # Errors
+    /// Returns [`enough::StopReason`] when `stop` fires; `output` may be
+    /// partially written and must not be used.
+    pub fn try_resize_into(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        stop: &dyn enough::Stop,
+    ) -> Result<(), enough::StopReason> {
         assert!(
             self.config.input.channel_type() == ChannelType::U8,
             "resize_into() requires Srgb8 format; use resize_f32_into() for LinearF32 or resize_u16_into() for Encoded16"
@@ -212,10 +244,16 @@ impl<B: Background> Resizer<B> {
         self.stream.reset();
         let mut out_y = 0usize;
         for y in 0..in_h {
+            if y & 15 == 0 {
+                stop.check()?;
+            }
             self.stream
                 .push_row(&input[y * in_stride..y * in_stride + in_row_len])
                 .expect("push_row failed in fullframe delegation");
             while let Some(row) = self.stream.next_output_row() {
+                if out_y & 15 == 0 {
+                    stop.check()?;
+                }
                 let start = out_y * out_row_len;
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
@@ -223,6 +261,9 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
+            if out_y & 15 == 0 {
+                stop.check()?;
+            }
             let row = self
                 .stream
                 .next_output_row()
@@ -232,6 +273,7 @@ impl<B: Background> Resizer<B> {
             out_y += 1;
         }
         debug_assert_eq!(out_y, out_h);
+        stop.check()?;
 
         // Post-resize sharpening (unsharp mask).
         if config.post_sharpen > 0.0 {
@@ -242,7 +284,8 @@ impl<B: Background> Resizer<B> {
                 channels,
                 config.post_sharpen,
                 config.post_sharpen * 0.5 + 0.5, // sigma scales with amount
-            );
+                stop,
+            )?;
         }
 
         // Post-resize blur (applies after sharpening).
@@ -253,8 +296,10 @@ impl<B: Background> Resizer<B> {
                 config.total_output_height(),
                 channels,
                 config.post_blur_sigma,
-            );
+                stop,
+            )?;
         }
+        Ok(())
     }
 
     /// Resize an f32 image, allocating and returning the output.
@@ -272,11 +317,43 @@ impl<B: Background> Resizer<B> {
         output
     }
 
+    /// `resize_f32` with cooperative cancellation — see [`try_resize_f32_into`](Self::try_resize_f32_into).
+    ///
+    /// # Errors
+    /// Returns [`enough::StopReason`] when `stop` fires mid-resize.
+    pub fn try_resize_f32(
+        &mut self,
+        input: &[f32],
+        stop: &dyn enough::Stop,
+    ) -> Result<Vec<f32>, enough::StopReason> {
+        stop.check()?;
+        let len = self.config.total_output_len();
+        let mut output = proven::alloc_output::<f32>(len);
+        self.try_resize_f32_into(input, &mut output, stop)?;
+        Ok(output)
+    }
+
     /// Resize an f32 image into a caller-provided buffer.
     ///
     /// # Panics
     /// Panics if the config uses `Srgb8` format.
     pub fn resize_f32_into(&mut self, input: &[f32], output: &mut [f32]) {
+        self.try_resize_f32_into(input, output, &enough::Unstoppable)
+            .expect("Unstoppable cannot cancel");
+    }
+
+    /// `resize_f32_into` with cooperative cancellation: polls `stop` every 16
+    /// input rows and inside the post-resize sharpen/blur passes.
+    ///
+    /// # Errors
+    /// Returns [`enough::StopReason`] when `stop` fires; `output` may be
+    /// partially written and must not be used.
+    pub fn try_resize_f32_into(
+        &mut self,
+        input: &[f32],
+        output: &mut [f32],
+        stop: &dyn enough::Stop,
+    ) -> Result<(), enough::StopReason> {
         assert!(
             self.config.input.channel_type() == ChannelType::F32,
             "resize_f32_into() requires LinearF32 format; use resize_into() for Srgb8 or resize_u16_into() for Encoded16"
@@ -292,10 +369,16 @@ impl<B: Background> Resizer<B> {
         self.stream.reset();
         let mut out_y = 0usize;
         for y in 0..in_h {
+            if y & 15 == 0 {
+                stop.check()?;
+            }
             self.stream
                 .push_row_f32(&input[y * in_stride..y * in_stride + in_row_len])
                 .expect("push_row_f32 failed in fullframe delegation");
             while let Some(row) = self.stream.next_output_row_f32() {
+                if out_y & 15 == 0 {
+                    stop.check()?;
+                }
                 let start = out_y * out_row_len;
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
@@ -303,6 +386,9 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
+            if out_y & 15 == 0 {
+                stop.check()?;
+            }
             let row = self
                 .stream
                 .next_output_row_f32()
@@ -312,6 +398,7 @@ impl<B: Background> Resizer<B> {
             out_y += 1;
         }
         debug_assert_eq!(out_y, out_h);
+        stop.check()?;
 
         // Post-resize sharpening (unsharp mask).
         if config.post_sharpen > 0.0 {
@@ -322,7 +409,8 @@ impl<B: Background> Resizer<B> {
                 out_channels,
                 config.post_sharpen,
                 config.post_sharpen * 0.5 + 0.5,
-            );
+                stop,
+            )?;
         }
 
         // Post-resize blur.
@@ -333,8 +421,10 @@ impl<B: Background> Resizer<B> {
                 config.total_output_height(),
                 out_channels,
                 config.post_blur_sigma,
-            );
+                stop,
+            )?;
         }
+        Ok(())
     }
 
     /// Resize a u16 image, allocating and returning the output.
@@ -355,11 +445,43 @@ impl<B: Background> Resizer<B> {
         output
     }
 
+    /// `resize_u16` with cooperative cancellation — see [`try_resize_u16_into`](Self::try_resize_u16_into).
+    ///
+    /// # Errors
+    /// Returns [`enough::StopReason`] when `stop` fires mid-resize.
+    pub fn try_resize_u16(
+        &mut self,
+        input: &[u16],
+        stop: &dyn enough::Stop,
+    ) -> Result<Vec<u16>, enough::StopReason> {
+        stop.check()?;
+        let len = self.config.total_output_len();
+        let mut output = proven::alloc_output::<u16>(len);
+        self.try_resize_u16_into(input, &mut output, stop)?;
+        Ok(output)
+    }
+
     /// Resize a u16 image into a caller-provided buffer.
     ///
     /// # Panics
     /// Panics if the config doesn't use `Encoded16` format.
     pub fn resize_u16_into(&mut self, input: &[u16], output: &mut [u16]) {
+        self.try_resize_u16_into(input, output, &enough::Unstoppable)
+            .expect("Unstoppable cannot cancel");
+    }
+
+    /// `resize_u16_into` with cooperative cancellation: polls `stop` every 16
+    /// input rows and inside the post-resize sharpen/blur passes.
+    ///
+    /// # Errors
+    /// Returns [`enough::StopReason`] when `stop` fires; `output` may be
+    /// partially written and must not be used.
+    pub fn try_resize_u16_into(
+        &mut self,
+        input: &[u16],
+        output: &mut [u16],
+        stop: &dyn enough::Stop,
+    ) -> Result<(), enough::StopReason> {
         assert!(
             self.config.input.channel_type() == ChannelType::U16,
             "resize_u16_into() requires Encoded16 format"
@@ -374,10 +496,16 @@ impl<B: Background> Resizer<B> {
         self.stream.reset();
         let mut out_y = 0usize;
         for y in 0..in_h {
+            if y & 15 == 0 {
+                stop.check()?;
+            }
             self.stream
                 .push_row_u16(&input[y * in_stride..y * in_stride + in_row_len])
                 .expect("push_row_u16 failed in fullframe delegation");
             while let Some(row) = self.stream.next_output_row_u16() {
+                if out_y & 15 == 0 {
+                    stop.check()?;
+                }
                 let start = out_y * out_row_len;
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
@@ -385,6 +513,9 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
+            if out_y & 15 == 0 {
+                stop.check()?;
+            }
             let row = self
                 .stream
                 .next_output_row_u16()
@@ -394,6 +525,8 @@ impl<B: Background> Resizer<B> {
             out_y += 1;
         }
         debug_assert_eq!(out_y, out_h);
+        stop.check()?;
+        Ok(())
     }
 
     // =========================================================================
@@ -418,6 +551,22 @@ impl<B: Background> Resizer<B> {
 
     /// Resize u8 input to f32 output into a caller-provided buffer.
     pub fn resize_u8_to_f32_into(&mut self, input: &[u8], output: &mut [f32]) {
+        self.try_resize_u8_to_f32_into(input, output, &enough::Unstoppable)
+            .expect("Unstoppable cannot cancel");
+    }
+
+    /// `resize_u8_to_f32_into` with cooperative cancellation: polls `stop` every 16
+    /// input rows and inside the post-resize sharpen/blur passes.
+    ///
+    /// # Errors
+    /// Returns [`enough::StopReason`] when `stop` fires; `output` may be
+    /// partially written and must not be used.
+    pub fn try_resize_u8_to_f32_into(
+        &mut self,
+        input: &[u8],
+        output: &mut [f32],
+        stop: &dyn enough::Stop,
+    ) -> Result<(), enough::StopReason> {
         assert!(
             self.config.input.channel_type() == ChannelType::U8,
             "input must be u8"
@@ -436,10 +585,16 @@ impl<B: Background> Resizer<B> {
         self.stream.reset();
         let mut out_y = 0usize;
         for y in 0..in_h {
+            if y & 15 == 0 {
+                stop.check()?;
+            }
             self.stream
                 .push_row(&input[y * in_stride..y * in_stride + in_row_len])
                 .expect("push_row failed in cross-format resize");
             while let Some(row) = self.stream.next_output_row_f32() {
+                if out_y & 15 == 0 {
+                    stop.check()?;
+                }
                 let start = out_y * out_row_len;
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
@@ -447,6 +602,9 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
+            if out_y & 15 == 0 {
+                stop.check()?;
+            }
             let row = self
                 .stream
                 .next_output_row_f32()
@@ -456,6 +614,8 @@ impl<B: Background> Resizer<B> {
             out_y += 1;
         }
         debug_assert_eq!(out_y, out_h);
+        stop.check()?;
+        Ok(())
     }
 
     /// Resize f32 input to u8 output, allocating and returning the output.
@@ -476,6 +636,22 @@ impl<B: Background> Resizer<B> {
 
     /// Resize f32 input to u8 output into a caller-provided buffer.
     pub fn resize_f32_to_u8_into(&mut self, input: &[f32], output: &mut [u8]) {
+        self.try_resize_f32_to_u8_into(input, output, &enough::Unstoppable)
+            .expect("Unstoppable cannot cancel");
+    }
+
+    /// `resize_f32_to_u8_into` with cooperative cancellation: polls `stop` every 16
+    /// input rows and inside the post-resize sharpen/blur passes.
+    ///
+    /// # Errors
+    /// Returns [`enough::StopReason`] when `stop` fires; `output` may be
+    /// partially written and must not be used.
+    pub fn try_resize_f32_to_u8_into(
+        &mut self,
+        input: &[f32],
+        output: &mut [u8],
+        stop: &dyn enough::Stop,
+    ) -> Result<(), enough::StopReason> {
         assert!(
             self.config.input.channel_type() == ChannelType::F32,
             "input must be f32"
@@ -494,10 +670,16 @@ impl<B: Background> Resizer<B> {
         self.stream.reset();
         let mut out_y = 0usize;
         for y in 0..in_h {
+            if y & 15 == 0 {
+                stop.check()?;
+            }
             self.stream
                 .push_row_f32(&input[y * in_stride..y * in_stride + in_row_len])
                 .expect("push_row_f32 failed in cross-format resize");
             while let Some(row) = self.stream.next_output_row() {
+                if out_y & 15 == 0 {
+                    stop.check()?;
+                }
                 let start = out_y * out_row_len;
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
@@ -505,6 +687,9 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
+            if out_y & 15 == 0 {
+                stop.check()?;
+            }
             let row = self
                 .stream
                 .next_output_row()
@@ -514,6 +699,8 @@ impl<B: Background> Resizer<B> {
             out_y += 1;
         }
         debug_assert_eq!(out_y, out_h);
+        stop.check()?;
+        Ok(())
     }
 
     /// Resize u8 input to u16 output, allocating and returning the output.
@@ -534,6 +721,22 @@ impl<B: Background> Resizer<B> {
 
     /// Resize u8 input to u16 output into a caller-provided buffer.
     pub fn resize_u8_to_u16_into(&mut self, input: &[u8], output: &mut [u16]) {
+        self.try_resize_u8_to_u16_into(input, output, &enough::Unstoppable)
+            .expect("Unstoppable cannot cancel");
+    }
+
+    /// `resize_u8_to_u16_into` with cooperative cancellation: polls `stop` every 16
+    /// input rows and inside the post-resize sharpen/blur passes.
+    ///
+    /// # Errors
+    /// Returns [`enough::StopReason`] when `stop` fires; `output` may be
+    /// partially written and must not be used.
+    pub fn try_resize_u8_to_u16_into(
+        &mut self,
+        input: &[u8],
+        output: &mut [u16],
+        stop: &dyn enough::Stop,
+    ) -> Result<(), enough::StopReason> {
         assert!(
             self.config.input.channel_type() == ChannelType::U8,
             "input must be u8"
@@ -552,10 +755,16 @@ impl<B: Background> Resizer<B> {
         self.stream.reset();
         let mut out_y = 0usize;
         for y in 0..in_h {
+            if y & 15 == 0 {
+                stop.check()?;
+            }
             self.stream
                 .push_row(&input[y * in_stride..y * in_stride + in_row_len])
                 .expect("push_row failed in cross-format resize");
             while let Some(row) = self.stream.next_output_row_u16() {
+                if out_y & 15 == 0 {
+                    stop.check()?;
+                }
                 let start = out_y * out_row_len;
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
@@ -563,6 +772,9 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
+            if out_y & 15 == 0 {
+                stop.check()?;
+            }
             let row = self
                 .stream
                 .next_output_row_u16()
@@ -572,6 +784,8 @@ impl<B: Background> Resizer<B> {
             out_y += 1;
         }
         debug_assert_eq!(out_y, out_h);
+        stop.check()?;
+        Ok(())
     }
 
     /// Resize u16 input to u8 output, allocating and returning the output.
@@ -592,6 +806,22 @@ impl<B: Background> Resizer<B> {
 
     /// Resize u16 input to u8 output into a caller-provided buffer.
     pub fn resize_u16_to_u8_into(&mut self, input: &[u16], output: &mut [u8]) {
+        self.try_resize_u16_to_u8_into(input, output, &enough::Unstoppable)
+            .expect("Unstoppable cannot cancel");
+    }
+
+    /// `resize_u16_to_u8_into` with cooperative cancellation: polls `stop` every 16
+    /// input rows and inside the post-resize sharpen/blur passes.
+    ///
+    /// # Errors
+    /// Returns [`enough::StopReason`] when `stop` fires; `output` may be
+    /// partially written and must not be used.
+    pub fn try_resize_u16_to_u8_into(
+        &mut self,
+        input: &[u16],
+        output: &mut [u8],
+        stop: &dyn enough::Stop,
+    ) -> Result<(), enough::StopReason> {
         assert!(
             self.config.input.channel_type() == ChannelType::U16,
             "input must be u16"
@@ -610,10 +840,16 @@ impl<B: Background> Resizer<B> {
         self.stream.reset();
         let mut out_y = 0usize;
         for y in 0..in_h {
+            if y & 15 == 0 {
+                stop.check()?;
+            }
             self.stream
                 .push_row_u16(&input[y * in_stride..y * in_stride + in_row_len])
                 .expect("push_row_u16 failed in cross-format resize");
             while let Some(row) = self.stream.next_output_row() {
+                if out_y & 15 == 0 {
+                    stop.check()?;
+                }
                 let start = out_y * out_row_len;
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
@@ -621,6 +857,9 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
+            if out_y & 15 == 0 {
+                stop.check()?;
+            }
             let row = self
                 .stream
                 .next_output_row()
@@ -630,6 +869,8 @@ impl<B: Background> Resizer<B> {
             out_y += 1;
         }
         debug_assert_eq!(out_y, out_h);
+        stop.check()?;
+        Ok(())
     }
 
     /// Resize u16 input to f32 output, allocating and returning the output.
@@ -650,6 +891,22 @@ impl<B: Background> Resizer<B> {
 
     /// Resize u16 input to f32 output into a caller-provided buffer.
     pub fn resize_u16_to_f32_into(&mut self, input: &[u16], output: &mut [f32]) {
+        self.try_resize_u16_to_f32_into(input, output, &enough::Unstoppable)
+            .expect("Unstoppable cannot cancel");
+    }
+
+    /// `resize_u16_to_f32_into` with cooperative cancellation: polls `stop` every 16
+    /// input rows and inside the post-resize sharpen/blur passes.
+    ///
+    /// # Errors
+    /// Returns [`enough::StopReason`] when `stop` fires; `output` may be
+    /// partially written and must not be used.
+    pub fn try_resize_u16_to_f32_into(
+        &mut self,
+        input: &[u16],
+        output: &mut [f32],
+        stop: &dyn enough::Stop,
+    ) -> Result<(), enough::StopReason> {
         assert!(
             self.config.input.channel_type() == ChannelType::U16,
             "input must be u16"
@@ -668,10 +925,16 @@ impl<B: Background> Resizer<B> {
         self.stream.reset();
         let mut out_y = 0usize;
         for y in 0..in_h {
+            if y & 15 == 0 {
+                stop.check()?;
+            }
             self.stream
                 .push_row_u16(&input[y * in_stride..y * in_stride + in_row_len])
                 .expect("push_row_u16 failed in cross-format resize");
             while let Some(row) = self.stream.next_output_row_f32() {
+                if out_y & 15 == 0 {
+                    stop.check()?;
+                }
                 let start = out_y * out_row_len;
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
@@ -679,6 +942,9 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
+            if out_y & 15 == 0 {
+                stop.check()?;
+            }
             let row = self
                 .stream
                 .next_output_row_f32()
@@ -688,6 +954,8 @@ impl<B: Background> Resizer<B> {
             out_y += 1;
         }
         debug_assert_eq!(out_y, out_h);
+        stop.check()?;
+        Ok(())
     }
 
     /// Resize f32 input to u16 output, allocating and returning the output.
@@ -708,6 +976,22 @@ impl<B: Background> Resizer<B> {
 
     /// Resize f32 input to u16 output into a caller-provided buffer.
     pub fn resize_f32_to_u16_into(&mut self, input: &[f32], output: &mut [u16]) {
+        self.try_resize_f32_to_u16_into(input, output, &enough::Unstoppable)
+            .expect("Unstoppable cannot cancel");
+    }
+
+    /// `resize_f32_to_u16_into` with cooperative cancellation: polls `stop` every 16
+    /// input rows and inside the post-resize sharpen/blur passes.
+    ///
+    /// # Errors
+    /// Returns [`enough::StopReason`] when `stop` fires; `output` may be
+    /// partially written and must not be used.
+    pub fn try_resize_f32_to_u16_into(
+        &mut self,
+        input: &[f32],
+        output: &mut [u16],
+        stop: &dyn enough::Stop,
+    ) -> Result<(), enough::StopReason> {
         assert!(
             self.config.input.channel_type() == ChannelType::F32,
             "input must be f32"
@@ -726,10 +1010,16 @@ impl<B: Background> Resizer<B> {
         self.stream.reset();
         let mut out_y = 0usize;
         for y in 0..in_h {
+            if y & 15 == 0 {
+                stop.check()?;
+            }
             self.stream
                 .push_row_f32(&input[y * in_stride..y * in_stride + in_row_len])
                 .expect("push_row_f32 failed in cross-format resize");
             while let Some(row) = self.stream.next_output_row_u16() {
+                if out_y & 15 == 0 {
+                    stop.check()?;
+                }
                 let start = out_y * out_row_len;
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
@@ -737,6 +1027,9 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
+            if out_y & 15 == 0 {
+                stop.check()?;
+            }
             let row = self
                 .stream
                 .next_output_row_u16()
@@ -746,6 +1039,8 @@ impl<B: Background> Resizer<B> {
             out_y += 1;
         }
         debug_assert_eq!(out_y, out_h);
+        stop.check()?;
+        Ok(())
     }
 }
 
@@ -2005,5 +2300,76 @@ mod tests {
         }
         let output = resize_hfirst_streaming(&cfg, &input).expect("normal resize must succeed");
         assert_eq!(output.len(), 10 * 10 * 4);
+    }
+
+    /// A token that fires after `budget` checks — proves `try_resize*`
+    /// propagates cancellation rather than completing the resize.
+    struct CountdownStop {
+        remaining: core::sync::atomic::AtomicUsize,
+    }
+
+    impl enough::Stop for CountdownStop {
+        fn check(&self) -> Result<(), enough::StopReason> {
+            if self
+                .remaining
+                .fetch_sub(1, core::sync::atomic::Ordering::Relaxed)
+                == 0
+            {
+                return Err(enough::StopReason::Cancelled);
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn try_resize_into_cancels_mid_resize() {
+        let cfg = test_config(512, 512, 256, 256);
+        let mut resizer = Resizer::new(&cfg);
+        let input = vec![128u8; 512 * 512 * 4];
+        let mut output = vec![0u8; 256 * 256 * 4];
+
+        // 512 input rows polled every 16 -> ~33 polls; fire on the 10th.
+        let stop = CountdownStop {
+            remaining: core::sync::atomic::AtomicUsize::new(10),
+        };
+        let result = resizer.try_resize_into(&input, &mut output, &stop);
+        assert_eq!(result, Err(enough::StopReason::Cancelled));
+
+        // And the allocating variant propagates the same error.
+        let mut resizer = Resizer::new(&cfg);
+        let stop = CountdownStop {
+            remaining: core::sync::atomic::AtomicUsize::new(1),
+        };
+        assert_eq!(
+            resizer.try_resize(&input, &stop),
+            Err(enough::StopReason::Cancelled)
+        );
+
+        // A generous token completes and matches the infallible path.
+        let mut resizer = Resizer::new(&cfg);
+        let stop = CountdownStop {
+            remaining: core::sync::atomic::AtomicUsize::new(1_000_000),
+        };
+        let mut output2 = vec![0u8; 256 * 256 * 4];
+        resizer
+            .try_resize_into(&input, &mut output2, &stop)
+            .expect("unfired token must complete");
+        let mut resizer = Resizer::new(&cfg);
+        resizer.resize_into(&input, &mut output);
+        assert_eq!(output, output2, "cancelled-path output must be identical");
+    }
+    #[test]
+    fn cancellation_is_polled_when_one_input_row_expands_to_many_output_rows() {
+        let cfg = test_config(1, 1, 1, 2048);
+        let mut resizer = Resizer::new(&cfg);
+        let input = [128u8; 4];
+        let mut output = vec![0u8; 2048 * 4];
+        let stop = CountdownStop {
+            remaining: core::sync::atomic::AtomicUsize::new(4),
+        };
+        assert_eq!(
+            resizer.try_resize_into(&input, &mut output, &stop),
+            Err(enough::StopReason::Cancelled)
+        );
     }
 }

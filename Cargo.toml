@@ -30,6 +30,7 @@ archmage = { version = "0.9.26", default-features = false, features = ["macros"]
 # F16C on x86-64-v3, NEON-fp16 on aarch64, branchless software elsewhere).
 magetypes = { version = "0.9.26", default-features = false }
 linear-srgb = { version = "0.6.11", default-features = false, features = ["transfer"] }
+enough = { version = "0.4", default-features = false }
 safe_unaligned_simd = "0.2.5"
 zenpixels = { version = ">=0.2.10, <0.4.0", default-features = false }
 imgref = "1.12"
