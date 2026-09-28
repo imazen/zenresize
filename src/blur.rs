@@ -209,12 +209,12 @@ pub(crate) fn unsharp_mask_u8(
     blur_f32(&mut blurred, width, height, channels, sigma, stop)?;
 
     // sharp = original + amount * (original - blurred), clamped to [0, 1]
-    for i in 0..len {
-        if i & 0x3FFFFF == 0 {
-            stop.check()?;
+    for (original, blurred) in original.chunks_mut(1 << 18).zip(blurred.chunks(1 << 18)) {
+        stop.check()?;
+        for (original, &blurred) in original.iter_mut().zip(blurred) {
+            let v = *original + amount * (*original - blurred);
+            *original = v.clamp(0.0, 1.0);
         }
-        let v = original[i] + amount * (original[i] - blurred[i]);
-        original[i] = v.clamp(0.0, 1.0);
     }
 
     // Convert f32 → u8
@@ -247,11 +247,11 @@ pub(crate) fn unsharp_mask_f32(
     blur_f32(&mut blurred, width, height, channels, sigma, stop)?;
 
     // sharp = original + amount * (original - blurred)
-    for i in 0..len {
-        if i & 0x3FFFFF == 0 {
-            stop.check()?;
+    for (data, blurred) in data[..len].chunks_mut(1 << 18).zip(blurred.chunks(1 << 18)) {
+        stop.check()?;
+        for (data, &blurred) in data.iter_mut().zip(blurred) {
+            *data = (*data + amount * (*data - blurred)).clamp(0.0, 1.0);
         }
-        data[i] = (data[i] + amount * (data[i] - blurred[i])).clamp(0.0, 1.0);
     }
     Ok(())
 }

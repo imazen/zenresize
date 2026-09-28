@@ -200,6 +200,7 @@ impl<B: Background> Resizer<B> {
         input: &[u8],
         stop: &dyn enough::Stop,
     ) -> Result<Vec<u8>, enough::StopReason> {
+        stop.check()?;
         let len = self.config.total_output_len();
         let mut output = proven::alloc_output::<u8>(len);
         self.try_resize_into(input, &mut output, stop)?;
@@ -319,6 +320,7 @@ impl<B: Background> Resizer<B> {
         input: &[f32],
         stop: &dyn enough::Stop,
     ) -> Result<Vec<f32>, enough::StopReason> {
+        stop.check()?;
         let len = self.config.total_output_len();
         let mut output = proven::alloc_output::<f32>(len);
         self.try_resize_f32_into(input, &mut output, stop)?;
@@ -440,6 +442,7 @@ impl<B: Background> Resizer<B> {
         input: &[u16],
         stop: &dyn enough::Stop,
     ) -> Result<Vec<u16>, enough::StopReason> {
+        stop.check()?;
         let len = self.config.total_output_len();
         let mut output = proven::alloc_output::<u16>(len);
         self.try_resize_u16_into(input, &mut output, stop)?;
