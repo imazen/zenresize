@@ -251,6 +251,9 @@ impl<B: Background> Resizer<B> {
                 .push_row(&input[y * in_stride..y * in_stride + in_row_len])
                 .expect("push_row failed in fullframe delegation");
             while let Some(row) = self.stream.next_output_row() {
+                if out_y & 15 == 0 {
+                    stop.check()?;
+                }
                 let start = out_y * out_row_len;
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
@@ -258,6 +261,9 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
+            if out_y & 15 == 0 {
+                stop.check()?;
+            }
             let row = self
                 .stream
                 .next_output_row()
@@ -370,6 +376,9 @@ impl<B: Background> Resizer<B> {
                 .push_row_f32(&input[y * in_stride..y * in_stride + in_row_len])
                 .expect("push_row_f32 failed in fullframe delegation");
             while let Some(row) = self.stream.next_output_row_f32() {
+                if out_y & 15 == 0 {
+                    stop.check()?;
+                }
                 let start = out_y * out_row_len;
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
@@ -377,6 +386,9 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
+            if out_y & 15 == 0 {
+                stop.check()?;
+            }
             let row = self
                 .stream
                 .next_output_row_f32()
@@ -491,6 +503,9 @@ impl<B: Background> Resizer<B> {
                 .push_row_u16(&input[y * in_stride..y * in_stride + in_row_len])
                 .expect("push_row_u16 failed in fullframe delegation");
             while let Some(row) = self.stream.next_output_row_u16() {
+                if out_y & 15 == 0 {
+                    stop.check()?;
+                }
                 let start = out_y * out_row_len;
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
@@ -498,6 +513,9 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
+            if out_y & 15 == 0 {
+                stop.check()?;
+            }
             let row = self
                 .stream
                 .next_output_row_u16()
@@ -574,6 +592,9 @@ impl<B: Background> Resizer<B> {
                 .push_row(&input[y * in_stride..y * in_stride + in_row_len])
                 .expect("push_row failed in cross-format resize");
             while let Some(row) = self.stream.next_output_row_f32() {
+                if out_y & 15 == 0 {
+                    stop.check()?;
+                }
                 let start = out_y * out_row_len;
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
@@ -581,6 +602,9 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
+            if out_y & 15 == 0 {
+                stop.check()?;
+            }
             let row = self
                 .stream
                 .next_output_row_f32()
@@ -653,6 +677,9 @@ impl<B: Background> Resizer<B> {
                 .push_row_f32(&input[y * in_stride..y * in_stride + in_row_len])
                 .expect("push_row_f32 failed in cross-format resize");
             while let Some(row) = self.stream.next_output_row() {
+                if out_y & 15 == 0 {
+                    stop.check()?;
+                }
                 let start = out_y * out_row_len;
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
@@ -660,6 +687,9 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
+            if out_y & 15 == 0 {
+                stop.check()?;
+            }
             let row = self
                 .stream
                 .next_output_row()
@@ -732,6 +762,9 @@ impl<B: Background> Resizer<B> {
                 .push_row(&input[y * in_stride..y * in_stride + in_row_len])
                 .expect("push_row failed in cross-format resize");
             while let Some(row) = self.stream.next_output_row_u16() {
+                if out_y & 15 == 0 {
+                    stop.check()?;
+                }
                 let start = out_y * out_row_len;
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
@@ -739,6 +772,9 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
+            if out_y & 15 == 0 {
+                stop.check()?;
+            }
             let row = self
                 .stream
                 .next_output_row_u16()
@@ -811,6 +847,9 @@ impl<B: Background> Resizer<B> {
                 .push_row_u16(&input[y * in_stride..y * in_stride + in_row_len])
                 .expect("push_row_u16 failed in cross-format resize");
             while let Some(row) = self.stream.next_output_row() {
+                if out_y & 15 == 0 {
+                    stop.check()?;
+                }
                 let start = out_y * out_row_len;
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
@@ -818,6 +857,9 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
+            if out_y & 15 == 0 {
+                stop.check()?;
+            }
             let row = self
                 .stream
                 .next_output_row()
@@ -890,6 +932,9 @@ impl<B: Background> Resizer<B> {
                 .push_row_u16(&input[y * in_stride..y * in_stride + in_row_len])
                 .expect("push_row_u16 failed in cross-format resize");
             while let Some(row) = self.stream.next_output_row_f32() {
+                if out_y & 15 == 0 {
+                    stop.check()?;
+                }
                 let start = out_y * out_row_len;
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
@@ -897,6 +942,9 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
+            if out_y & 15 == 0 {
+                stop.check()?;
+            }
             let row = self
                 .stream
                 .next_output_row_f32()
@@ -969,6 +1017,9 @@ impl<B: Background> Resizer<B> {
                 .push_row_f32(&input[y * in_stride..y * in_stride + in_row_len])
                 .expect("push_row_f32 failed in cross-format resize");
             while let Some(row) = self.stream.next_output_row_u16() {
+                if out_y & 15 == 0 {
+                    stop.check()?;
+                }
                 let start = out_y * out_row_len;
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
@@ -976,6 +1027,9 @@ impl<B: Background> Resizer<B> {
         }
         let remaining = self.stream.finish();
         for _ in 0..remaining {
+            if out_y & 15 == 0 {
+                stop.check()?;
+            }
             let row = self
                 .stream
                 .next_output_row_u16()
@@ -2303,5 +2357,19 @@ mod tests {
         let mut resizer = Resizer::new(&cfg);
         resizer.resize_into(&input, &mut output);
         assert_eq!(output, output2, "cancelled-path output must be identical");
+    }
+    #[test]
+    fn cancellation_is_polled_when_one_input_row_expands_to_many_output_rows() {
+        let cfg = test_config(1, 1, 1, 2048);
+        let mut resizer = Resizer::new(&cfg);
+        let input = [128u8; 4];
+        let mut output = vec![0u8; 2048 * 4];
+        let stop = CountdownStop {
+            remaining: core::sync::atomic::AtomicUsize::new(4),
+        };
+        assert_eq!(
+            resizer.try_resize_into(&input, &mut output, &stop),
+            Err(enough::StopReason::Cancelled)
+        );
     }
 }
