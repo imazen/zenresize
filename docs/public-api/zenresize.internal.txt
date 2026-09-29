@@ -9,10 +9,10 @@
 
 ## summary
 #
-#   pub modules                                 4
+#   pub modules                                 5
 #   pub types (struct/enum/trait/alias)         5
 #   pub consts/statics                          2
-#   free functions                              2
+#   free functions                             31
 #   inherent methods                           46
 #   struct fields                              16
 #   enum variants                              62
@@ -27,10 +27,10 @@
 #   filter                           61
 #   fit                               1
 #   plane                             1
-#   simd                              2
+#   simd                             32
 #   weights                          24
 
-## items (144 lines)
+## items (174 lines)
 
 #[non_exhaustive] #[repr(u8)] pub enum Filter [also: filter]
 pub const weights::I16_PRECISION: i32
@@ -65,6 +65,35 @@ pub fn filter::InterpolationDetails::with_lobe_ratio(self, f32) -> Self
 pub fn filter::InterpolationDetails::with_sharpen_percent(self, f32) -> Self
 pub fn fit::FitMode::assert_fields_are_eq(&self)
 pub fn plane::PlaneResizer::new(filter::Filter, u32, u32, u32, u32) -> Self
+pub fn simd::__bench_kernels::f16_to_f32_row(&[u16], &mut [f32])
+pub fn simd::__bench_kernels::f32_to_f16_row(&[f32], &mut [u16])
+pub fn simd::__bench_kernels::f32_to_u8_row(&[f32], &mut [u8])
+pub fn simd::__bench_kernels::filter_h_i16_i16(&[i16], &mut [i16], &weights::I16WeightTable, usize)
+pub fn simd::__bench_kernels::filter_h_row_f32(&[f32], &mut [f32], &weights::F32WeightTable, usize)
+pub fn simd::__bench_kernels::filter_h_row_f32_to_f16(&[f32], &mut [u16], &weights::F32WeightTable, usize)
+pub fn simd::__bench_kernels::filter_h_u8_i16(&[u8], &mut [u8], &weights::I16WeightTable, usize)
+pub fn simd::__bench_kernels::filter_h_u8_i16_4rows(&[u8], &[u8], &[u8], &[u8], &mut [u8], &mut [u8], &mut [u8], &mut [u8], &weights::I16WeightTable)
+pub fn simd::__bench_kernels::filter_h_u8_to_i16(&[u8], &mut [i16], &weights::I16WeightTable, usize)
+pub fn simd::__bench_kernels::filter_h_u8_to_i16_4rows(&[u8], &[u8], &[u8], &[u8], &mut [i16], &mut [i16], &mut [i16], &mut [i16], &weights::I16WeightTable)
+pub fn simd::__bench_kernels::filter_v_all_f16(&[u16], &mut [f32], usize, usize, usize, &weights::F32WeightTable)
+pub fn simd::__bench_kernels::filter_v_all_i16_i16(&[i16], &mut [i16], usize, usize, usize, &weights::I16WeightTable)
+pub fn simd::__bench_kernels::filter_v_row_f16(&[&[u16]], &mut [f32], &[f32])
+pub fn simd::__bench_kernels::filter_v_row_f32(&[&[f32]], &mut [f32], &[f32])
+pub fn simd::__bench_kernels::filter_v_row_i16(&[&[i16]], &mut [i16], &[i16])
+pub fn simd::__bench_kernels::filter_v_row_u8_i16(&[&[u8]], &mut [u8], &[i16])
+pub fn simd::__bench_kernels::hlg_to_linear_row(&mut [f32], usize, bool)
+pub fn simd::__bench_kernels::linear_f32_to_srgb_u8(&[f32], &mut [u8], usize, bool)
+pub fn simd::__bench_kernels::pq_to_linear_row(&mut [f32], usize, bool)
+pub fn simd::__bench_kernels::premultiply_alpha_row(&mut [f32])
+pub fn simd::__bench_kernels::premultiply_u8_row(&[u8], &mut [u8])
+pub fn simd::__bench_kernels::srgb_from_linear_row(&mut [f32], usize, bool)
+pub fn simd::__bench_kernels::srgb_to_linear_row(&mut [f32], usize, bool)
+pub fn simd::__bench_kernels::srgb_u8_to_linear_f32(&[u8], &mut [f32], usize, bool)
+pub fn simd::__bench_kernels::srgb_u8_to_linear_premultiply_f32(&[u8], &mut [f32])
+pub fn simd::__bench_kernels::u8_to_f32_premultiply_row(&[u8], &mut [f32])
+pub fn simd::__bench_kernels::u8_to_f32_row(&[u8], &mut [f32])
+pub fn simd::__bench_kernels::unpremultiply_alpha_row(&mut [f32])
+pub fn simd::__bench_kernels::unpremultiply_u8_row(&mut [u8])
 pub fn simd::filter_v_all_u8_i16(&[u8], &mut [u8], usize, usize, usize, &weights::I16WeightTable)
 pub fn simd::filter_v_all_u8_i16_tiled(&[u8], &mut [u8], usize, usize, usize, &weights::I16WeightTable, usize)
 pub fn weights::F32WeightTable::clone(&self) -> weights::F32WeightTable
@@ -86,6 +115,7 @@ pub fn weights::I16WeightTable::weights_padded(&self, usize) -> &[i16]
 pub mod fastmath
 pub mod filter
 pub mod simd
+pub mod simd::__bench_kernels
 pub mod weights
 pub struct filter::InterpolationDetails
 pub struct weights::F32WeightTable

@@ -227,6 +227,27 @@ impl<B: Background> Resizer<B> {
         output: &mut [u8],
         stop: &dyn enough::Stop,
     ) -> Result<(), enough::StopReason> {
+        self.try_resize_into_with_progress(input, output, stop, &howfar::IgnoreProgress)
+    }
+
+    /// Resize u8 pixels and report each completed output row.
+    ///
+    /// The caller can use `howfar::IgnoreProgress` or a shared reporter from
+    /// `howfar-along`. The total for this resize phase is
+    /// `config.total_output_height()`. Post-resize sharpen and blur are outside
+    /// this row count and need their own phases if enabled. Cancellation is
+    /// checked at the same points as [`try_resize_into`](Self::try_resize_into).
+    ///
+    /// # Errors
+    /// Returns [`enough::StopReason`] when `stop` fires. Already completed rows
+    /// remain reported; `output` may be partially written and must not be used.
+    pub fn try_resize_into_with_progress<R: howfar::Report + ?Sized>(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        stop: &dyn enough::Stop,
+        progress: &R,
+    ) -> Result<(), enough::StopReason> {
         assert!(
             self.config.input.channel_type() == ChannelType::U8,
             "resize_into() requires Srgb8 format; use resize_f32_into() for LinearF32 or resize_u16_into() for Encoded16"
@@ -253,6 +274,7 @@ impl<B: Background> Resizer<B> {
                 let start = out_y * out_row_len;
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
+                progress.advance(1);
             }
         }
         let remaining = self.stream.finish();
@@ -264,6 +286,7 @@ impl<B: Background> Resizer<B> {
             let start = out_y * out_row_len;
             output[start..start + out_row_len].copy_from_slice(row);
             out_y += 1;
+            progress.advance(1);
         }
         debug_assert_eq!(out_y, out_h);
         stop.check()?;

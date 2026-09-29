@@ -105,6 +105,12 @@ let mut buf = vec![0u8; 512 * 512 * 4];
 resizer.resize_into(&input, &mut buf);
 ```
 
+`Resizer::try_resize_into_with_progress` also accepts an `enough::Stop` policy
+and a `howfar::Report` sink. It reports one unit after each output row is copied;
+the caller sets the phase total to `config.total_output_height()`. The optional
+`howfar-along` crate can own the counter and UI snapshots. Sharpen and blur run
+after these rows and require separate phases if enabled.
+
 For pipelines that already work in linear f32:
 
 ```rust
