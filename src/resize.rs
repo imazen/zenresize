@@ -5,7 +5,7 @@
 //! is equivalent to the former one-shot functions.
 
 #[cfg(not(feature = "std"))]
-use alloc::{vec, vec::Vec};
+use alloc::{boxed::Box, vec, vec::Vec};
 
 use crate::color;
 use crate::composite::{Background, CompositeError, NoBackground};
@@ -96,6 +96,47 @@ pub struct Resizer<B: Background = NoBackground> {
     config: ResizeConfig,
     /// Cached streaming resizer — created once, reset per resize() call.
     stream: crate::streaming::StreamingResize<B>,
+}
+
+/// Failure while running a resize with structured progress.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ResizePulseError {
+    /// Cooperative cancellation or timeout.
+    Stopped(enough::StopReason),
+    /// The supplied progress phase could not accept the declared plan or outcome.
+    Plan(howfar::PlanError),
+}
+impl core::fmt::Display for ResizePulseError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Stopped(reason) => reason.fmt(f),
+            Self::Plan(reason) => reason.fmt(f),
+        }
+    }
+}
+impl core::error::Error for ResizePulseError {}
+impl From<enough::StopReason> for ResizePulseError {
+    fn from(reason: enough::StopReason) -> Self {
+        Self::Stopped(reason)
+    }
+}
+impl From<howfar::PlanError> for ResizePulseError {
+    fn from(reason: howfar::PlanError) -> Self {
+        Self::Plan(reason)
+    }
+}
+
+fn finish_cancelled_stages(
+    stages: &[Box<dyn howfar::Pulse + '_>],
+    current: usize,
+    parent: &dyn howfar::Pulse,
+) -> Result<(), howfar::PlanError> {
+    stages[current].finish(howfar::Outcome::Cancelled)?;
+    for stage in stages.iter().skip(current + 1) {
+        stage.finish(howfar::Outcome::Skipped)?;
+    }
+    parent.finish(howfar::Outcome::Cancelled)
 }
 
 impl Resizer<NoBackground> {
@@ -206,6 +247,21 @@ impl<B: Background> Resizer<B> {
         Ok(output)
     }
 
+    /// Allocate a u8 output and report nested resize stages through one pulse.
+    /// See [`try_resize_into_with_pulse`](Self::try_resize_into_with_pulse).
+    ///
+    /// # Errors
+    /// Returns a cancellation/timeout or phase-planning error.
+    pub fn try_resize_with_pulse(
+        &mut self,
+        input: &[u8],
+        pulse: &dyn howfar::Pulse,
+    ) -> Result<Vec<u8>, ResizePulseError> {
+        let mut output = proven::alloc_output::<u8>(self.config.total_output_len());
+        self.try_resize_into_with_pulse(input, &mut output, pulse)?;
+        Ok(output)
+    }
+
     /// Resize a u8 image into a caller-provided buffer.
     ///
     /// # Panics
@@ -227,21 +283,77 @@ impl<B: Background> Resizer<B> {
         output: &mut [u8],
         stop: &dyn enough::Stop,
     ) -> Result<(), enough::StopReason> {
-        self.try_resize_into_with_progress(input, output, stop, &howfar::IgnoreProgress)
+        self.resize_rows(input, output, stop, &howfar::IgnoreProgress)?;
+        self.post_sharpen_u8(output, stop)?;
+        self.post_blur_u8(output, stop)
     }
 
-    /// Resize u8 pixels and report each completed output row.
+    /// Resize u8 pixels with one `&dyn Pulse` for cancellation and nested progress.
     ///
-    /// The caller can use `howfar::IgnoreProgress` or a shared reporter from
-    /// `howfar-along`. The total for this resize phase is
-    /// `config.total_output_height()`. Post-resize sharpen and blur are outside
-    /// this row count and need their own phases if enabled. Cancellation is
-    /// checked at the same points as [`try_resize_into`](Self::try_resize_into).
+    /// Declares the active stages before work starts: exact completed output
+    /// rows for `resample`, then one completion unit for each enabled sharpen
+    /// and blur pass. Their relative weights (8:1:1) are a scheduling budget,
+    /// not a time or ETA estimate. Disabled passes are absent. A caller may
+    /// nest this operation inside its own phase and observe it with an optional
+    /// `howfar-along` tracker; this library depends only on `howfar`.
     ///
     /// # Errors
-    /// Returns [`enough::StopReason`] when `stop` fires. Already completed rows
-    /// remain reported; `output` may be partially written and must not be used.
-    pub fn try_resize_into_with_progress<R: howfar::Report + ?Sized>(
+    /// Returns a cancellation/timeout or plan error. Already completed rows
+    /// remain reported after cancellation; `output` must then be discarded.
+    pub fn try_resize_into_with_pulse(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        pulse: &dyn howfar::Pulse,
+    ) -> Result<(), ResizePulseError> {
+        use howfar::{Outcome, PhaseSpec, Total};
+
+        let mut specs = vec![
+            PhaseSpec::new(
+                "resample",
+                8,
+                Total::Exact(u64::from(self.config.total_output_height())),
+            )
+            .units("rows"),
+        ];
+        if self.config.post_sharpen > 0.0 {
+            specs.push(PhaseSpec::new("sharpen", 1, Total::Exact(1)));
+        }
+        if self.config.post_blur_sigma > 0.0 {
+            specs.push(PhaseSpec::new("blur", 1, Total::Exact(1)));
+        }
+        let stages = pulse.split(howfar::Execution::Sequence, &specs)?;
+
+        let result = self.resize_rows(input, output, stages[0].as_ref(), stages[0].as_ref());
+        if let Err(reason) = result {
+            finish_cancelled_stages(&stages, 0, pulse)?;
+            return Err(reason.into());
+        }
+        stages[0].finish(Outcome::Succeeded)?;
+
+        let mut next = 1;
+        if self.config.post_sharpen > 0.0 {
+            if let Err(reason) = self.post_sharpen_u8(output, stages[next].as_ref()) {
+                finish_cancelled_stages(&stages, next, pulse)?;
+                return Err(reason.into());
+            }
+            stages[next].advance(1);
+            stages[next].finish(Outcome::Succeeded)?;
+            next += 1;
+        }
+        if self.config.post_blur_sigma > 0.0 {
+            if let Err(reason) = self.post_blur_u8(output, stages[next].as_ref()) {
+                finish_cancelled_stages(&stages, next, pulse)?;
+                return Err(reason.into());
+            }
+            stages[next].advance(1);
+            stages[next].finish(Outcome::Succeeded)?;
+        }
+        pulse.finish(Outcome::Succeeded)?;
+        Ok(())
+    }
+
+    fn resize_rows<R: howfar::Report + ?Sized>(
         &mut self,
         input: &[u8],
         output: &mut [u8],
@@ -256,7 +368,6 @@ impl<B: Background> Resizer<B> {
         let in_stride = config.effective_in_stride();
         let in_row_len = config.input_row_len();
         let out_row_len = config.total_output_row_len();
-        let channels = config.input.channels();
         let in_h = config.in_height as usize;
         let out_h = config.total_output_height() as usize;
 
@@ -290,27 +401,41 @@ impl<B: Background> Resizer<B> {
         }
         debug_assert_eq!(out_y, out_h);
         stop.check()?;
+        Ok(())
+    }
 
-        // Post-resize sharpening (unsharp mask).
+    fn post_sharpen_u8(
+        &self,
+        output: &mut [u8],
+        stop: &dyn enough::Stop,
+    ) -> Result<(), enough::StopReason> {
+        let config = &self.config;
         if config.post_sharpen > 0.0 {
             crate::blur::unsharp_mask_u8(
                 output,
                 config.total_output_width(),
                 config.total_output_height(),
-                channels,
+                config.input.channels(),
                 config.post_sharpen,
                 config.post_sharpen * 0.5 + 0.5, // sigma scales with amount
                 stop,
             )?;
         }
+        Ok(())
+    }
 
-        // Post-resize blur (applies after sharpening).
+    fn post_blur_u8(
+        &self,
+        output: &mut [u8],
+        stop: &dyn enough::Stop,
+    ) -> Result<(), enough::StopReason> {
+        let config = &self.config;
         if config.post_blur_sigma > 0.0 {
             crate::blur::blur_u8(
                 output,
                 config.total_output_width(),
                 config.total_output_height(),
-                channels,
+                config.input.channels(),
                 config.post_blur_sigma,
                 stop,
             )?;
