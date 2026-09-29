@@ -5,7 +5,7 @@
 //! is equivalent to the former one-shot functions.
 
 #[cfg(not(feature = "std"))]
-use alloc::{boxed::Box, vec, vec::Vec};
+use alloc::{vec, vec::Vec};
 
 use crate::color;
 use crate::composite::{Background, CompositeError, NoBackground};
@@ -98,46 +98,8 @@ pub struct Resizer<B: Background = NoBackground> {
     stream: crate::streaming::StreamingResize<B>,
 }
 
-/// Failure while running a resize with structured progress.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum ResizePulseError {
-    /// Cooperative cancellation or timeout.
-    Stopped(enough::StopReason),
-    /// The supplied progress phase could not accept the declared plan or outcome.
-    Plan(howfar::PlanError),
-}
-impl core::fmt::Display for ResizePulseError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::Stopped(reason) => reason.fmt(f),
-            Self::Plan(reason) => reason.fmt(f),
-        }
-    }
-}
-impl core::error::Error for ResizePulseError {}
-impl From<enough::StopReason> for ResizePulseError {
-    fn from(reason: enough::StopReason) -> Self {
-        Self::Stopped(reason)
-    }
-}
-impl From<howfar::PlanError> for ResizePulseError {
-    fn from(reason: howfar::PlanError) -> Self {
-        Self::Plan(reason)
-    }
-}
-
-fn finish_cancelled_stages(
-    stages: &[Box<dyn howfar::Pulse + '_>],
-    current: usize,
-    parent: &dyn howfar::Pulse,
-) -> Result<(), howfar::PlanError> {
-    stages[current].finish(howfar::Outcome::Cancelled)?;
-    for stage in stages.iter().skip(current + 1) {
-        stage.finish(howfar::Outcome::Skipped)?;
-    }
-    parent.finish(howfar::Outcome::Cancelled)
-}
+/// A stop request or a progress-plan error during a resize.
+pub type ResizePulseError = howfar::RunError<enough::StopReason>;
 
 impl Resizer<NoBackground> {
     /// Create a new resizer for the given configuration.
@@ -306,7 +268,7 @@ impl<B: Background> Resizer<B> {
         output: &mut [u8],
         pulse: &dyn howfar::Pulse,
     ) -> Result<(), ResizePulseError> {
-        use howfar::{Outcome, PhaseSpec, Total};
+        use howfar::{PhaseSpec, Steps, Total};
 
         let mut specs = vec![
             PhaseSpec::new(
@@ -322,34 +284,23 @@ impl<B: Background> Resizer<B> {
         if self.config.post_blur_sigma > 0.0 {
             specs.push(PhaseSpec::new("blur", 1, Total::Exact(1)));
         }
-        let stages = pulse.split(howfar::Execution::Sequence, &specs)?;
-
-        let result = self.resize_rows(input, output, stages[0].as_ref(), stages[0].as_ref());
-        if let Err(reason) = result {
-            finish_cancelled_stages(&stages, 0, pulse)?;
-            return Err(reason.into());
-        }
-        stages[0].finish(Outcome::Succeeded)?;
-
-        let mut next = 1;
+        let mut stages = Steps::new(pulse, &specs)?;
+        stages.run_stoppable(|stage| self.resize_rows(input, output, stage, stage))?;
         if self.config.post_sharpen > 0.0 {
-            if let Err(reason) = self.post_sharpen_u8(output, stages[next].as_ref()) {
-                finish_cancelled_stages(&stages, next, pulse)?;
-                return Err(reason.into());
-            }
-            stages[next].advance(1);
-            stages[next].finish(Outcome::Succeeded)?;
-            next += 1;
+            stages.run_stoppable(|stage| {
+                self.post_sharpen_u8(output, stage)?;
+                stage.advance(1);
+                Ok(())
+            })?;
         }
         if self.config.post_blur_sigma > 0.0 {
-            if let Err(reason) = self.post_blur_u8(output, stages[next].as_ref()) {
-                finish_cancelled_stages(&stages, next, pulse)?;
-                return Err(reason.into());
-            }
-            stages[next].advance(1);
-            stages[next].finish(Outcome::Succeeded)?;
+            stages.run_stoppable(|stage| {
+                self.post_blur_u8(output, stage)?;
+                stage.advance(1);
+                Ok(())
+            })?;
         }
-        pulse.finish(Outcome::Succeeded)?;
+        stages.finish()?;
         Ok(())
     }
 

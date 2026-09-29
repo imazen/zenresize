@@ -6,7 +6,7 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: zenresize.txt 318 lines (supported surface) | zenresize.features.txt 0 added (features: avx512,bench-simd-competitors,pretty-safe,std) | zenresize.internal.txt 190 lines (233 hidden + 0 excluded-feature)
+# files: zenresize.txt 315 lines (supported surface) | zenresize.features.txt 0 added (features: avx512,bench-simd-competitors,pretty-safe,std) | zenresize.internal.txt 190 lines (233 hidden + 0 excluded-feature)
 
 ## summary
 #
@@ -16,19 +16,19 @@
 #   free functions                             17
 #   inherent methods                          168
 #   struct fields                              27
-#   enum variants                              29
+#   enum variants                              27
 #   re-exports                                 20
-#   trait roster entries (type × trait)        93
-#   auto-trait-complete types                  22
+#   trait roster entries (type × trait)        88
+#   auto-trait-complete types                  21
 #   auto-trait exceptions                       2
 #
 # per-module pub lines:
-#   (root)                          251
+#   (root)                          249
 #   composite                        34
 #   fit                               7
 #   plane                            13
 
-## items (291 lines)
+## items (289 lines)
 
 pub mod zenresize
 pub use AlphaMode
@@ -102,9 +102,6 @@ pub const fn OrientOutput::is_identity(self) -> bool
 pub const fn OrientOutput::is_row_local(self) -> bool
 pub const fn OrientOutput::output_dimensions(self, u32, u32) -> (u32, u32)
 pub const fn OrientOutput::swaps_axes(self) -> bool
-#[non_exhaustive] pub enum ResizePulseError
-pub ResizePulseError::Plan(howfar::pulse::PlanError)
-pub ResizePulseError::Stopped(enough::reason::StopReason)
 #[non_exhaustive] pub enum StreamingError
 pub StreamingError::AlreadyFinished
 pub StreamingError::InputTooShort
@@ -321,8 +318,9 @@ pub fn resize_gray8(imgref::ImgRef<'_, u8>, u32, u32, &ResizeConfig) -> imgref::
 pub fn resize_hfirst_streaming(&ResizeConfig, &[u8]) -> core::result::Result<alloc::vec::Vec<u8>, &'static str>
 pub fn resize_hfirst_streaming_f32(&ResizeConfig, &[u8]) -> core::result::Result<alloc::vec::Vec<u8>, &'static str>
 pub fn unpremultiply_f32_row(&mut [f32]) [also: composite]
+pub type ResizePulseError = howfar::steps::RunError<enough::reason::StopReason>
 
-## trait impls (24 types)
+## trait impls (23 types)
 
 Bt709: Clone, Copy, Debug, Default, TransferCurve
 ConfigError: Clone, Copy, Debug, Display, Eq, Error, PartialEq
@@ -333,7 +331,6 @@ OrientOutput: Clone, Copy, Debug, Default, Eq, From<zenpixels::orientation::Orie
 Padding: Clone, Debug, Default, PartialEq
 Pq: Clone, Copy, Debug, Default, TransferCurve
 ResizeConfig: Clone, Debug
-ResizePulseError: Debug, Display, Error, From<enough::reason::StopReason>, From<howfar::pulse::PlanError>
 SourceRegion: Clone, Debug, Eq, PartialEq
 Srgb: Clone, Copy, Debug, Default, TransferCurve
 StreamingError: Clone, Debug, Display, Eq, Error, PartialEq
@@ -351,6 +348,6 @@ u8: Element
 
 ## auto traits
 
-22 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+21 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
 Resizer<B>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
 StreamingResize<B>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe

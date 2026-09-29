@@ -104,7 +104,8 @@ resizer.resize_into(&input, &mut buf);
 ```
 
 `Resizer::try_resize_into_with_pulse` accepts one `&dyn howfar::Pulse` for
-cancellation and progress. The resizer declares its own sequential phases:
+cancellation and progress. The resizer declares its own sequential phases
+through the lightweight `howfar::Steps` helper:
 `resample` counts exact output rows, followed by `sharpen` and `blur` when
 enabled. Library authors need only `howfar`; callers wanting snapshots can
 wrap a phase in the optional `howfar-along::PulseTree`, or pass

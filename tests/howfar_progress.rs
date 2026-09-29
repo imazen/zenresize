@@ -1,5 +1,5 @@
 use enough::{Stop, StopReason, Unstoppable};
-use howfar::{Execution, NoPulse, Outcome, PhaseSpec, Pulse, Total};
+use howfar::{Execution, NoPulse, Outcome, PhaseSpec, Pulse, Report, Total};
 use howfar_along::{Observer, Phase, PulseTree, Status};
 use zenresize::{Filter, PixelDescriptor, ResizeConfig, Resizer};
 
@@ -83,7 +83,7 @@ fn cancellation_keeps_completed_rows_and_skips_later_stages() {
 
     assert!(matches!(
         Resizer::new(&config).try_resize_into_with_pulse(&input, &mut output, &pulse),
-        Err(zenresize::ResizePulseError::Stopped(StopReason::Cancelled))
+        Err(zenresize::ResizePulseError::Work(StopReason::Cancelled))
     ));
     let snapshot = observer.snapshot();
     assert_eq!(snapshot.status, Status::Finished(Outcome::Cancelled));
@@ -151,7 +151,7 @@ fn cancellation_in_post_processing_keeps_resample_complete() {
 
     assert!(matches!(
         Resizer::new(&config).try_resize_with_pulse(&input, &pulse),
-        Err(zenresize::ResizePulseError::Stopped(StopReason::Cancelled))
+        Err(zenresize::ResizePulseError::Work(StopReason::Cancelled))
     ));
     let snapshot = observer.snapshot();
     assert_eq!(snapshot.children[0].completed, 64);
@@ -167,4 +167,21 @@ fn cancellation_in_post_processing_keeps_resample_complete() {
         snapshot.children[2].status,
         Status::Finished(Outcome::Skipped)
     );
+}
+
+#[test]
+fn invalid_parent_phase_returns_a_plan_error_before_resizing() {
+    let config = config(false);
+    let input = vec![128_u8; 128 * 128 * 4];
+    let mut output = vec![0_u8; 64 * 64 * 4];
+    let pulse = PulseTree::new(Phase::new("already used", Total::Exact(1)), &Unstoppable);
+    pulse.advance(1);
+
+    assert!(matches!(
+        Resizer::new(&config).try_resize_into_with_pulse(&input, &mut output, &pulse),
+        Err(zenresize::ResizePulseError::Plan(
+            howfar::PlanError::AlreadyInUse
+        ))
+    ));
+    assert!(output.iter().all(|byte| *byte == 0));
 }
