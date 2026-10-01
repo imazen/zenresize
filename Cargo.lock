@@ -306,7 +306,7 @@ checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
 [[package]]
 name = "enough"
 version = "0.4.4"
-source = "git+https://github.com/imazen/enough?rev=6eb6ba908099ca646d4f8c876307e67ab4701119#6eb6ba908099ca646d4f8c876307e67ab4701119"
+source = "git+https://github.com/imazen/enough?rev=4b915e5beeba6dafa5830ae26cf7594ebebdf0ae#4b915e5beeba6dafa5830ae26cf7594ebebdf0ae"
 
 [[package]]
 name = "errno"
@@ -438,21 +438,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
-name = "howfar"
+name = "how-far"
 version = "0.1.0"
-source = "git+https://github.com/imazen/enough?rev=6eb6ba908099ca646d4f8c876307e67ab4701119#6eb6ba908099ca646d4f8c876307e67ab4701119"
+source = "git+https://github.com/imazen/enough?rev=4b915e5beeba6dafa5830ae26cf7594ebebdf0ae#4b915e5beeba6dafa5830ae26cf7594ebebdf0ae"
 dependencies = [
  "enough",
 ]
 
 [[package]]
-name = "howfar-along"
+name = "how-far-along"
 version = "0.1.0"
-source = "git+https://github.com/imazen/enough?rev=6eb6ba908099ca646d4f8c876307e67ab4701119#6eb6ba908099ca646d4f8c876307e67ab4701119"
+source = "git+https://github.com/imazen/enough?rev=4b915e5beeba6dafa5830ae26cf7594ebebdf0ae#4b915e5beeba6dafa5830ae26cf7594ebebdf0ae"
 dependencies = [
  "critical-section",
  "enough",
- "howfar",
+ "how-far",
 ]
 
 [[package]]
@@ -1392,8 +1392,8 @@ dependencies = [
  "colorutils-rs 0.7.6",
  "enough",
  "fast_image_resize",
- "howfar",
- "howfar-along",
+ "how-far",
+ "how-far-along",
  "image",
  "imgref",
  "libm",

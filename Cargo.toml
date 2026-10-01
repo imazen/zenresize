@@ -30,10 +30,10 @@ archmage = { version = "0.9.26", default-features = false, features = ["macros"]
 # F16C on x86-64-v3, NEON-fp16 on aarch64, branchless software elsewhere).
 magetypes = { version = "0.9.26", default-features = false }
 linear-srgb = { version = "0.6.11", default-features = false, features = ["transfer"] }
-# Pinned to the unmerged howfar PR so the Stop trait shared with howfar-along
+# Pinned to the unmerged how-far PR so the Stop trait shared with how-far-along
 # has one Cargo identity. Return both to crates.io after publication.
-enough = { git = "https://github.com/imazen/enough", rev = "6eb6ba908099ca646d4f8c876307e67ab4701119", default-features = false }
-howfar = { git = "https://github.com/imazen/enough", rev = "6eb6ba908099ca646d4f8c876307e67ab4701119" }
+enough = { git = "https://github.com/imazen/enough", rev = "4b915e5beeba6dafa5830ae26cf7594ebebdf0ae", default-features = false }
+how-far = { git = "https://github.com/imazen/enough", rev = "4b915e5beeba6dafa5830ae26cf7594ebebdf0ae" }
 safe_unaligned_simd = "0.2.5"
 zenpixels = { version = ">=0.2.10, <0.4.0", default-features = false }
 imgref = "1.12"
@@ -45,7 +45,7 @@ zenblend = { version = "0.1.0", default-features = false }
 # zennode = { version = "0.1.0", default-features = false, features = ["derive"], optional = true }
 
 [dev-dependencies]
-howfar-along = { git = "https://github.com/imazen/enough", rev = "6eb6ba908099ca646d4f8c876307e67ab4701119" }
+how-far-along = { git = "https://github.com/imazen/enough", rev = "4b915e5beeba6dafa5830ae26cf7594ebebdf0ae" }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 linear-srgb = { version = "0.6.11" }
 colorutils-rs = "0.7"

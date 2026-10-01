@@ -99,7 +99,7 @@ pub struct Resizer<B: Background = NoBackground> {
 }
 
 /// A stop request or a progress-plan error during a resize.
-pub type ResizePulseError = howfar::RunError<enough::StopReason>;
+pub type ResizePulseError = how_far::RunError<enough::StopReason>;
 
 impl Resizer<NoBackground> {
     /// Create a new resizer for the given configuration.
@@ -217,7 +217,7 @@ impl<B: Background> Resizer<B> {
     pub fn try_resize_with_pulse(
         &mut self,
         input: &[u8],
-        pulse: &dyn howfar::Pulse,
+        pulse: &dyn how_far::Pulse,
     ) -> Result<Vec<u8>, ResizePulseError> {
         let mut output = proven::alloc_output::<u8>(self.config.total_output_len());
         self.try_resize_into_with_pulse(input, &mut output, pulse)?;
@@ -245,7 +245,7 @@ impl<B: Background> Resizer<B> {
         output: &mut [u8],
         stop: &dyn enough::Stop,
     ) -> Result<(), enough::StopReason> {
-        self.resize_rows(input, output, stop, &howfar::IgnoreProgress)?;
+        self.resize_rows(input, output, stop, &how_far::IgnoreProgress)?;
         self.post_sharpen_u8(output, stop)?;
         self.post_blur_u8(output, stop)
     }
@@ -257,7 +257,7 @@ impl<B: Background> Resizer<B> {
     /// and blur pass. Their relative weights (8:1:1) are a scheduling budget,
     /// not a time or ETA estimate. Disabled passes are absent. A caller may
     /// nest this operation inside its own phase and observe it with an optional
-    /// `howfar-along` tracker; this library depends only on `howfar`.
+    /// `how-far-along` tracker; this library depends only on `how-far`.
     ///
     /// # Errors
     /// Returns a cancellation/timeout or plan error. Already completed rows
@@ -266,9 +266,9 @@ impl<B: Background> Resizer<B> {
         &mut self,
         input: &[u8],
         output: &mut [u8],
-        pulse: &dyn howfar::Pulse,
+        pulse: &dyn how_far::Pulse,
     ) -> Result<(), ResizePulseError> {
-        use howfar::{PhaseSpec, Steps, Total};
+        use how_far::{PhaseSpec, ProgressExt, Steps, Total};
 
         let mut specs = vec![
             PhaseSpec::new(
@@ -289,14 +289,14 @@ impl<B: Background> Resizer<B> {
         if self.config.post_sharpen > 0.0 {
             stages.run_stoppable(|stage| {
                 self.post_sharpen_u8(output, stage)?;
-                stage.advance(1);
+                stage.step(1)?;
                 Ok(())
             })?;
         }
         if self.config.post_blur_sigma > 0.0 {
             stages.run_stoppable(|stage| {
                 self.post_blur_u8(output, stage)?;
-                stage.advance(1);
+                stage.step(1)?;
                 Ok(())
             })?;
         }
@@ -304,7 +304,7 @@ impl<B: Background> Resizer<B> {
         Ok(())
     }
 
-    fn resize_rows<R: howfar::Report + ?Sized>(
+    fn resize_rows<R: how_far::Report + ?Sized>(
         &mut self,
         input: &[u8],
         output: &mut [u8],
@@ -337,6 +337,7 @@ impl<B: Background> Resizer<B> {
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
                 progress.advance(1);
+                stop.check()?;
             }
         }
         let remaining = self.stream.finish();
@@ -349,6 +350,7 @@ impl<B: Background> Resizer<B> {
             output[start..start + out_row_len].copy_from_slice(row);
             out_y += 1;
             progress.advance(1);
+            stop.check()?;
         }
         debug_assert_eq!(out_y, out_h);
         stop.check()?;
