@@ -105,6 +105,18 @@ let mut buf = vec![0u8; 512 * 512 * 4];
 resizer.resize_into(&input, &mut buf);
 ```
 
+`Resizer::try_resize_into_with_pulse` accepts one `&dyn how_far::Pulse` for
+cancellation and progress. The resizer declares its own sequential phases
+through the lightweight `how_far::Steps` helper:
+`resample` counts exact output rows, followed by `sharpen` and `blur` when
+enabled. Library authors need only `how-far`; callers wanting snapshots can
+wrap a phase in the optional `how-far-along::PulseTree`, or pass
+`how_far::NoPulse` when no observation or cancellation is needed. The supplied
+pulse is finished by the resize, so pass a child pulse to embed it in a larger
+pipeline. Phase weights (8:1:1) describe planned work, not elapsed time.
+Each completed output row is reported before checking cancellation, so a stop
+request at a reporting point preserves that row's count.
+
 For pipelines that already work in linear f32:
 
 ```rust

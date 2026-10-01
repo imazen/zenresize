@@ -98,6 +98,9 @@ pub struct Resizer<B: Background = NoBackground> {
     stream: crate::streaming::StreamingResize<B>,
 }
 
+/// A stop request or a progress-plan error during a resize.
+pub type ResizePulseError = how_far::RunError<enough::StopReason>;
+
 impl Resizer<NoBackground> {
     /// Create a new resizer for the given configuration.
     /// Pre-computes weight tables.
@@ -207,6 +210,21 @@ impl<B: Background> Resizer<B> {
         Ok(output)
     }
 
+    /// Allocate a u8 output and report nested resize stages through one pulse.
+    /// See [`try_resize_into_with_pulse`](Self::try_resize_into_with_pulse).
+    ///
+    /// # Errors
+    /// Returns a cancellation/timeout or phase-planning error.
+    pub fn try_resize_with_pulse(
+        &mut self,
+        input: &[u8],
+        pulse: &dyn how_far::Pulse,
+    ) -> Result<Vec<u8>, ResizePulseError> {
+        let mut output = proven::alloc_output::<u8>(self.config.total_output_len());
+        self.try_resize_into_with_pulse(input, &mut output, pulse)?;
+        Ok(output)
+    }
+
     /// Resize a u8 image into a caller-provided buffer.
     ///
     /// # Panics
@@ -228,6 +246,72 @@ impl<B: Background> Resizer<B> {
         output: &mut [u8],
         stop: &dyn enough::Stop,
     ) -> Result<(), enough::StopReason> {
+        self.resize_rows(input, output, stop, &how_far::IgnoreProgress)?;
+        self.post_sharpen_u8(output, stop)?;
+        self.post_blur_u8(output, stop)
+    }
+
+    /// Resize u8 pixels with one `&dyn Pulse` for cancellation and nested progress.
+    ///
+    /// Declares the active stages before work starts: exact completed output
+    /// rows for `resample`, then one completion unit for each enabled sharpen
+    /// and blur pass. Their relative weights (8:1:1) are a scheduling budget,
+    /// not a time or ETA estimate. Disabled passes are absent. A caller may
+    /// nest this operation inside its own phase and observe it with an optional
+    /// `how-far-along` tracker; this library depends only on `how-far`.
+    ///
+    /// # Errors
+    /// Returns a cancellation/timeout or plan error. Already completed rows
+    /// remain reported after cancellation; `output` must then be discarded.
+    pub fn try_resize_into_with_pulse(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        pulse: &dyn how_far::Pulse,
+    ) -> Result<(), ResizePulseError> {
+        use how_far::{PhaseSpec, ProgressExt, Steps, Total};
+
+        let mut specs = vec![
+            PhaseSpec::new(
+                "resample",
+                8,
+                Total::Exact(u64::from(self.config.total_output_height())),
+            )
+            .units("rows"),
+        ];
+        if self.config.post_sharpen > 0.0 {
+            specs.push(PhaseSpec::new("sharpen", 1, Total::Exact(1)));
+        }
+        if self.config.post_blur_sigma > 0.0 {
+            specs.push(PhaseSpec::new("blur", 1, Total::Exact(1)));
+        }
+        let mut stages = Steps::new(pulse, &specs)?;
+        stages.run_stoppable(|stage| self.resize_rows(input, output, stage, stage))?;
+        if self.config.post_sharpen > 0.0 {
+            stages.run_stoppable(|stage| {
+                self.post_sharpen_u8(output, stage)?;
+                stage.step(1)?;
+                Ok(())
+            })?;
+        }
+        if self.config.post_blur_sigma > 0.0 {
+            stages.run_stoppable(|stage| {
+                self.post_blur_u8(output, stage)?;
+                stage.step(1)?;
+                Ok(())
+            })?;
+        }
+        stages.finish()?;
+        Ok(())
+    }
+
+    fn resize_rows<R: how_far::Report + ?Sized>(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        stop: &dyn enough::Stop,
+        progress: &R,
+    ) -> Result<(), enough::StopReason> {
         assert!(
             self.config.input.channel_type() == ChannelType::U8,
             "resize_into() requires Srgb8 format; use resize_f32_into() for LinearF32 or resize_u16_into() for Encoded16"
@@ -236,7 +320,6 @@ impl<B: Background> Resizer<B> {
         let in_stride = config.effective_in_stride();
         let in_row_len = config.input_row_len();
         let out_row_len = config.total_output_row_len();
-        let channels = config.input.channels();
         let in_h = config.in_height as usize;
         let out_h = config.total_output_height() as usize;
 
@@ -257,6 +340,8 @@ impl<B: Background> Resizer<B> {
                 let start = out_y * out_row_len;
                 output[start..start + out_row_len].copy_from_slice(row);
                 out_y += 1;
+                progress.advance(1);
+                stop.check()?;
             }
         }
         let remaining = self.stream.finish();
@@ -271,30 +356,46 @@ impl<B: Background> Resizer<B> {
             let start = out_y * out_row_len;
             output[start..start + out_row_len].copy_from_slice(row);
             out_y += 1;
+            progress.advance(1);
+            stop.check()?;
         }
         debug_assert_eq!(out_y, out_h);
         stop.check()?;
+        Ok(())
+    }
 
-        // Post-resize sharpening (unsharp mask).
+    fn post_sharpen_u8(
+        &self,
+        output: &mut [u8],
+        stop: &dyn enough::Stop,
+    ) -> Result<(), enough::StopReason> {
+        let config = &self.config;
         if config.post_sharpen > 0.0 {
             crate::blur::unsharp_mask_u8(
                 output,
                 config.total_output_width(),
                 config.total_output_height(),
-                channels,
+                config.input.channels(),
                 config.post_sharpen,
                 config.post_sharpen * 0.5 + 0.5, // sigma scales with amount
                 stop,
             )?;
         }
+        Ok(())
+    }
 
-        // Post-resize blur (applies after sharpening).
+    fn post_blur_u8(
+        &self,
+        output: &mut [u8],
+        stop: &dyn enough::Stop,
+    ) -> Result<(), enough::StopReason> {
+        let config = &self.config;
         if config.post_blur_sigma > 0.0 {
             crate::blur::blur_u8(
                 output,
                 config.total_output_width(),
                 config.total_output_height(),
-                channels,
+                config.input.channels(),
                 config.post_blur_sigma,
                 stop,
             )?;
