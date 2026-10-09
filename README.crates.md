@@ -107,15 +107,41 @@ resizer.resize_into(&input, &mut buf);
 
 `Resizer::try_resize_into_with_pulse` accepts one `&dyn how_far::Pulse` for
 cancellation and progress. The resizer declares its own sequential phases
-through the lightweight `how_far::Steps` helper:
+through the lightweight `how_far::Stages` helper:
 `resample` counts exact output rows, followed by `sharpen` and `blur` when
 enabled. Library authors need only `how-far`; callers wanting snapshots can
 wrap a phase in the optional `how-far-along::PulseTree`, or pass
-`how_far::NoPulse` when no observation or cancellation is needed. The supplied
-pulse is finished by the resize, so pass a child pulse to embed it in a larger
-pipeline. Phase weights (8:1:1) describe planned work, not elapsed time.
+`how_far::NoPulse` when no observation or cancellation is needed. The caller owns and finishes the supplied pulse from the returned result.
+Use `Stages::run` to embed the resize in a larger pipeline; it completes the
+child while leaving the outer root to the application. Phase weights (8:1:1) describe planned work, not elapsed time.
 Each completed output row is reported before checking cancellation, so a stop
-request at a reporting point preserves that row's count.
+request at a reporting point preserves that row's count. Remaining stages
+become `NotRun`. The return error is ordinary `enough::StopReason` (also named
+`ResizePulseError`); rejected progress plans retain cancellation and do not
+replace the resize result.
+
+```rust
+use how_far::{ResultExt, Total};
+use how_far_along::{Phase, PulseTree};
+use zenresize::{PixelDescriptor, ResizeConfig, Resizer};
+
+let config = ResizeConfig::builder(20, 20, 10, 10)
+    .format(PixelDescriptor::RGBA8_SRGB).build();
+let tree = PulseTree::new(Phase::new("resize", Total::Unknown), enough::Unstoppable);
+let observer = tree.observer();
+let result = Resizer::new(&config)
+    .try_resize_with_pulse(&vec![128; 20 * 20 * 4], &tree)
+    .finish_phase(tree);
+assert_eq!(result.unwrap().len(), 10 * 10 * 4);
+assert_eq!(observer.snapshot().children[0].completed, 10);
+```
+
+`how-far-along` and `how-far-really` are dev-dependencies here. Tests compare
+tracked and untracked pixels, padded input rows, each post-pass combination,
+precise cancellation, nesting and rejected observations. This draft covers u8
+resizing; the other pixel formats and streaming APIs do not yet accept pulses.
+The unpublished how-far crates are pinned to one revision in `Cargo.toml`.
+Run `cargo run --example progress` or `just check-progress` to exercise the caller.
 
 For pipelines that already work in linear f32:
 
