@@ -214,7 +214,7 @@ impl<B: Background> Resizer<B> {
     /// See [`try_resize_into_with_pulse`](Self::try_resize_into_with_pulse).
     ///
     /// # Errors
-    /// Returns a cancellation/timeout or phase-planning error.
+    /// Returns cancellation or timeout as [`enough::StopReason`].
     pub fn try_resize_with_pulse(
         &mut self,
         input: &[u8],
