@@ -222,14 +222,14 @@ pub fn Resizer<B>::try_resize_f32_into(&mut self, &[f32], &mut [f32], &dyn enoug
 pub fn Resizer<B>::try_resize_f32_to_u16_into(&mut self, &[f32], &mut [u16], &dyn enough::Stop) -> core::result::Result<(), enough::reason::StopReason>
 pub fn Resizer<B>::try_resize_f32_to_u8_into(&mut self, &[f32], &mut [u8], &dyn enough::Stop) -> core::result::Result<(), enough::reason::StopReason>
 pub fn Resizer<B>::try_resize_into(&mut self, &[u8], &mut [u8], &dyn enough::Stop) -> core::result::Result<(), enough::reason::StopReason>
-pub fn Resizer<B>::try_resize_into_with_pulse(&mut self, &[u8], &mut [u8], &dyn howfar::pulse::Pulse) -> core::result::Result<(), ResizePulseError>
+pub fn Resizer<B>::try_resize_into_with_pulse(&mut self, &[u8], &mut [u8], &dyn how_far::pulse::Pulse) -> core::result::Result<(), ResizePulseError>
 pub fn Resizer<B>::try_resize_u16(&mut self, &[u16], &dyn enough::Stop) -> core::result::Result<alloc::vec::Vec<u16>, enough::reason::StopReason>
 pub fn Resizer<B>::try_resize_u16_into(&mut self, &[u16], &mut [u16], &dyn enough::Stop) -> core::result::Result<(), enough::reason::StopReason>
 pub fn Resizer<B>::try_resize_u16_to_f32_into(&mut self, &[u16], &mut [f32], &dyn enough::Stop) -> core::result::Result<(), enough::reason::StopReason>
 pub fn Resizer<B>::try_resize_u16_to_u8_into(&mut self, &[u16], &mut [u8], &dyn enough::Stop) -> core::result::Result<(), enough::reason::StopReason>
 pub fn Resizer<B>::try_resize_u8_to_f32_into(&mut self, &[u8], &mut [f32], &dyn enough::Stop) -> core::result::Result<(), enough::reason::StopReason>
 pub fn Resizer<B>::try_resize_u8_to_u16_into(&mut self, &[u8], &mut [u16], &dyn enough::Stop) -> core::result::Result<(), enough::reason::StopReason>
-pub fn Resizer<B>::try_resize_with_pulse(&mut self, &[u8], &dyn howfar::pulse::Pulse) -> core::result::Result<alloc::vec::Vec<u8>, ResizePulseError>
+pub fn Resizer<B>::try_resize_with_pulse(&mut self, &[u8], &dyn how_far::pulse::Pulse) -> core::result::Result<alloc::vec::Vec<u8>, ResizePulseError>
 pub fn Resizer<B>::with_background(&ResizeConfig, B) -> core::result::Result<Self, whereat::at::At<composite::CompositeError>>
 pub fn Resizer<B>::with_blend_mode(self, zenblend::BlendMode) -> Self
 pub struct SliceBackground<'a> [also: composite]
@@ -318,7 +318,7 @@ pub fn resize_gray8(imgref::ImgRef<'_, u8>, u32, u32, &ResizeConfig) -> imgref::
 pub fn resize_hfirst_streaming(&ResizeConfig, &[u8]) -> core::result::Result<alloc::vec::Vec<u8>, &'static str>
 pub fn resize_hfirst_streaming_f32(&ResizeConfig, &[u8]) -> core::result::Result<alloc::vec::Vec<u8>, &'static str>
 pub fn unpremultiply_f32_row(&mut [f32]) [also: composite]
-pub type ResizePulseError = howfar::steps::RunError<enough::reason::StopReason>
+pub type ResizePulseError = enough::reason::StopReason
 
 ## trait impls (23 types)
 

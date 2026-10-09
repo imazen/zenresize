@@ -98,8 +98,9 @@ pub struct Resizer<B: Background = NoBackground> {
     stream: crate::streaming::StreamingResize<B>,
 }
 
-/// A stop request or a progress-plan error during a resize.
-pub type ResizePulseError = how_far::RunError<enough::StopReason>;
+/// A cancellation or timeout during a progress-reporting resize.
+/// Observations cannot introduce an error into the resize result.
+pub type ResizePulseError = enough::StopReason;
 
 impl Resizer<NoBackground> {
     /// Create a new resizer for the given configuration.
@@ -245,7 +246,7 @@ impl<B: Background> Resizer<B> {
         output: &mut [u8],
         stop: &dyn enough::Stop,
     ) -> Result<(), enough::StopReason> {
-        self.resize_rows(input, output, stop, &how_far::IgnoreProgress)?;
+        self.resize_rows(input, output, stop, &how_far::NoReport)?;
         self.post_sharpen_u8(output, stop)?;
         self.post_blur_u8(output, stop)
     }
@@ -258,9 +259,10 @@ impl<B: Background> Resizer<B> {
     /// not a time or ETA estimate. Disabled passes are absent. A caller may
     /// nest this operation inside its own phase and observe it with an optional
     /// `how-far-along` tracker; this library depends only on `how-far`.
+    /// The caller owns and finishes the supplied pulse from the returned result.
     ///
     /// # Errors
-    /// Returns a cancellation/timeout or plan error. Already completed rows
+    /// Returns cancellation or timeout. Already completed rows
     /// remain reported after cancellation; `output` must then be discarded.
     pub fn try_resize_into_with_pulse(
         &mut self,
@@ -268,7 +270,7 @@ impl<B: Background> Resizer<B> {
         output: &mut [u8],
         pulse: &dyn how_far::Pulse,
     ) -> Result<(), ResizePulseError> {
-        use how_far::{PhaseSpec, ProgressExt, Steps, Total};
+        use how_far::{PhaseSpec, Stages, Total, prelude::*};
 
         let mut specs = vec![
             PhaseSpec::new(
@@ -284,24 +286,22 @@ impl<B: Background> Resizer<B> {
         if self.config.post_blur_sigma > 0.0 {
             specs.push(PhaseSpec::new("blur", 1, Total::Exact(1)));
         }
-        let mut stages = Steps::new(pulse, &specs)?;
-        stages.run_stoppable(|stage| self.resize_rows(input, output, stage, stage))?;
-        if self.config.post_sharpen > 0.0 {
-            stages.run_stoppable(|stage| {
-                self.post_sharpen_u8(output, stage)?;
-                stage.step(1)?;
-                Ok(())
-            })?;
-        }
-        if self.config.post_blur_sigma > 0.0 {
-            stages.run_stoppable(|stage| {
-                self.post_blur_u8(output, stage)?;
-                stage.step(1)?;
-                Ok(())
-            })?;
-        }
-        stages.finish()?;
-        Ok(())
+        Stages::new(pulse, &specs).complete_with(|stages| {
+            stages.run(|stage| self.resize_rows(input, output, stage, stage))?;
+            if self.config.post_sharpen > 0.0 {
+                stages.run(|stage| {
+                    self.post_sharpen_u8(output, stage)?;
+                    stage.step(1)
+                })?;
+            }
+            if self.config.post_blur_sigma > 0.0 {
+                stages.run(|stage| {
+                    self.post_blur_u8(output, stage)?;
+                    stage.step(1)
+                })?;
+            }
+            Ok(())
+        })
     }
 
     fn resize_rows<R: how_far::Report + ?Sized>(
