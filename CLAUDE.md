@@ -291,4 +291,3 @@ Intermediate clamping removed from all i16 kernels. Max diff 52→1.
   the progress pilot as supporting strided output; preserve padding and check
   optional post-processing as well as allocating entry points.
 
-(none currently)
