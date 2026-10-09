@@ -282,4 +282,12 @@ Intermediate clamping removed from all i16 kernels. Max diff 52→1.
 
 ## Known Bugs
 
-(none currently)
+- Output row stride is ignored by the u8 `Resizer` buffer-writing paths,
+  including the progress pilot (confirmed 2026-10-09 at `be7e7d27`). Reproduce
+  with RGBA8 20×20 → 10×10, `.out_stride(48)`, and a 480-byte output initialized
+  to `0xA5`: `resize_into` writes all eight padding bytes at offsets 40..48.
+  `resize_rows` indexes by `total_output_row_len()` instead of the configured
+  stride. Input-stride parity tests do not cover this. Resolve before treating
+  the progress pilot as supporting strided output; preserve padding and check
+  optional post-processing as well as allocating entry points.
+

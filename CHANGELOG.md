@@ -16,6 +16,16 @@
   panicked on adversarial inputs; they now validate and surface errors.
 
 ### Added
+- Draft `Resizer::try_resize_with_pulse` and `try_resize_into_with_pulse` for
+  u8 output. One `&dyn how_far::Pulse` supplies cancellation and a library-owned
+  nested plan: exact output rows, then optional sharpen and blur stages.
+  `how_far::Stages` handles stage outcomes and early exits, so codec code only
+  declares stages and runs their work. Cancellation retains completed rows and
+  marks later stages `NotRun`. The caller finishes the borrowed phase;
+  `ResizePulseError` is an alias for ordinary `enough::StopReason`, and rejected
+  plans preserve the resize result and cancellation. The
+  optional `how-far-along` tracker is used only by integration tests and callers;
+  it is a dev-only dependency here. Git revisions are pinned until publication. Current-API migration: `117e3401`.
 - **Cooperative cancellation on `Resizer`: `try_resize*` / `try_resize_*_into`
   variants taking `stop: &dyn enough::Stop`.** All nine `*_into` methods now
   have a fallible `try_` twin (`try_resize_into`, `try_resize_f32_into`,

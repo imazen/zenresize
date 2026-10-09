@@ -68,7 +68,7 @@ pub use pixel::{
     ConfigError, Element, LobeRatio, Padding, ResizeConfig, ResizeConfigBuilder, SourceRegion,
 };
 pub use plane::PlaneResizer;
-pub use resize::Resizer;
+pub use resize::{ResizePulseError, Resizer};
 pub use streaming::{OrientOutput, StreamingError, StreamingResize, WorkingFormat};
 
 pub use composite::{

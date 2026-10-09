@@ -30,7 +30,9 @@ archmage = { version = "0.9.26", default-features = false, features = ["macros"]
 # F16C on x86-64-v3, NEON-fp16 on aarch64, branchless software elsewhere).
 magetypes = { version = "0.9.26", default-features = false }
 linear-srgb = { version = "0.6.11", default-features = false, features = ["transfer"] }
-enough = { version = "0.4", default-features = false }
+# Match how-far's registry Stop trait; pin unpublished how-far crates together.
+enough = { version = "0.4.5", default-features = false }
+how-far = { git = "https://github.com/imazen/how-far", rev = "b90298891ed81ce0cafc70ae425cffb7b0670b82" }
 safe_unaligned_simd = "0.2.5"
 zenpixels = { version = ">=0.2.10, <0.4.0", default-features = false }
 imgref = "1.12"
@@ -42,6 +44,8 @@ zenblend = { version = "0.1.0", default-features = false }
 # zennode = { version = "0.1.0", default-features = false, features = ["derive"], optional = true }
 
 [dev-dependencies]
+how-far-along = { git = "https://github.com/imazen/how-far", rev = "b90298891ed81ce0cafc70ae425cffb7b0670b82", features = ["callback"] }
+how-far-really = { git = "https://github.com/imazen/how-far", rev = "b90298891ed81ce0cafc70ae425cffb7b0670b82" }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 linear-srgb = { version = "0.6.11" }
 colorutils-rs = "0.7"

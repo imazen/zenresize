@@ -3,8 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
+  # Run stacked PRs too; their base is an integration branch, not main.
   pull_request:
-    branches: [main]
 
 concurrency:
   # `github.head_ref` is set ONLY on pull_request events. On a push it is
