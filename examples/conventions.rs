@@ -12,7 +12,13 @@ fn main() {
         let mut output = vec![0u8; ow as usize * oh as usize * 3];
         zenresize::PillowCubicResizer::new(w, h, ow, oh)
             .unwrap()
-            .resize_rgb8(&input, w as usize * 3, &mut output, ow as usize * 3)
+            .resize_rgb8(
+                &input,
+                PixelDescriptor::RGB8_SRGB,
+                w as usize * 3,
+                &mut output,
+                ow as usize * 3,
+            )
             .unwrap();
         std::fs::write(&args[7], output).unwrap();
         return;

@@ -5,7 +5,7 @@
 //! rounds once and clamps to u8. This arithmetic was qualified against Pillow's
 //! public RGB resize API, without using its implementation source.
 use crate::weights::fixed22_weights;
-use crate::{InterpolationDetails, ResizeConfig};
+use crate::{InterpolationDetails, PixelDescriptor, ResizeConfig};
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
@@ -15,6 +15,7 @@ use alloc::vec::Vec;
 /// It uses antialiased Catmull–Rom, half-pixel centres and truncated edge taps.
 /// It does not perform color conversion, alpha handling or compositing.
 /// Input and output strides are in bytes and may include row padding.
+#[derive(Debug, Clone)]
 pub struct PillowCubicResizer {
     width: usize,
     height: usize,
@@ -52,16 +53,22 @@ impl PillowCubicResizer {
 
     /// Resize encoded RGB8 into caller-owned strided rows.
     ///
+    /// The descriptor must be `PixelDescriptor::RGB8_SRGB`; other channel
+    /// layouts, precisions and transfer functions are refused. Output is RGB8_SRGB.
     /// Returns an error for short buffers, invalid strides, size overflow or
     /// inability to allocate the horizontal u8 intermediate. Row padding is
     /// neither read nor written. All coefficient products accumulate in i64.
     pub fn resize_rgb8(
         &self,
         input: &[u8],
+        input_format: PixelDescriptor,
         input_stride: usize,
         output: &mut [u8],
         output_stride: usize,
     ) -> Result<(), &'static str> {
+        if input_format != PixelDescriptor::RGB8_SRGB {
+            return Err("Pillow cubic input must be encoded RGB8_SRGB");
+        }
         let row = self.width.checked_mul(3).ok_or("input row overflow")?;
         let out_row = self.out_width.checked_mul(3).ok_or("output row overflow")?;
         if input_stride < row || output_stride < out_row {
