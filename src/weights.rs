@@ -86,7 +86,7 @@ impl F32WeightTable {
         debug_assert!(out_size > 0, "out_size must be positive");
 
         let scale = out_size as f64 / in_size as f64;
-        let downscale_factor = scale.min(1.0);
+        let downscale_factor = filter.support_scale(scale);
         let effective_window = filter.window / downscale_factor;
 
         // Compute lobe ratio adjustment targets.
@@ -282,7 +282,7 @@ impl I16WeightTable {
         debug_assert!(out_size > 0, "out_size must be positive");
 
         let scale = out_size as f64 / in_size as f64;
-        let downscale_factor = scale.min(1.0);
+        let downscale_factor = filter.support_scale(scale);
         let effective_window = filter.window / downscale_factor;
 
         let mut temp_weights: Vec<f64> = Vec::new();
@@ -476,11 +476,93 @@ fn compute_pixel_weights(
     weights_out: &mut Vec<f64>,
 ) -> (i32, usize) {
     // Map output pixel center to input space
-    let center = (out_pixel as f64 + 0.5) / scale - 0.5;
+    let out_size = libm::round(scale * in_size as f64) as u32;
+    let mut center = match filter.mapping() {
+        crate::filter::SampleMapping::HalfPixel => (out_pixel as f64 + 0.5) / scale - 0.5,
+        crate::filter::SampleMapping::AlignCorners => {
+            if out_size <= 1 {
+                0.0
+            } else {
+                out_pixel as f64 * (in_size - 1) as f64 / (out_size - 1) as f64
+            }
+        }
+        crate::filter::SampleMapping::Asymmetric => out_pixel as f64 / scale,
+        crate::filter::SampleMapping::AsymmetricFloat32 => {
+            f64::from(out_pixel as f32 * (in_size as f32 / out_size as f32))
+        }
+        crate::filter::SampleMapping::AsymmetricFloat64 => out_pixel as f64 * (1.0 / scale),
+    };
+    if filter.is_nearest() {
+        let index = match filter.mapping() {
+            crate::filter::SampleMapping::Asymmetric => {
+                (out_pixel as u64 * in_size as u64 / out_size as u64) as u32
+            }
+            crate::filter::SampleMapping::AsymmetricFloat32 => {
+                libm::floorf(out_pixel as f32 * (in_size as f32 / out_size as f32)) as u32
+            }
+            crate::filter::SampleMapping::AsymmetricFloat64 => {
+                libm::floor(out_pixel as f64 * (1.0 / scale)) as u32
+            }
+            crate::filter::SampleMapping::HalfPixel => {
+                ((2 * out_pixel as u64 + 1) * in_size as u64 / (2 * out_size as u64)) as u32
+            }
+            crate::filter::SampleMapping::AlignCorners => libm::floor(center + 0.5).max(0.0) as u32,
+        }
+        .min(in_size - 1);
+        weights_out.push(1.0);
+        return (index as i32, 1);
+    }
+
+    let tf_gaussian =
+        filter.is_gaussian_tf() && filter.mapping() == crate::filter::SampleMapping::HalfPixel;
+    let tf_input_scale = 1.0f32 / (out_size as f32 / in_size as f32);
+    let tf_shrink = if downscale_factor < 1.0 {
+        1.0 / tf_input_scale
+    } else {
+        1.0
+    };
+    if tf_gaussian {
+        center = f64::from((out_pixel as f32 + 0.5) * tf_input_scale) - 0.5;
+    }
+    let effective_window = if tf_gaussian {
+        filter.window / f64::from(tf_shrink)
+    } else {
+        effective_window
+    };
+    let distance = |index: i32| {
+        if tf_gaussian {
+            f64::from(tf_shrink * (index as f32 + 0.5 - (out_pixel as f32 + 0.5) * tf_input_scale))
+        } else {
+            downscale_factor * (index as f64 - center)
+        }
+    };
+    let edge_margin = if tf_gaussian {
+        0.0001 + 2.0 * center.abs() * f64::from(f32::EPSILON)
+    } else {
+        0.0001
+    };
 
     // Find input pixel range in filter window
-    let left_edge = f64_ceil(center - effective_window - 0.0001) as i32;
-    let right_edge = f64_floor(center + effective_window + 0.0001) as i32;
+    let left_edge = f64_ceil(center - effective_window - edge_margin) as i32;
+    let right_edge = f64_floor(center + effective_window + edge_margin) as i32;
+
+    if filter.boundary() == crate::filter::BoundaryMode::Clamp {
+        let left = left_edge.clamp(0, in_size as i32 - 1);
+        let right = right_edge.clamp(0, in_size as i32 - 1);
+        weights_out.resize((right - left + 1) as usize, 0.0);
+        for index in left_edge..=right_edge {
+            let weight = filter.filter(distance(index));
+            let slot = (index.clamp(left, right) - left) as usize;
+            weights_out[slot] += weight;
+        }
+        let total: f64 = weights_out.iter().sum();
+        if total > 0.0 {
+            for weight in weights_out.iter_mut() {
+                *weight /= total;
+            }
+        }
+        return (left, weights_out.len());
+    }
 
     // Clamp to valid range BEFORE calculating weights
     let left_pixel = left_edge.max(0) as u32;
@@ -489,7 +571,7 @@ fn compute_pixel_weights(
     let mut total_weight = 0.0f64;
 
     for in_pixel in left_pixel..=right_pixel {
-        let x = downscale_factor * (in_pixel as f64 - center);
+        let x = distance(in_pixel as i32);
         let mut w = filter.filter(x);
 
         if w.abs() <= WEIGHT_THRESHOLD {
@@ -546,6 +628,36 @@ fn f64_floor(x: f64) -> f64 {
 #[inline]
 fn f64_floor(x: f64) -> f64 {
     libm::floor(x)
+}
+
+/// Preserve f64 coefficients until quantization for the independently specified
+/// 22-bit two-pass path. No sum correction is applied after quantization.
+pub(crate) fn fixed22_weights(
+    input: u32,
+    output: u32,
+    filter: &InterpolationDetails,
+) -> Vec<(usize, Vec<i32>)> {
+    let scale = output as f64 / input as f64;
+    let shrink = filter.support_scale(scale);
+    (0..output)
+        .map(|i| {
+            let mut values = Vec::new();
+            let (left, _) = compute_pixel_weights(
+                i,
+                input,
+                scale,
+                shrink,
+                filter.window / shrink,
+                filter,
+                &mut values,
+            );
+            let weights = values
+                .into_iter()
+                .map(|x| libm::round(x * 4194304.0) as i32)
+                .collect();
+            (left as usize, weights)
+        })
+        .collect()
 }
 
 #[cfg(test)]

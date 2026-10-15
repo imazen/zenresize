@@ -54,7 +54,7 @@ use zenpixels::{AlphaMode, ChannelType, TransferFunction};
 /// unacceptable rounding error (falling back to f32 when taps are too many).
 fn estimate_max_taps(in_size: u32, out_size: u32, filter: &InterpolationDetails) -> usize {
     let scale = out_size as f64 / in_size as f64;
-    let downscale_factor = scale.min(1.0);
+    let downscale_factor = filter.support_scale(scale);
     // filter.window already incorporates blur
     let effective_window = filter.window / downscale_factor;
     // +2 margin for rounding and edge trimming variation
@@ -67,7 +67,10 @@ fn create_filter_details(
     filter_enum: crate::filter::Filter,
     config: &ResizeConfig,
 ) -> InterpolationDetails {
-    let mut filter = InterpolationDetails::create(filter_enum);
+    let mut filter = config
+        .interpolation
+        .clone()
+        .unwrap_or_else(|| InterpolationDetails::create(filter_enum));
     if let Some(scale) = config.kernel_width_scale {
         filter = filter.with_blur(scale);
     }
@@ -329,6 +332,8 @@ pub struct StreamingResize<B: Background = NoBackground> {
     /// Each row is `in_width * channels + h_padding` wide (zero-padded for V-filter SIMD).
     /// Empty when i16 path is active.
     v_cache: Vec<Vec<u16>>,
+    /// Custom conventions retain native f32 samples; default paths keep f16.
+    f32_v_cache: Vec<Vec<f32>>,
     /// Which ring buffer slot to write the next input row into.
     cache_write_idx: usize,
     /// Total number of cache slots.
@@ -569,9 +574,17 @@ impl<B: Background> StreamingResize<B> {
         let v_cache_row_len = in_row_len + h_padding;
         let out_row_len = self.config.out_width as usize * self.channels;
 
-        self.v_cache = (0..self.cache_size)
-            .map(|_| vec![0u16; v_cache_row_len])
-            .collect();
+        if self.config.interpolation.is_some() {
+            self.v_cache = Vec::new();
+            self.f32_v_cache = (0..self.cache_size)
+                .map(|_| vec![0.0; v_cache_row_len])
+                .collect();
+        } else {
+            self.v_cache = (0..self.cache_size)
+                .map(|_| vec![0u16; v_cache_row_len])
+                .collect();
+            self.f32_v_cache = Vec::new();
+        }
         self.temp_input_f32 = vec![0.0f32; v_cache_row_len];
         self.temp_v_output = vec![0.0f32; v_cache_row_len];
         self.temp_output_f32 = vec![0.0f32; out_row_len];
@@ -820,9 +833,21 @@ impl<B: Background> StreamingResize<B> {
                 let h_padding = h_weights.max_taps * channels;
                 let v_cache_row_len = in_row_len + h_padding;
 
-                let v_cache = (0..cache_size)
-                    .map(|_| vec![0u16; v_cache_row_len])
-                    .collect();
+                let (v_cache, f32_v_cache) = if config.interpolation.is_some() {
+                    (
+                        Vec::new(),
+                        (0..cache_size)
+                            .map(|_| vec![0.0; v_cache_row_len])
+                            .collect(),
+                    )
+                } else {
+                    (
+                        (0..cache_size)
+                            .map(|_| vec![0u16; v_cache_row_len])
+                            .collect(),
+                        Vec::new(),
+                    )
+                };
 
                 Self {
                     config,
@@ -833,6 +858,7 @@ impl<B: Background> StreamingResize<B> {
                     needs_premul,
                     alpha_is_last,
                     v_cache,
+                    f32_v_cache,
                     cache_write_idx: 0,
                     cache_size,
                     temp_input_f32: vec![0.0f32; v_cache_row_len],
@@ -902,6 +928,7 @@ impl<B: Background> StreamingResize<B> {
                     needs_premul,
                     alpha_is_last,
                     v_cache: Vec::new(),
+                    f32_v_cache: Vec::new(),
                     cache_write_idx: 0,
                     cache_size,
                     temp_input_f32: Vec::new(),
@@ -977,6 +1004,7 @@ impl<B: Background> StreamingResize<B> {
                     needs_premul,
                     alpha_is_last,
                     v_cache: Vec::new(),
+                    f32_v_cache: Vec::new(),
                     cache_write_idx: 0,
                     cache_size,
                     temp_input_f32: Vec::new(),
@@ -2435,25 +2463,61 @@ impl<B: Background> StreamingResize<B> {
         let out_row_len = self.config.out_width as usize * self.channels;
 
         // Step 1: V-filter from f16 v_cache into temp_v_output (f32, in_width-wide)
-        with_v_rows(
-            &self.v_cache,
-            self.cache_size,
-            left,
-            tap_count,
-            resize_in_h,
-            in_row_len,
-            |rows| simd::filter_v_row_f16(rows, &mut self.temp_v_output[..in_row_len], weights),
-        );
+        let nearest = self
+            .config
+            .interpolation
+            .as_ref()
+            .is_some_and(|f| f.is_nearest());
+        if self.f32_v_cache.is_empty() {
+            with_v_rows(
+                &self.v_cache,
+                self.cache_size,
+                left,
+                tap_count,
+                resize_in_h,
+                in_row_len,
+                |rows| simd::filter_v_row_f16(rows, &mut self.temp_v_output[..in_row_len], weights),
+            );
+        } else {
+            with_v_rows(
+                &self.f32_v_cache,
+                self.cache_size,
+                left,
+                tap_count,
+                resize_in_h,
+                in_row_len,
+                |rows| {
+                    if nearest {
+                        self.temp_v_output[..in_row_len].copy_from_slice(rows[0]);
+                    } else {
+                        simd::filter_v_row_f32(
+                            rows,
+                            &mut self.temp_v_output[..in_row_len],
+                            weights,
+                        );
+                    }
+                },
+            );
+        }
 
         // Step 2: H-filter from temp_v_output into temp_output_f32 (out_width-wide)
         // temp_v_output has h_padding zeros beyond in_row_len for SIMD safety
         let h_weights = self.h_weights.as_ref().unwrap();
-        simd::filter_h_row_f32(
-            &self.temp_v_output,
-            &mut self.temp_output_f32[..out_row_len],
-            h_weights,
-            self.channels,
-        );
+        if nearest {
+            for x in 0..self.config.out_width as usize {
+                let source = h_weights.left[x] as usize * self.channels;
+                let target = x * self.channels;
+                self.temp_output_f32[target..target + self.channels]
+                    .copy_from_slice(&self.temp_v_output[source..source + self.channels]);
+            }
+        } else {
+            simd::filter_h_row_f32(
+                &self.temp_v_output,
+                &mut self.temp_output_f32[..out_row_len],
+                h_weights,
+                self.channels,
+            );
+        }
 
         self.output_rows_produced += 1;
     }
@@ -2689,10 +2753,15 @@ impl<B: Background> StreamingResize<B> {
 
         let cache_slot = self.cache_write_idx % self.cache_size;
         let pixel_len = self.config.resize_in_width() as usize * self.channels;
-        simd::f32_to_f16_row(
-            &self.temp_input_f32[..pixel_len],
-            &mut self.v_cache[cache_slot][..pixel_len],
-        );
+        if self.f32_v_cache.is_empty() {
+            simd::f32_to_f16_row(
+                &self.temp_input_f32[..pixel_len],
+                &mut self.v_cache[cache_slot][..pixel_len],
+            );
+        } else {
+            self.f32_v_cache[cache_slot][..pixel_len]
+                .copy_from_slice(&self.temp_input_f32[..pixel_len]);
+        }
 
         self.cache_write_idx += 1;
         self.input_rows_received += 1;

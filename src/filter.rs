@@ -163,10 +163,39 @@ impl Filter {
     }
 }
 
+/// Position of an output sample in the input pixel coordinate system.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SampleMapping {
+    /// `(i + 0.5) * input/output - 0.5` (the existing default).
+    #[default]
+    HalfPixel,
+    /// `i * (input - 1)/(output - 1)`; a single output sample maps to zero.
+    AlignCorners,
+    /// `i * input/output`; nearest sampling takes the floor (torch/OpenCV).
+    Asymmetric,
+    /// Legacy torch CPU nearest: floor of the f32 product `i * (input/output)`.
+    /// Float rounding can select the preceding sample at an integer boundary.
+    AsymmetricFloat32,
+    /// OpenCV nearest: floor of the f64 product `i * (1 / (output/input))`.
+    AsymmetricFloat64,
+}
+
+/// Treatment of kernel taps outside the input image.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BoundaryMode {
+    /// Discard outside taps and normalize the surviving weights (default).
+    #[default]
+    Truncate,
+    /// Accumulate outside taps into the closest edge sample.
+    Clamp,
+}
+
 /// Interpolation filter details and configuration.
 ///
 /// Contains the filter function and parameters needed to compute weights.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct InterpolationDetails {
     /// Filter support window (half-width in input pixels)
     pub window: f64,
@@ -188,6 +217,11 @@ pub struct InterpolationDetails {
     pub q4: f64,
     /// The filter function to use
     filter_fn: FilterFn,
+    antialias: bool,
+    mapping: SampleMapping,
+    boundary: BoundaryMode,
+    nearest: bool,
+    gaussian_tf: bool,
     /// Desired negative-lobe ratio (`None` = use filter's natural ratio).
     ///
     /// Controls the balance between positive and negative weights:
@@ -237,12 +271,97 @@ impl Default for InterpolationDetails {
             q3: 1.0,
             q4: 1.0,
             filter_fn: filter_box,
+            antialias: true,
+            mapping: SampleMapping::HalfPixel,
+            boundary: BoundaryMode::Truncate,
+            nearest: false,
+            gaussian_tf: false,
             lobe_ratio_goal: None,
         }
     }
 }
 
 impl InterpolationDetails {
+    /// Mitchell–Netravali cubic with support radius two.
+    /// Keys cubic uses `b = 0` and `c = -a`: 0.5 for Catmull–Rom,
+    /// 0.75 for torch/OpenCV non-antialiased cubic.
+    pub fn cubic_bc(b: f64, c: f64) -> Self {
+        Self::bicubic(2.0, 1.0, b, c)
+    }
+
+    /// TensorFlow Gaussian resize kernel: sigma 0.5, support radius 1.5.
+    /// The radius and sigma are measured with source-impulse probes of the
+    /// public `tf.image.resize` API; see benchmarks/conventions_2026-10-15.
+    pub fn gaussian_tf() -> Self {
+        Self {
+            window: 1.5,
+            filter_fn: filter_gaussian_tf,
+            gaussian_tf: true,
+            ..Self::default()
+        }
+    }
+
+    /// Select exactly one source sample, without antialias support widening.
+    pub fn nearest() -> Self {
+        Self {
+            nearest: true,
+            antialias: false,
+            ..Self::create(Filter::Box)
+        }
+    }
+
+    /// Widen the support on downscale when true (default); keep it fixed otherwise.
+    pub fn with_antialias(mut self, enabled: bool) -> Self {
+        self.antialias = enabled;
+        self
+    }
+
+    /// Select the output-to-input coordinate mapping.
+    pub fn with_sample_mapping(mut self, mapping: SampleMapping) -> Self {
+        self.mapping = mapping;
+        self
+    }
+
+    /// Select boundary tap handling.
+    pub fn with_boundary_mode(mut self, mode: BoundaryMode) -> Self {
+        self.boundary = mode;
+        self
+    }
+
+    pub(crate) fn support_scale(&self, scale: f64) -> f64 {
+        if self.antialias && !self.nearest {
+            scale.min(1.0)
+        } else {
+            1.0
+        }
+    }
+    pub(crate) fn mapping(&self) -> SampleMapping {
+        self.mapping
+    }
+    pub(crate) fn boundary(&self) -> BoundaryMode {
+        self.boundary
+    }
+    pub(crate) fn is_gaussian_tf(&self) -> bool {
+        self.gaussian_tf
+    }
+    pub(crate) fn is_nearest(&self) -> bool {
+        self.nearest
+    }
+    pub(crate) fn valid(&self) -> bool {
+        self.window.is_finite()
+            && self.window > 0.0
+            && self.blur.is_finite()
+            && self.blur > 0.0
+            && [
+                self.p1, self.p2, self.p3, self.q1, self.q2, self.q3, self.q4,
+            ]
+            .iter()
+            .all(|x| x.is_finite())
+            && self
+                .lobe_ratio_goal
+                .is_none_or(|x| x.is_finite() && (0.0..1.0).contains(&x))
+    }
+
     /// Create interpolation details for a named filter.
     pub fn create(filter: Filter) -> Self {
         match filter {
@@ -383,6 +502,7 @@ impl InterpolationDetails {
             q3: b + 5.0 * c,
             q4: (-1.0 / 6.0) * b - c,
             lobe_ratio_goal: None,
+            ..Self::default()
         }
     }
 
@@ -483,6 +603,15 @@ impl InterpolationDetails {
 // =============================================================================
 // Filter Functions
 // =============================================================================
+
+fn filter_gaussian_tf(details: &InterpolationDetails, x: f64) -> f64 {
+    let t = f64_abs(x) / details.blur;
+    if t < 1.5 {
+        libm::exp(-2.0 * t * t)
+    } else {
+        0.0
+    }
+}
 
 /// Flexible bicubic filter with configurable B and C parameters.
 fn filter_flex_cubic(d: &InterpolationDetails, x: f64) -> f64 {

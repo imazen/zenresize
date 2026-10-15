@@ -62,7 +62,11 @@ pub use zenpixels::{
 };
 
 // Re-exports: minimal public API
-pub use filter::Filter;
+mod pillow;
+pub use pillow::PillowCubicResizer;
+
+#[doc(inline)]
+pub use filter::{BoundaryMode, Filter, InterpolationDetails, SampleMapping};
 pub use fit::{FitMode, fit_cover_source_crop, fit_dims};
 pub use pixel::{
     ConfigError, Element, LobeRatio, Padding, ResizeConfig, ResizeConfigBuilder, SourceRegion,

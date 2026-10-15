@@ -252,6 +252,8 @@ impl std::error::Error for ConfigError {}
 pub struct ResizeConfig {
     /// Filter to use for resampling.
     pub filter: crate::filter::Filter,
+    /// Custom interpolation details overriding both named filter presets.
+    pub interpolation: Option<crate::filter::InterpolationDetails>,
     /// Optional override filter for upscaling. When `None`, the `filter` field
     /// is used for both up and down. When `Some`, this filter is used when
     /// the output dimension exceeds the input dimension on a given axis.
@@ -357,6 +359,12 @@ impl ResizeConfig {
             return Err("output dimensions must be positive");
         }
 
+        if self.interpolation.as_ref().is_some_and(|f| !f.valid()) {
+            return Err(
+                "custom interpolation requires finite coefficients, positive blur and finite positive support",
+            );
+        }
+
         // Bound the resulting weight-table size.
         //
         // The weight-table allocation is `out_size * max_taps` per axis, where
@@ -366,15 +374,28 @@ impl ResizeConfig {
         //
         // We cap the total weight-table elements per axis at
         // MAX_WEIGHT_TABLE_ELEMENTS (~256 MB at f32). For `out_size = 1` this
-        // means `max_taps` can be up to ~64M, but `max_taps` itself never
-        // exceeds `2 * MAX_FILTER_WINDOW * in_size + 2`, which for
-        // `in_size = u32::MAX` is `~2^36` — well beyond the cap. So the
-        // element-count cap is the binding constraint.
-        //
-        // The largest legitimate filter window in this crate is `Ginseng` at
-        // 6.0 input pixels (half-width); we use 8.0 as an upper bound.
+        // means the element-count cap also bounds extreme downscale ratios.
+        // Named presets fit within the existing conservative radius of eight;
+        // custom support and curve blur are included in the upper bound.
         const MAX_WEIGHT_TABLE_ELEMENTS: u64 = 64 * 1024 * 1024; // ~256 MB at f32
-        const MAX_FILTER_WINDOW: u64 = 8;
+        if self
+            .kernel_width_scale
+            .is_some_and(|scale| !scale.is_finite() || scale <= 0.0)
+        {
+            return Err("kernel_width_scale must be finite and positive");
+        }
+        // Include custom support and the configured width multiplier in the
+        // allocation bound. Keep the old conservative floor for named presets.
+        let support = (self
+            .interpolation
+            .as_ref()
+            .map_or(8.0, |f| f.window * f.blur)
+            * self.kernel_width_scale.unwrap_or(1.0))
+        .max(8.0);
+        if !support.is_finite() || support > MAX_WEIGHT_TABLE_ELEMENTS as f64 {
+            return Err("kernel support exceeds weight-table memory cap");
+        }
+        let max_filter_window = libm::ceil(support) as u64;
 
         let estimate_axis = |in_size: u32, out_size: u32| -> Result<u64, &'static str> {
             let in_size = in_size as u64;
@@ -382,7 +403,7 @@ impl ResizeConfig {
             // max_taps ≈ 2 * window * ceil(in_size / out_size) + 2 (downscale)
             //          ≈ 2 * window + 2                            (upscale, taps fixed)
             let downscale = in_size.div_ceil(out_size).max(1);
-            let scale_for_window = MAX_FILTER_WINDOW.saturating_mul(2);
+            let scale_for_window = max_filter_window.saturating_mul(2);
             let max_taps_estimate = scale_for_window
                 .checked_mul(downscale)
                 .and_then(|v| v.checked_add(2))
@@ -723,6 +744,7 @@ pub struct ResizeConfigBuilder {
     out_width: u32,
     out_height: u32,
     filter: crate::filter::Filter,
+    interpolation: Option<crate::filter::InterpolationDetails>,
     up_filter: Option<crate::filter::Filter>,
     input: PixelDescriptor,
     output: Option<PixelDescriptor>,
@@ -746,6 +768,7 @@ impl ResizeConfigBuilder {
             out_width,
             out_height,
             filter: crate::filter::Filter::default(),
+            interpolation: None,
             up_filter: None,
             input: PixelDescriptor::RGBA8_SRGB,
             output: None,
@@ -762,9 +785,17 @@ impl ResizeConfigBuilder {
         }
     }
 
+    /// Use custom kernel, support scaling and sample-position conventions.
+    /// This overrides both filter presets; a subsequent `filter()` clears it.
+    pub fn interpolation(mut self, details: crate::filter::InterpolationDetails) -> Self {
+        self.interpolation = Some(details);
+        self
+    }
+
     /// Set the resampling filter.
     pub fn filter(mut self, filter: crate::filter::Filter) -> Self {
         self.filter = filter;
+        self.interpolation = None;
         self
     }
 
@@ -1017,6 +1048,7 @@ impl ResizeConfigBuilder {
         let output = self.output.unwrap_or(self.input);
         ResizeConfig {
             filter: self.filter,
+            interpolation: self.interpolation,
             up_filter: self.up_filter,
             in_width: self.in_width,
             in_height: self.in_height,

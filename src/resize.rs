@@ -959,7 +959,10 @@ pub fn resize_hfirst_streaming(
     config.validate()?;
     assert_eq!(config.channels(), 4, "H-first streaming only supports 4ch");
 
-    let filter = InterpolationDetails::create(config.filter);
+    let filter = config
+        .interpolation
+        .clone()
+        .unwrap_or_else(|| InterpolationDetails::create(config.filter));
     let v_weights = I16WeightTable::new(config.in_height, config.out_height, &filter);
     let h_weights = I16WeightTable::new(config.in_width, config.out_width, &filter);
 
@@ -1221,7 +1224,10 @@ pub fn resize_hfirst_streaming_f32(
 ) -> Result<Vec<u8>, &'static str> {
     config.validate()?;
 
-    let filter = InterpolationDetails::create(config.filter);
+    let filter = config
+        .interpolation
+        .clone()
+        .unwrap_or_else(|| InterpolationDetails::create(config.filter));
     let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
     let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
 
