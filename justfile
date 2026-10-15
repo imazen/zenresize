@@ -56,3 +56,7 @@ conventions-pins python:
 
 conventions-gaussian-support-pins python:
     {{python}} benchmarks/conventions_2026-10-15/pin_gaussian_support.py
+
+# Round-8 review regressions, including the deterministic pre-change output hash.
+conventions-review-tests:
+    cargo test --locked --test conventions --test default_conventions_hash
