@@ -195,6 +195,11 @@ pub enum BoundaryMode {
 /// Interpolation filter details and configuration.
 ///
 /// Contains the filter function and parameters needed to compute weights.
+/// Custom descriptors are validated by [`crate::ResizeConfig::validate`]:
+/// support must be at least 0.5, scalar parameters must be finite, blur must
+/// be positive, and sampled rows must have finite normalized weights that fit
+/// the integer coefficient representation. Antialiased weighted AlignCorners
+/// sampling is refused. Curve blur changes coefficient values, not support.
 #[derive(Clone, Debug)]
 pub struct InterpolationDetails {
     /// Filter support window (half-width in input pixels)
@@ -348,8 +353,9 @@ impl InterpolationDetails {
         self.nearest
     }
     pub(crate) fn valid(&self) -> bool {
-        self.window.is_finite()
-            && self.window > 0.0
+        !(self.mapping == SampleMapping::AlignCorners && self.antialias && !self.nearest)
+            && self.window.is_finite()
+            && self.window >= 0.5
             && self.blur.is_finite()
             && self.blur > 0.0
             && [

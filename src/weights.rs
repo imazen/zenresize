@@ -536,7 +536,7 @@ fn compute_pixel_weights(
     } else {
         effective_window
     };
-    let distance = |index: i32| {
+    let distance = |index: i64| {
         if tf_gaussian {
             f64::from(tf_shrink * (index as f32 + 0.5 - (out_pixel as f32 + 0.5) * tf_input_scale))
         } else {
@@ -550,12 +550,12 @@ fn compute_pixel_weights(
     };
 
     // Find input pixel range in filter window
-    let left_edge = f64_ceil(center - effective_window - edge_margin) as i32;
-    let right_edge = f64_floor(center + effective_window + edge_margin) as i32;
+    let left_edge = f64_ceil(center - effective_window - edge_margin) as i64;
+    let right_edge = f64_floor(center + effective_window + edge_margin) as i64;
 
     if filter.boundary() == crate::filter::BoundaryMode::Clamp {
-        let left = left_edge.clamp(0, in_size as i32 - 1);
-        let right = right_edge.clamp(0, in_size as i32 - 1);
+        let left = left_edge.clamp(0, in_size as i64 - 1);
+        let right = right_edge.clamp(0, in_size as i64 - 1);
         weights_out.resize((right - left + 1) as usize, 0.0);
         for index in left_edge..=right_edge {
             let weight = filter.filter(distance(index));
@@ -568,17 +568,22 @@ fn compute_pixel_weights(
                 *weight /= total;
             }
         }
-        return (left, weights_out.len());
+        return (left as i32, weights_out.len());
     }
 
     // Clamp to valid range BEFORE calculating weights
-    let left_pixel = left_edge.max(0) as u32;
-    let right_pixel = right_edge.min(in_size as i32 - 1) as u32;
+    let left_pixel = left_edge.max(0);
+    let right_pixel = right_edge.min(in_size as i64 - 1);
+    // Keep the empty-range test signed. In particular, -1 must never become
+    // u32::MAX when a caller constructs a subpixel support window directly.
+    if right_pixel < left_pixel {
+        return (left_pixel as i32, 0);
+    }
 
     let mut total_weight = 0.0f64;
 
     for in_pixel in left_pixel..=right_pixel {
-        let x = distance(in_pixel as i32);
+        let x = distance(in_pixel);
         let mut w = filter.filter(x);
 
         if w.abs() <= WEIGHT_THRESHOLD {
@@ -610,6 +615,56 @@ fn compute_pixel_weights(
     }
 
     (trimmed_left as i32, weights_out.len())
+}
+
+// Validate the actual sampled rows, not just the descriptor's scalar fields.
+// Called only for custom descriptors after the allocation/work bound passes.
+pub(crate) fn validate_custom_axis(
+    in_size: u32,
+    out_size: u32,
+    filter: &InterpolationDetails,
+) -> bool {
+    let scale = f64::from(out_size) / f64::from(in_size);
+    let shrink = filter.support_scale(scale);
+    let mut weights = Vec::new();
+    for pixel in 0..out_size {
+        weights.clear();
+        compute_pixel_weights(
+            pixel,
+            in_size,
+            scale,
+            shrink,
+            filter.window / shrink,
+            filter,
+            &mut weights,
+        );
+        let sum: f64 = weights.iter().sum();
+        if let Some(ratio) = filter.lobe_ratio_goal {
+            let positive: f64 = weights.iter().filter(|&&w| w >= 0.0).sum();
+            let negative: f64 = weights.iter().filter(|&&w| w < 0.0).sum();
+            if negative < 0.0 {
+                let target_positive = 1.0 / (1.0 - f64::from(ratio));
+                let target_negative = -f64::from(ratio) * target_positive;
+                for weight in &mut weights {
+                    *weight *= if *weight < 0.0 {
+                        target_negative / negative
+                    } else {
+                        target_positive / positive
+                    };
+                }
+            }
+        }
+        if weights.is_empty()
+            || !sum.is_finite()
+            || (sum - 1.0).abs() > 1e-8
+            || weights
+                .iter()
+                .any(|&w| !w.is_finite() || w.abs() > 32767.0 / 16384.0)
+        {
+            return false;
+        }
+    }
+    true
 }
 
 // no_std math helpers

@@ -359,9 +359,14 @@ impl ResizeConfig {
             return Err("output dimensions must be positive");
         }
 
+        if self.interpolation.is_some()
+            && (self.in_width > i32::MAX as u32 || self.in_height > i32::MAX as u32)
+        {
+            return Err("custom interpolation input exceeds signed tap-index range");
+        }
         if self.interpolation.as_ref().is_some_and(|f| !f.valid()) {
             return Err(
-                "custom interpolation requires finite coefficients, positive blur and finite positive support",
+                "custom interpolation requires finite coefficients, positive blur, support >= 0.5 and a supported mapping/antialias combination",
             );
         }
 
@@ -376,7 +381,7 @@ impl ResizeConfig {
         // MAX_WEIGHT_TABLE_ELEMENTS (~256 MB at f32). For `out_size = 1` this
         // means the element-count cap also bounds extreme downscale ratios.
         // Named presets fit within the existing conservative radius of eight;
-        // custom support and curve blur are included in the upper bound.
+        // custom support and antialias scaling are included in the upper bound.
         const MAX_WEIGHT_TABLE_ELEMENTS: u64 = 64 * 1024 * 1024; // ~256 MB at f32
         if self
             .kernel_width_scale
@@ -384,30 +389,39 @@ impl ResizeConfig {
         {
             return Err("kernel_width_scale must be finite and positive");
         }
-        // Include custom support and the configured width multiplier in the
-        // allocation bound. Keep the old conservative floor for named presets.
-        let support = (self
-            .interpolation
-            .as_ref()
-            .map_or(8.0, |f| f.window * f.blur)
-            * self.kernel_width_scale.unwrap_or(1.0))
-        .max(8.0);
+        // Curve blur changes coefficient values, not the tap support. Preserve
+        // the historical radius-eight bound for named presets.
+        let support = self.interpolation.as_ref().map_or(8.0, |f| f.window);
         if !support.is_finite() || support > MAX_WEIGHT_TABLE_ELEMENTS as f64 {
             return Err("kernel support exceeds weight-table memory cap");
         }
-        let max_filter_window = libm::ceil(support) as u64;
 
         let estimate_axis = |in_size: u32, out_size: u32| -> Result<u64, &'static str> {
-            let in_size = in_size as u64;
-            let out_size = out_size as u64;
-            // max_taps ≈ 2 * window * ceil(in_size / out_size) + 2 (downscale)
-            //          ≈ 2 * window + 2                            (upscale, taps fixed)
-            let downscale = in_size.div_ceil(out_size).max(1);
-            let scale_for_window = max_filter_window.saturating_mul(2);
-            let max_taps_estimate = scale_for_window
-                .checked_mul(downscale)
-                .and_then(|v| v.checked_add(2))
-                .ok_or("weight table size overflows u64")?;
+            let scale = f64::from(out_size) / f64::from(in_size);
+            let shrink = self
+                .interpolation
+                .as_ref()
+                .map_or(scale.min(1.0), |f| f.support_scale(scale));
+            // Four samples cover inclusive edges and the Gaussian f32 centre
+            // margin. Bound the raw support too, before Clamp folds edge taps.
+            let max_taps_estimate = if self.interpolation.is_none() {
+                // Exactly the previous conservative preset bound.
+                16 * u64::from(in_size).div_ceil(u64::from(out_size)).max(1) + 2
+            } else {
+                let gaussian_margin = self
+                    .interpolation
+                    .as_ref()
+                    .filter(|f| f.is_gaussian_tf())
+                    .map_or(0.0, |_| 4.0 * f64::from(in_size) * f64::from(f32::EPSILON));
+                let radius = support / shrink;
+                let gaussian_rounding = self
+                    .interpolation
+                    .as_ref()
+                    .filter(|f| f.is_gaussian_tf())
+                    .map_or(0.0, |_| 16.0 * radius * f64::from(f32::EPSILON));
+                libm::ceil(2.0 * radius + 4.0 + gaussian_margin + gaussian_rounding) as u64
+            };
+            let out_size = u64::from(out_size);
             let elements = out_size
                 .checked_mul(max_taps_estimate)
                 .ok_or("weight table size overflows u64")?;
@@ -558,6 +572,23 @@ impl ResizeConfig {
             .is_none_or(|bytes| bytes > isize::MAX as u64)
         {
             return Err("total output buffer size overflows usize on this target");
+        }
+        if let Some(custom) = &self.interpolation {
+            let mut details = custom.clone();
+            if let Some(blur) = self.kernel_width_scale {
+                details = details.with_blur(blur);
+            }
+            match self.lobe_ratio {
+                LobeRatio::Natural => {}
+                LobeRatio::Exact(r) => details = details.with_lobe_ratio(r),
+                LobeRatio::SharpenPercent(p) => details = details.with_sharpen_percent(p),
+            }
+            if !details.valid()
+                || !crate::weights::validate_custom_axis(self.in_width, self.out_width, &details)
+                || !crate::weights::validate_custom_axis(self.in_height, self.out_height, &details)
+            {
+                return Err("custom interpolation cannot produce finite normalized weight rows");
+            }
         }
         Ok(())
     }
@@ -786,7 +817,10 @@ impl ResizeConfigBuilder {
     }
 
     /// Use custom kernel, support scaling and sample-position conventions.
-    /// This overrides both filter presets; a subsequent `filter()` clears it.
+    /// This overrides both filter presets, including a later `up_filter()`.
+    /// A subsequent `filter()` clears it. Custom floating interpolation uses an
+    /// f32 row cache; named presets retain the f16 cache. Thus equivalent kernels
+    /// (CatmullRom versus cubic_bc(0, 0.5)) can produce different output bits.
     pub fn interpolation(mut self, details: crate::filter::InterpolationDetails) -> Self {
         self.interpolation = Some(details);
         self
@@ -800,7 +834,9 @@ impl ResizeConfigBuilder {
     }
 
     /// Set a separate filter for upscaling. By default, the main `filter`
-    /// is used for both up and down operations.
+    /// is used for both up and down operations. A custom `interpolation()`
+    /// overrides this setting regardless of call order; `filter()` clears that
+    /// custom override and makes this preset effective again.
     pub fn up_filter(mut self, filter: crate::filter::Filter) -> Self {
         self.up_filter = Some(filter);
         self
