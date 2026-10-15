@@ -14,3 +14,15 @@ api-doc:
 # Verify the committed snapshots are current
 api-doc-check:
     ZEN_API_DOC=check cargo test --manifest-path apidoc/Cargo.toml
+
+# Caller serializes heavy work with flock/run-heavy.
+conventions-defaults out:
+    cargo run --locked --example conventions_defaults -- {{out}}
+
+conventions-ci:
+    cargo test --locked
+    cargo test --locked --no-default-features --lib
+    cargo test --locked --features pretty-safe
+    cargo build --locked --no-default-features
+    cargo clippy --locked --all-targets -- -D warnings
+    cargo fmt --all -- --check
