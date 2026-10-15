@@ -55,3 +55,15 @@ d62df852ae94b41d8350b8e5c584fd700eb685f2920b4c3a3dfa86a08bc38bbd  oracle-dense-v
 abc-build.log failed on a new example lint; corrected in abc-recheck.log.
 completed-ci.log failed on the new effective-support bound test; implementation corrected, expectation unchanged.
 validated-ci.log is the final complete passing CI/default-byte/API snapshot receipt.
+
+Final support pins and byte-unit comparison:
+gaussian-support-pins.log: run-heavy: done rc=0 1s | peak-RSS 0.46GiB | min-avail 24520MiB | peak-load 0.70
+479c4f29544d705ab67555d480ebf36aa2df53795eb601a5b83523edcbb7f1b1  gaussian-support-pins.log
+final-pins-check.log: run-heavy: done rc=0 2s | peak-RSS 0.20GiB | min-avail 24541MiB | peak-load 0.44
+b06b4d66e698298f6111b27fb9a42be644956d152b6d104b71f6764a5424548d  final-pins-check.log
+oracle-final.log: run-heavy: done rc=0 11s | peak-RSS 0.66GiB | min-avail 24142MiB | peak-load 0.54
+4de5ea0eb06e4ef4c0111d511885002b3d03261ed91152a1e2e4e6e61fb50767  oracle-final.log
+232318cf8d42e7c44d3cbf5909d6bf418a8976a7c9a28da22e9788bbccc7a5d9  oracle-final/results.json
+911a03913e3c482e79ba28b681cd206421f742355f422109f99a4c2afc8c3193  summary-before-byte-scaling.json
+Final rounded-byte comparison scales normalized fractional inputs by255; raw f32 error/strict differences are unchanged.
+Gaussian support pins/driver: a8c8aee9. Final tests:13 convention regressions pass, clippy/fmt/API check pass.

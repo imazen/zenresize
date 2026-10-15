@@ -24,26 +24,28 @@ axes and noninteger up/down scales. Another 128 tuples draw each dimension from
 patterns: 548 cases, 227,236 output pixels per convention. Fractional-f32 cases
 reuse the texture input for u8 comparisons. A pixel differs if any RGB channel
 differs. f32 comparisons are strict, without tolerance; rounded-u8 comparisons
-use ties-to-even then clamp to [0,255]. Native u8 paths compare actual bytes.
+first scale fractional-f32 fixtures by 255, then use ties-to-even and clamp
+to [0,255]. Other fixtures already use byte units. Native u8 paths compare
+actual bytes.
 
 | Oracle / native convention | Maximum native error | Different pixels % | Maximum rounded-u8 error | Rounded-u8 pixels differing % |
 |---|---:|---:|---:|---:|
 | cv-nearest-f32 | 0.0 | 0.0 | 0 | 0.0 |
-| cv-cubic-f32 | 0.00048828125 | 73.80960763259343 | 1 | 0.020243271312644123 |
-| cv-linear-f32 | 0.000396728515625 | 56.78193596085127 | 1 | 0.2077135665123484 |
-| torch-cubic-f32 | 0.00079345703125 | 75.7173159182524 | 1 | 0.06072981393793237 |
-| torch-cubic-align-f32 | 0.0007476806640625 | 71.10801105458643 | 1 | 0.009681564540829798 |
-| torch-linear-f32 | 0.0006866455078125 | 61.553627066133885 | 1 | 0.4365505465683254 |
-| torch-linear-align-f32 | 0.0006561279296875 | 59.251174989878365 | 1 | 0.16678695277156788 |
-| torch-cubic-aa-f32 | 241.2944679260254 | 75.682110229013 | 242 | 0.07085144959425443 |
+| cv-cubic-f32 | 0.00048828125 | 73.80960763259343 | 1 | 0.040486542625288245 |
+| cv-linear-f32 | 0.000396728515625 | 56.78193596085127 | 1 | 0.3995845728669753 |
+| torch-cubic-f32 | 0.00079345703125 | 75.7173159182524 | 1 | 0.09769578763928251 |
+| torch-cubic-align-f32 | 0.0007476806640625 | 71.10801105458643 | 1 | 0.06513052509285501 |
+| torch-linear-f32 | 0.0006866455078125 | 61.553627066133885 | 1 | 0.8594588885563907 |
+| torch-linear-align-f32 | 0.0006561279296875 | 59.251174989878365 | 1 | 0.3502966079318418 |
+| torch-cubic-aa-f32 | 241.2944679260254 | 75.682110229013 | 242 | 0.07789258744213065 |
 | torch-nearest-f32 | 0.0 | 0.0 | 0 | 0.0 |
 | torch-nearest-exact-f32 | 0.0 | 0.0 | 0 | 0.0 |
 | cv-cubic-u8 | 1.0 | 6.9007551620341845 | 1 | 6.9007551620341845 |
 | cv-linear-u8 | 1.0 | 19.51407347427344 | 1 | 19.51407347427344 |
 | pillow22-cubic-u8 | 0.0 | 0.0 | 0 | 0.0 |
 | pillow-cubic-u8 | 27.0 | 30.157193402453835 | 27 | 30.157193402453835 |
-| tf-gaussian-f32 | 0.0001068115234375 | 62.84303543452622 | 1 | 0.06557059620834726 |
-| tf-gaussian-aa-f32 | 0.0001373291015625 | 64.51134503335739 | 1 | 0.007921280078860744 |
+| tf-gaussian-f32 | 0.0001068115234375 | 62.84303543452622 | 1 | 0.08229329859705328 |
+| tf-gaussian-aa-f32 | 0.0001373291015625 | 64.51134503335739 | 1 | 0.011001777887306588 |
 
 `summary.json` retains exact values; all per-case arrays and captures remain
 outside git with hashes in `validation.meta`. No case is excluded from this table.
@@ -59,7 +61,8 @@ Exact half-pixel nearest uses integer arithmetic to avoid cancellation.
 TensorFlow Gaussian basis-image probes identify sigma 0.5 and support radius
 1.5. Across 7,832 coefficients with AA on/off, reciprocal f32 scale gives zero
 support-mask differences and maximum coefficient error 9.309383597333465e-8.
-Direct input/output division gives eight support-mask differences. The hard
+Direct input/output division gives eight support-mask differences. Exact hard-support unit pins include the 18→39 and 14→29 coordinate
+boundaries (public TF generator `pin_gaussian_support.py`). The hard
 cutoff therefore uses the measured f32 coordinate operations before f64 kernel
 normalization. Sources: [tf.image.resize public docs](https://www.tensorflow.org/api_docs/python/tf/image/resize),
 and the committed public-operation probe drivers. No TF implementation source

@@ -68,7 +68,8 @@ for case,(w,h,ow,oh) in enumerate(shapes):
     cache[mode]=np.fromfile(output,dtype='u1' if is_u8 else '<f4').reshape(oh,ow,3)
    got=cache[mode];assert np.isfinite(got).all() and np.isfinite(expected).all()
    error=np.abs(got.astype(np.float64)-expected.astype(np.float64))
-   rounded=lambda a:np.clip(np.rint(a),0,255).astype(np.int16)
+   byte_scale=255.0 if pattern=='fractional' and not is_u8 else 1.0
+   rounded=lambda a:np.clip(np.rint(a.astype(np.float64)*byte_scale),0,255).astype(np.int16)
    error8=np.abs(rounded(got)-rounded(expected))
    row=dict(convention=name,case=key,shape=[w,h,ow,oh],max_abs=float(error.max()),pixels=oh*ow,differing=int(np.any(error!=0,axis=2).sum()),max_u8=int(error8.max()),differing_u8=int(np.any(error8!=0,axis=2).sum()))
    records.append(row)
