@@ -1,0 +1,174 @@
+{
+  "metadata": {
+    "torch": "2.14.1+cpu",
+    "tensorflow": "2.21.0",
+    "opencv": "5.0.0",
+    "pillow": "12.3.0",
+    "numpy": "2.5.4",
+    "ipp": false,
+    "tf_onednn": "0",
+    "threads": 1
+  },
+  "summary": {
+    "cv-nearest-f32": {
+      "cases": 548,
+      "pixels": 227236,
+      "differing": 0,
+      "max_abs": 0.0,
+      "max_u8": 0,
+      "differing_u8": 0,
+      "differing_pct": 0.0,
+      "differing_u8_pct": 0.0
+    },
+    "cv-cubic-f32": {
+      "cases": 548,
+      "pixels": 227236,
+      "differing": 167722,
+      "max_abs": 0.00048828125,
+      "max_u8": 1,
+      "differing_u8": 46,
+      "differing_pct": 73.80960763259343,
+      "differing_u8_pct": 0.020243271312644123
+    },
+    "cv-linear-f32": {
+      "cases": 548,
+      "pixels": 227236,
+      "differing": 129029,
+      "max_abs": 0.000396728515625,
+      "max_u8": 1,
+      "differing_u8": 472,
+      "differing_pct": 56.78193596085127,
+      "differing_u8_pct": 0.2077135665123484
+    },
+    "torch-cubic-f32": {
+      "cases": 548,
+      "pixels": 227236,
+      "differing": 172057,
+      "max_abs": 0.00079345703125,
+      "max_u8": 1,
+      "differing_u8": 138,
+      "differing_pct": 75.7173159182524,
+      "differing_u8_pct": 0.06072981393793237
+    },
+    "torch-cubic-align-f32": {
+      "cases": 548,
+      "pixels": 227236,
+      "differing": 161583,
+      "max_abs": 0.0007476806640625,
+      "max_u8": 1,
+      "differing_u8": 22,
+      "differing_pct": 71.10801105458643,
+      "differing_u8_pct": 0.009681564540829798
+    },
+    "torch-linear-f32": {
+      "cases": 548,
+      "pixels": 227236,
+      "differing": 139872,
+      "max_abs": 0.0006866455078125,
+      "max_u8": 1,
+      "differing_u8": 992,
+      "differing_pct": 61.553627066133885,
+      "differing_u8_pct": 0.4365505465683254
+    },
+    "torch-linear-align-f32": {
+      "cases": 548,
+      "pixels": 227236,
+      "differing": 134640,
+      "max_abs": 0.0006561279296875,
+      "max_u8": 1,
+      "differing_u8": 379,
+      "differing_pct": 59.251174989878365,
+      "differing_u8_pct": 0.16678695277156788
+    },
+    "torch-cubic-aa-f32": {
+      "cases": 548,
+      "pixels": 227236,
+      "differing": 171977,
+      "max_abs": 241.2944679260254,
+      "max_u8": 242,
+      "differing_u8": 161,
+      "differing_pct": 75.682110229013,
+      "differing_u8_pct": 0.07085144959425443
+    },
+    "torch-nearest-f32": {
+      "cases": 548,
+      "pixels": 227236,
+      "differing": 0,
+      "max_abs": 0.0,
+      "max_u8": 0,
+      "differing_u8": 0,
+      "differing_pct": 0.0,
+      "differing_u8_pct": 0.0
+    },
+    "torch-nearest-exact-f32": {
+      "cases": 548,
+      "pixels": 227236,
+      "differing": 0,
+      "max_abs": 0.0,
+      "max_u8": 0,
+      "differing_u8": 0,
+      "differing_pct": 0.0,
+      "differing_u8_pct": 0.0
+    },
+    "cv-cubic-u8": {
+      "cases": 548,
+      "pixels": 227236,
+      "differing": 15681,
+      "max_abs": 1.0,
+      "max_u8": 1,
+      "differing_u8": 15681,
+      "differing_pct": 6.9007551620341845,
+      "differing_u8_pct": 6.9007551620341845
+    },
+    "cv-linear-u8": {
+      "cases": 548,
+      "pixels": 227236,
+      "differing": 44343,
+      "max_abs": 1.0,
+      "max_u8": 1,
+      "differing_u8": 44343,
+      "differing_pct": 19.51407347427344,
+      "differing_u8_pct": 19.51407347427344
+    },
+    "pillow22-cubic-u8": {
+      "cases": 548,
+      "pixels": 227236,
+      "differing": 0,
+      "max_abs": 0.0,
+      "max_u8": 0,
+      "differing_u8": 0,
+      "differing_pct": 0.0,
+      "differing_u8_pct": 0.0
+    },
+    "pillow-cubic-u8": {
+      "cases": 548,
+      "pixels": 227236,
+      "differing": 68528,
+      "max_abs": 27.0,
+      "max_u8": 27,
+      "differing_u8": 68528,
+      "differing_pct": 30.157193402453835,
+      "differing_u8_pct": 30.157193402453835
+    },
+    "tf-gaussian-f32": {
+      "cases": 548,
+      "pixels": 227236,
+      "differing": 142802,
+      "max_abs": 0.0001068115234375,
+      "max_u8": 1,
+      "differing_u8": 149,
+      "differing_pct": 62.84303543452622,
+      "differing_u8_pct": 0.06557059620834726
+    },
+    "tf-gaussian-aa-f32": {
+      "cases": 548,
+      "pixels": 227236,
+      "differing": 146593,
+      "max_abs": 0.0001373291015625,
+      "max_u8": 1,
+      "differing_u8": 18,
+      "differing_pct": 64.51134503335739,
+      "differing_u8_pct": 0.007921280078860744
+    }
+  }
+}

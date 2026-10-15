@@ -1,0 +1,57 @@
+Convention qualification, 2026-10-15, host i265, base e3975fb9.
+Core: 09f6045d; new tests and oracle drivers: c85d827e.
+Evidence root observed: /home/lilith/tmp/aic-variants-scratch/zenresize
+Resolve: ls -l /home/lilith/tmp/aic-variants-scratch/zenresize
+Heavy commands serialized with flock ~/tmp/i265-heavy.lock and run-heavy --mem 16G.
+No target-cpu=native. Default unsafe-code forbid attribute unchanged.
+Raw generated arrays and executables remain outside git.
+baseline.log: run-heavy: done rc=0 60s | peak-RSS 1.01GiB | min-avail 20499MiB | peak-load 17.53
+b5466ed1e4c9ede8a20b56d6dff4829070cabeeb363e0a3a2443630c0f98e8a1  baseline.log
+install.log: run-heavy: done rc=0 202s | peak-RSS 0.08GiB | min-avail 22611MiB | peak-load 14.16
+ea575045c7220d1fe0e15d550bf25d60a4cbf297c80944a0b49a2408aab35b67  install.log
+abd.log: run-heavy: done rc=0 4s | peak-RSS 0.52GiB | min-avail 22670MiB | peak-load 8.31
+cfeba6269eb926d6412face0c0f0683292820792e76fc0f75ef8bdbb4afa4fee  abd.log
+probe.log: run-heavy: done rc=0 6s | peak-RSS 0.49GiB | min-avail 22677MiB | peak-load 9.33
+5e4a29c8e23046ed0f40de5b75972c46053429d9f693d969aef2cc69acd70ce1  probe.log
+abc-build.log: run-heavy: done rc=101 6s | peak-RSS 0.36GiB | min-avail 22279MiB | peak-load 9.01
+6e7dc019c88fac5be3988e99ae640083f08ea09f9dee74a1e3ba54a8023782d3  abc-build.log
+abc-recheck.log: run-heavy: done rc=0 1s | peak-RSS 0.46GiB | min-avail 22996MiB | peak-load 8.75
+84cddd67a1f999dc9c4fdcf0675e6444255019c32a0eb1abf530f5739c282ac6  abc-recheck.log
+fixed-study.log: run-heavy: done rc=0 0s | peak-RSS 0.03GiB | min-avail 23026MiB | peak-load 10.04
+1e09da947628eb4298d1d1d563c945db18da60b7acdfaba60fe0bc818fa81583  fixed-study.log
+pillow22.log: run-heavy: done rc=0 7s | peak-RSS 0.64GiB | min-avail 22506MiB | peak-load 22.91
+78401ffc2390747fd539da52e2fa034786464e4d7cae4161c31ccd5577a90e2b  pillow22.log
+final-validation.log: run-heavy: done rc=0 80s | peak-RSS 0.66GiB | min-avail 22163MiB | peak-load 21.93
+a11158b0650efe3491665c36617757c610523d9575eb5a60520884da2666807b  final-validation.log
+dense-v2.log: run-heavy: done rc=0 14s | peak-RSS 0.66GiB | min-avail 22577MiB | peak-load 12.74
+2acb1669c0d6dc6e613c4900c968fce916cf7b666a974e6cda7eaeb2b0ef29b6  dense-v2.log
+coordinate-probes.log: run-heavy: done rc=0 1s | peak-RSS 0.47GiB | min-avail 22964MiB | peak-load 9.20
+4fb5dae766c6e416c69fd73662a24bc6b8ad0e0fb8c11396f381ae7e40fa6d92  coordinate-probes.log
+coordinate-probes-expanded.log: run-heavy: done rc=0 1s | peak-RSS 0.47GiB | min-avail 22986MiB | peak-load 8.20
+352c359377585a2bdd321ee3993984782b6f4e5889d1ebcf417844544001b512  coordinate-probes-expanded.log
+dense-v3.log: run-heavy: done rc=0 13s | peak-RSS 0.66GiB | min-avail 23968MiB | peak-load 5.55
+c77a10bd8a519e800735aefa5df60813ce90c04da58b134d0c5b01ca2d81cfaf  dense-v3.log
+cv-fixed-probe.log: run-heavy: done rc=0 1s | peak-RSS 0.04GiB | min-avail 24436MiB | peak-load 2.78
+fadee697872639175fb5ac5305cdad78c8bea6812e53c57eb77437be48b31016  cv-fixed-probe.log
+cv-fixed-rounding.log: run-heavy: done rc=0 2s | peak-RSS 0.04GiB | min-avail 24485MiB | peak-load 1.68
+98e6a76cc0ad6bc704a1749dd919f3b48d548acdf19cafcead26dc98b6314ffb  cv-fixed-rounding.log
+pins.log: run-heavy: done rc=0 0s | peak-RSS 0.03GiB | min-avail 24521MiB | peak-load 0.75
+2a6549b39bcf7be65f6a992e6fa8113e20f888e41d9bddad190ce69353de79ed  pins.log
+final-confirmation.log: run-heavy: done rc=0 56s | peak-RSS 0.48GiB | min-avail 23826MiB | peak-load 2.41
+9d504fc0e535182c27eb1e2513c376a847695aa20c5c0e0b9e6b938c6e89f812  final-confirmation.log
+completed-ci.log: run-heavy: done rc=101 1s | peak-RSS 0.39GiB | min-avail 24541MiB | peak-load 0.96
+b138db9f07795ab1c6107e1541092fcef910591835e5bcb017680a52b0a21afc  completed-ci.log
+validated-ci.log: run-heavy: done rc=0 55s | peak-RSS 0.43GiB | min-avail 24050MiB | peak-load 2.29
+61976c9d3432cd361b276d28e2cf576b46193c756e647293269cd9e8eac4044f  validated-ci.log
+765c3d0f737f79ee495e17ed76c11134b78d6c330c2a7b6fd1f86ed60bc38442  defaults-before.bin
+765c3d0f737f79ee495e17ed76c11134b78d6c330c2a7b6fd1f86ed60bc38442  defaults-confirmed.bin
+765c3d0f737f79ee495e17ed76c11134b78d6c330c2a7b6fd1f86ed60bc38442  defaults-validated.bin
+7cc4639636604ce95a3a0696acf5c45d50675f478c3f51e745db2c0512ce4fb4  gen-readme-crates.sh
+3100603bc3f7a01bd11b4bfc3dd6af6626af3dee87f877907afd3e20f5380445  oracle-dense-v3/results.json
+d62df852ae94b41d8350b8e5c584fd700eb685f2920b4c3a3dfa86a08bc38bbd  oracle-dense-v3/cross-oracle-summary.json
+287a2aec08eda5f3921893d3cd8932a4345bd08cea98b4172a81c9477606a97e  oracle-dense-v2/cv-fixed-rounding-summary.json
+08980721043adaa7f76cfd799683bbba9f557e40ebf527396013f9d83c103408  gaussian-probes-expanded.json
+7b9304b31d43ac54d4d69daf7e6d0f944d2552a77fa324acb0307e46cd37648d  torch-layout-probes.json
+abc-build.log failed on a new example lint; corrected in abc-recheck.log.
+completed-ci.log failed on the new effective-support bound test; implementation corrected, expectation unchanged.
+validated-ci.log is the final complete passing CI/default-byte/API snapshot receipt.
