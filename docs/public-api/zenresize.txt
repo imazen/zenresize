@@ -6,37 +6,39 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: zenresize.txt 300 lines (supported surface) | zenresize.features.txt 0 added (features: avx512,bench-simd-competitors,pretty-safe,std) | zenresize.internal.txt 160 lines (203 hidden + 0 excluded-feature)
+# files: zenresize.txt 308 lines (supported surface) | zenresize.features.txt 0 added (features: avx512,bench-simd-competitors,pretty-safe,std) | zenresize.internal.txt 229 lines (304 hidden + 0 excluded-feature)
 
 ## summary
 #
 #   pub modules                                 4
-#   pub types (struct/enum/trait/alias)        35
+#   pub types (struct/enum/trait/alias)        36
 #   pub consts/statics                          4
 #   free functions                             17
-#   inherent methods                          154
-#   struct fields                              27
+#   inherent methods                          157
+#   struct fields                              28
 #   enum variants                              27
-#   re-exports                                 20
+#   re-exports                                 23
 #   trait roster entries (type × trait)        88
-#   auto-trait-complete types                  21
+#   auto-trait-complete types                  22
 #   auto-trait exceptions                       2
 #
 # per-module pub lines:
-#   (root)                          234
+#   (root)                          242
 #   composite                        34
 #   fit                               7
 #   plane                            13
 
-## items (274 lines)
+## items (282 lines)
 
 pub mod zenresize
 pub use AlphaMode
 pub use At
 pub use BlendMode
+pub use BoundaryMode
 pub use ChannelLayout
 pub use ChannelType
 pub use Filter
+pub use InterpolationDetails
 pub use LinearGradientMask
 pub use MaskFill
 pub use MaskSource
@@ -47,6 +49,7 @@ pub use PixelDescriptor
 pub use RadialGradientMask
 pub use ResultAtExt
 pub use RoundedRectMask
+pub use SampleMapping
 pub use SpanKind
 pub use TransferFunction
 pub use mask_pixel_align
@@ -124,6 +127,9 @@ pub Padding::top: u32
 pub fn Padding::is_empty(&self) -> bool
 pub fn Padding::uniform(u32) -> Self
 pub fn Padding::with_color(self, [f32; 4]) -> Self
+pub struct PillowCubicResizer
+pub fn PillowCubicResizer::new(u32, u32, u32, u32) -> core::result::Result<Self, &'static str>
+pub fn PillowCubicResizer::resize_rgb8(&self, &[u8], usize, &mut [u8], usize) -> core::result::Result<(), &'static str>
 pub struct PlaneResizer [also: plane]
 pub fn plane::PlaneResizer::dst_height(&self) -> usize
 pub fn plane::PlaneResizer::dst_width(&self) -> usize
@@ -138,6 +144,7 @@ pub ResizeConfig::in_height: u32
 pub ResizeConfig::in_stride: usize
 pub ResizeConfig::in_width: u32
 pub ResizeConfig::input: zenpixels::descriptor::PixelDescriptor
+pub ResizeConfig::interpolation: core::option::Option<crate::filter::InterpolationDetails>
 pub ResizeConfig::kernel_width_scale: core::option::Option<f64>
 pub ResizeConfig::linear: bool
 pub ResizeConfig::lobe_ratio: LobeRatio
@@ -177,6 +184,7 @@ pub fn ResizeConfigBuilder::fit(self, fit::FitMode, u32, u32) -> Self
 pub fn ResizeConfigBuilder::format(self, zenpixels::descriptor::PixelDescriptor) -> Self
 pub fn ResizeConfigBuilder::in_stride(self, usize) -> Self
 pub fn ResizeConfigBuilder::input(self, zenpixels::descriptor::PixelDescriptor) -> Self
+pub fn ResizeConfigBuilder::interpolation(self, crate::filter::InterpolationDetails) -> Self
 pub fn ResizeConfigBuilder::kernel_width_scale(self, f64) -> Self
 pub fn ResizeConfigBuilder::linear(self) -> Self
 pub fn ResizeConfigBuilder::lobe_ratio(self, LobeRatio) -> Self
@@ -333,6 +341,6 @@ u8: Element
 
 ## auto traits
 
-21 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+22 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
 Resizer<B>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
 StreamingResize<B>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe

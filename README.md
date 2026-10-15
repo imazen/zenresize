@@ -529,6 +529,14 @@ All five transfer functions work with all channel types and layouts:
 - **Linear** (default): sRGB u8 -> linear f32 -> resize -> sRGB u8. Correct on gradients, avoids darkening halos. Uses f32 intermediate buffers.
 - **sRGB**: Resize directly in gamma space. Uses an i16 integer pipeline with 14-bit fixed-point weights for 4-channel formats. Faster; slightly incorrect on gradients; good enough for thumbnails.
 
+## Resampling conventions
+
+Use `.interpolation(InterpolationDetails::cubic_bc(b, c))` for custom cubic
+kernels, antialias-off support, coordinate mappings and boundary modes.
+`InterpolationDetails::gaussian_tf()` and `PillowCubicResizer` cover the measured
+Gaussian and RGB integer-pass conventions. See [usage and numerical limits](https://github.com/imazen/zenresize/blob/main/docs/RESAMPLING_CONVENTIONS.md)
+and the [oracle qualification](https://github.com/imazen/zenresize/blob/main/benchmarks/conventions_2026-10-15/README.md).
+
 ## Filters
 
 31 filters covering a range of sharpness/smoothness tradeoffs:

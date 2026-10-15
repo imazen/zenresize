@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Added
+- Custom resampling conventions through `InterpolationDetails` and
+  `ResizeConfigBuilder::interpolation`: public cubic B/C, fixed-support
+  antialias-off sampling, measured TensorFlow Gaussian, boundary handling and
+  half-pixel/align-corners/asymmetric coordinate modes. Legacy torch f32 and
+  OpenCV reciprocal-f64 nearest variants preserve their integer-boundary
+  choices; custom floating paths retain f32 input samples. Allocation bounds
+  include custom support and modifiers. Existing defaults
+  remain byte-identical in the all-filter capture (`09f6045d`, `c85d827e`, `a8c8aee9`).
+- `PillowCubicResizer`: encoded RGB8 with 22-bit coefficients and separately
+  rounded/clipped horizontal/vertical passes, including strided rows. Exact
+  parity on the 548-case synthetic panel and two public-oracle unit pins
+  (`09f6045d`, `c85d827e`).
+- [Resampling qualification](benchmarks/conventions_2026-10-15/README.md) and
+  reproducible pinned-oracle drivers. Weighted f32 results retain documented
+  framework differences; OpenCV u8 fixed-point models did not qualify as exact
+  and are not installed (`3ce639ab`, `34d8449f`).
+
 ### Changed
 - **`Cargo.lock` refreshed within the existing requirements — third-party crates only.** 74 registry packages moved (notably `palette 0.7.6 -> 0.7.7`, `pic-scale 0.7.9 -> 0.7.11`, `pic-scale-safe 0.1.10 -> 0.1.12`, `fast_image_resize 6.0.0 -> 6.1.0`, `imgref 1.12.2 -> 1.12.3`, `anyhow 1.0.102 -> 1.0.104`, `libc 0.2.186 -> 0.2.189`). No manifest requirement changed and no zen-family dependency moved — `archmage`, `magetypes`, `linear-srgb`, `zenpixels`, `zenblend`, `zenbench`, `whereat` are byte-identical in the lock, deliberately, because their requirements are governed separately. Verified green on aarch64 against all three CI test configurations (default / `--no-default-features --lib` / `--features pretty-safe`) plus `clippy --all-targets -D warnings` and `fmt --check`; every test count and result is identical to the pre-update baseline (367 tests, 0 failures). `palette 0.7.7` replaces its `fast-srgb8` backend with the new `palette_math` crate, which makes it a live risk for `tests/vs_palette.rs` — that suite is the oracle comparison for our sRGB transfer path, and all 25 of its cases still pass unchanged, as do `golden_outputs` (21), `dispatch_tiers` (3), `alpha_f32_exact` (3), `f16_hfilter_exact` (2) and `unpremul_u8_exhaustive` (3).
 - **`zenpixels` requirement now spans the published minor and the next one**: `">=0.2.10, <0.4.0"` (was `"0.2.10"`). For a `0.x` crate Cargo treats the minor as the major, so the plain requirement meant `^0.2.10` = `>=0.2.10, <0.3.0` and a `zenpixels 0.3.0` release would have been invisible until this manifest was hand-edited. The floor is unchanged and nothing newer is published, so resolution is identical — `cargo metadata --all-features` still resolves exactly one `zenpixels 0.2.16`. Widening every consumer uniformly is what prevents two copies of a `0.x` crate coexisting in one graph with non-unifying types. The standing current-plus-next rule is documented in the zencodec repo's `CLAUDE.md`.
