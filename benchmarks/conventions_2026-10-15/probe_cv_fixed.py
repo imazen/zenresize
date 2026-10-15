@@ -42,4 +42,5 @@ for precision in ['f32','f64']:
      different+=int(np.any(delta!=0,axis=2).sum());pixels+=ow*oh;worst=max(worst,int(delta.max()));cases+=1
     output.append(dict(mode=mode,final_round=final_round,precision=precision,partition=partition,cases=cases,pixels=pixels,max_u8=worst,differing_pct=100*different/pixels,differing=different))
 print(json.dumps(output,indent=2))
-(root/'cv-fixed-rounding-summary.json').write_text(json.dumps(output,indent=2)+'\n')
+with (root/'cv-fixed-rounding-summary.json').open('x') as output_file:
+ output_file.write(json.dumps(output,indent=2)+'\n')

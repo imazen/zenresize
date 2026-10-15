@@ -26,3 +26,30 @@ conventions-ci:
     cargo build --locked --no-default-features
     cargo clippy --locked --all-targets -- -D warnings
     cargo fmt --all -- --check
+
+conventions-gaussian-probe python:
+    {{python}} benchmarks/conventions_2026-10-15/probe_gaussian.py
+
+conventions-build:
+    cargo build --locked --examples
+
+conventions-test:
+    cargo test --locked --test conventions
+
+conventions-compare python label *flags:
+    {{python}} benchmarks/conventions_2026-10-15/compare.py "$CARGO_TARGET_DIR/debug/examples/conventions" {{label}} {{flags}}
+
+conventions-fixed-study python label:
+    {{python}} benchmarks/conventions_2026-10-15/fixed_point.py {{label}}
+
+conventions-layout-probe python:
+    {{python}} benchmarks/conventions_2026-10-15/probe_torch_layout.py
+
+conventions-coordinate-probe python:
+    {{python}} benchmarks/conventions_2026-10-15/probe_coordinates.py
+
+conventions-cv-fixed-probe python label:
+    {{python}} benchmarks/conventions_2026-10-15/probe_cv_fixed.py {{label}}
+
+conventions-pins python:
+    {{python}} benchmarks/conventions_2026-10-15/pins.py

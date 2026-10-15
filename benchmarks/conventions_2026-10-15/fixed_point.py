@@ -66,4 +66,5 @@ if __name__ == '__main__':
      different+=int(np.any(delta!=0,axis=2).sum());pixels+=ow*oh;cases+=1
     summaries.append(dict(framework=framework,bits=bits,rounding=rounding,cases=cases,pixels=pixels,max_u8=worst,differing=different,differing_pct=100*different/pixels,worst_case=worst_case))
  print(json.dumps(summaries,indent=2))
- (root/'fixed-point-expanded-summary.json').write_text(json.dumps(summaries,indent=2)+'\n')
+ with (root/'fixed-point-expanded-summary.json').open('x') as output_file:
+  output_file.write(json.dumps(summaries,indent=2)+'\n')
