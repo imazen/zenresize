@@ -53,3 +53,6 @@ conventions-cv-fixed-probe python label:
 
 conventions-pins python:
     {{python}} benchmarks/conventions_2026-10-15/pins.py
+
+conventions-gaussian-support-pins python:
+    {{python}} benchmarks/conventions_2026-10-15/pin_gaussian_support.py

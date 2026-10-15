@@ -226,3 +226,29 @@ fn custom_support_and_modifiers_are_included_in_memory_bound() {
             .is_ok()
     );
 }
+
+#[test]
+fn tensorflow_public_gaussian_support_pins() {
+    // Public TF 2.21.0 impulse probes; generator pin_gaussian_support.py.
+    // Exact support masks catch reciprocal/direct-ratio changes at the hard
+    // cutoff. Coefficient normalization is separately measured in the panel.
+    for (n, m, row, aa, expected) in [
+        (18, 39, 6, false, vec![1, 2, 3]),
+        (14, 29, 14, false, vec![6, 7, 8]),
+        (17, 7, 0, true, vec![0, 1, 2, 3, 4]),
+    ] {
+        let table = F32WeightTable::new(
+            n,
+            m,
+            &InterpolationDetails::gaussian_tf().with_antialias(aa),
+        );
+        let left = table.left[row] as usize;
+        let support: Vec<_> = table
+            .weights(row)
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &w)| (w > 0.0).then_some(left + i))
+            .collect();
+        assert_eq!(support, expected);
+    }
+}
