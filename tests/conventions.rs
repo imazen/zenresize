@@ -252,3 +252,14 @@ fn tensorflow_public_gaussian_support_pins() {
         assert_eq!(support, expected);
     }
 }
+
+#[test]
+fn extreme_downscale_keeps_full_tap_count() {
+    let details = InterpolationDetails::create(Filter::Lanczos);
+    let table = F32WeightTable::new(2_000_000, 100, &details);
+    assert_eq!(table.tap_count(50), 119_984);
+    let sum: f64 = table.weights(50).iter().map(|&w| f64::from(w)).sum();
+    assert!((sum - 1.0).abs() < 1e-6, "weight sum {sum}");
+    let table = zenresize::weights::I16WeightTable::new(2_000_000, 100, &details);
+    assert!(table.tap_count(50) > 65_535);
+}

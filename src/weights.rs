@@ -37,7 +37,7 @@ pub struct F32WeightTable {
     /// Flat array: `out_size * max_taps` elements, zero-padded.
     weights_flat: Vec<f32>,
     /// Number of actual (non-zero) taps per output pixel.
-    tap_counts: Vec<u16>,
+    tap_counts: Vec<u32>,
     /// Maximum taps across all output pixels.
     pub max_taps: usize,
 }
@@ -58,7 +58,7 @@ pub struct I16WeightTable {
     /// Flat array: `out_size * max_taps` elements, zero-padded.
     weights_flat: Vec<i16>,
     /// Number of actual (non-zero) taps per output pixel.
-    tap_counts: Vec<u16>,
+    tap_counts: Vec<u32>,
     /// Maximum taps across all output pixels.
     pub max_taps: usize,
     /// Pre-expanded weights for 4ch ymm horizontal convolution.
@@ -116,7 +116,7 @@ impl F32WeightTable {
         // First pass: compute weights and find max_taps
         let mut temp_weights: Vec<f64> = Vec::new();
         let mut all_left: Vec<i32> = Vec::with_capacity(out_size as usize);
-        let mut all_tap_counts: Vec<u16> = Vec::with_capacity(out_size as usize);
+        let mut all_tap_counts: Vec<u32> = Vec::with_capacity(out_size as usize);
         let mut all_weights: Vec<Vec<f64>> = Vec::with_capacity(out_size as usize);
         let mut max_taps = 0;
 
@@ -133,7 +133,7 @@ impl F32WeightTable {
             );
             max_taps = max_taps.max(tap_count);
             all_left.push(left);
-            all_tap_counts.push(tap_count as u16);
+            all_tap_counts.push(tap_count as u32);
             all_weights.push(temp_weights.clone());
         }
 
@@ -202,7 +202,14 @@ impl F32WeightTable {
                 }
             } else {
                 // Standard normalization: renormalize f32 weights to sum to 1.0
-                let f32_sum: f32 = slice.iter().sum();
+                // Very wide kernels previously truncated their u16 tap count.
+                // Accumulate these newly supported rows in f64 as well: an f32
+                // sum of 100k small taps otherwise visibly shifts DC gain.
+                let f32_sum: f32 = if slice.len() > u16::MAX as usize {
+                    slice.iter().map(|&v| f64::from(v)).sum::<f64>() as f32
+                } else {
+                    slice.iter().sum()
+                };
                 if f32_sum != 0.0 {
                     let inv = 1.0f32 / f32_sum;
                     for v in slice.iter_mut() {
@@ -226,7 +233,7 @@ impl F32WeightTable {
     pub(crate) fn from_parts(
         left: Vec<i32>,
         weights_flat: Vec<f32>,
-        tap_counts: Vec<u16>,
+        tap_counts: Vec<u32>,
         max_taps: usize,
     ) -> Self {
         Self {
@@ -288,7 +295,7 @@ impl I16WeightTable {
         let mut temp_weights: Vec<f64> = Vec::new();
         let mut left_vec = Vec::with_capacity(out_size as usize);
         let mut all_weights: Vec<Vec<i16>> = Vec::with_capacity(out_size as usize);
-        let mut all_tap_counts: Vec<u16> = Vec::with_capacity(out_size as usize);
+        let mut all_tap_counts: Vec<u32> = Vec::with_capacity(out_size as usize);
         let mut max_taps = 0;
 
         // Reusable buffers for fixed-point conversion (avoid per-pixel allocation)
@@ -352,7 +359,7 @@ impl I16WeightTable {
             }
 
             left_vec.push(left);
-            all_tap_counts.push(tap_count as u16);
+            all_tap_counts.push(tap_count as u32);
             all_weights.push(fixed.clone());
         }
 
