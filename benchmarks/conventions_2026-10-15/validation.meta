@@ -67,3 +67,18 @@ oracle-final.log: run-heavy: done rc=0 11s | peak-RSS 0.66GiB | min-avail 24142M
 911a03913e3c482e79ba28b681cd206421f742355f422109f99a4c2afc8c3193  summary-before-byte-scaling.json
 Final rounded-byte comparison scales normalized fractional inputs by255; raw f32 error/strict differences are unchanged.
 Gaussian support pins/driver: a8c8aee9. Final tests:13 convention regressions pass, clippy/fmt/API check pass.
+
+Rebuilt public source 85342a19112311ef7aa1152c64138013add178b1 and repeated the full dense panel.
+run-heavy: done rc=0 10s | peak-RSS 0.66GiB | min-avail 24116MiB | peak-load 0.93
+eb4ae72510440d8187a29d961b04310968e2409511e336932ba7c3f011055071  /home/lilith/tmp/aic-variants-scratch/zenresize/remote-source-check.log
+232318cf8d42e7c44d3cbf5909d6bf418a8976a7c9a28da22e9788bbccc7a5d9  /home/lilith/tmp/aic-variants-scratch/zenresize/oracle-remote/results.json
+e4290f6a22367ae5d01575760bd472987cf9a803bc1ed93899b7a44178a7e098  /home/lilith/tmp/zenresize-conventions-target/debug/examples/conventions
+cmp oracle-final/results.json oracle-remote/results.json: identical complete results.
+RUSTFLAGS/CARGO_ENCODED_RUSTFLAGS contain no target-cpu=native.
+rustc 1.99.0 (b940084d7 2026-09-28)
+binary: rustc
+commit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4
+commit-date: 2026-09-28
+host: x86_64-unknown-linux-gnu
+release: 1.99.0
+LLVM version: 23.1.1
