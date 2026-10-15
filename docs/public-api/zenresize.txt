@@ -6,7 +6,7 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: zenresize.txt 308 lines (supported surface) | zenresize.features.txt 0 added (features: avx512,bench-simd-competitors,pretty-safe,std) | zenresize.internal.txt 229 lines (304 hidden + 0 excluded-feature)
+# files: zenresize.txt 309 lines (supported surface) | zenresize.features.txt 0 added (features: avx512,bench-simd-competitors,pretty-safe,std) | zenresize.internal.txt 229 lines (304 hidden + 0 excluded-feature)
 
 ## summary
 #
@@ -18,7 +18,7 @@
 #   struct fields                              28
 #   enum variants                              27
 #   re-exports                                 23
-#   trait roster entries (type × trait)        88
+#   trait roster entries (type × trait)        90
 #   auto-trait-complete types                  22
 #   auto-trait exceptions                       2
 #
@@ -129,7 +129,7 @@ pub fn Padding::uniform(u32) -> Self
 pub fn Padding::with_color(self, [f32; 4]) -> Self
 pub struct PillowCubicResizer
 pub fn PillowCubicResizer::new(u32, u32, u32, u32) -> core::result::Result<Self, &'static str>
-pub fn PillowCubicResizer::resize_rgb8(&self, &[u8], usize, &mut [u8], usize) -> core::result::Result<(), &'static str>
+pub fn PillowCubicResizer::resize_rgb8(&self, &[u8], zenpixels::descriptor::PixelDescriptor, usize, &mut [u8], usize) -> core::result::Result<(), &'static str>
 pub struct PlaneResizer [also: plane]
 pub fn plane::PlaneResizer::dst_height(&self) -> usize
 pub fn plane::PlaneResizer::dst_width(&self) -> usize
@@ -313,7 +313,7 @@ pub fn resize_hfirst_streaming(&ResizeConfig, &[u8]) -> core::result::Result<all
 pub fn resize_hfirst_streaming_f32(&ResizeConfig, &[u8]) -> core::result::Result<alloc::vec::Vec<u8>, &'static str>
 pub fn unpremultiply_f32_row(&mut [f32]) [also: composite]
 
-## trait impls (23 types)
+## trait impls (24 types)
 
 Bt709: Clone, Copy, Debug, Default, TransferCurve
 ConfigError: Clone, Copy, Debug, Display, Eq, Error, PartialEq
@@ -322,6 +322,7 @@ LobeRatio: Clone, Debug, Default, PartialEq
 NoTransfer: Clone, Copy, Debug, Default, TransferCurve
 OrientOutput: Clone, Copy, Debug, Default, Eq, From<zenpixels::orientation::Orientation>, PartialEq
 Padding: Clone, Debug, Default, PartialEq
+PillowCubicResizer: Clone, Debug
 Pq: Clone, Copy, Debug, Default, TransferCurve
 ResizeConfig: Clone, Debug
 SourceRegion: Clone, Debug, Eq, PartialEq

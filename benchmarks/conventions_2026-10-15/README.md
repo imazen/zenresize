@@ -126,3 +126,12 @@ They cover all 31 existing filters, u8 and f32, at four resize tuples.
 Existing golden and stress tests also pass. Final gates and resource receipts
 are recorded in `validation.meta`. Two no_std unused-import warnings already
 exist in the base transfer/working modules; default clippy adds no warnings.
+
+## Round 8 review qualification
+
+[Review receipt](review_round8.meta) and [refreshed summary](summary-round8.json)
+record the validation, tap-count and typed-input review fixes. All per-case
+measurements and summaries remain identical to the prior panel. The committed
+CI default hash covers the encoded RGBA subset of the full pre-change capture;
+the full encoded/f32 capture also remains byte-identical on the measured host.
+Existing weighted-framework residuals above remain open.

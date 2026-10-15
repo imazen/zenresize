@@ -3,13 +3,16 @@
 ## [Unreleased]
 
 ### Added
+- `InterpolationDetails` is re-exported at the crate root alongside the new
+  sampling-convention enums. Review regression coverage includes an independent
+  Mitchell–Netravali formula and a committed default-output hash (`40e14386`).
 - Custom resampling conventions through `InterpolationDetails` and
   `ResizeConfigBuilder::interpolation`: public cubic B/C, fixed-support
   antialias-off sampling, measured TensorFlow Gaussian, boundary handling and
   half-pixel/align-corners/asymmetric coordinate modes. Legacy torch f32 and
   OpenCV reciprocal-f64 nearest variants preserve their integer-boundary
   choices; custom floating paths retain f32 input samples. Allocation bounds
-  include custom support and modifiers. Existing defaults
+  include custom support and antialias scaling. Existing defaults
   remain byte-identical in the all-filter capture (`09f6045d`, `c85d827e`, `a8c8aee9`).
 - `PillowCubicResizer`: encoded RGB8 with 22-bit coefficients and separately
   rounded/clipped horizontal/vertical passes, including strided rows. Exact
@@ -21,10 +24,30 @@
   and are not installed (`3ce639ab`, `34d8449f`).
 
 ### Changed
+- Custom interpolation validation now rejects support below 0.5, nonfinite
+  fields, unsupported antialiased weighted AlignCorners, and sampled rows that
+  cannot produce finite normalized integer-representable coefficients. Validation
+  checks the resulting blur/lobe modifiers too (`31ee1548`).
+- The custom weight-memory guard bounds actual support and antialias scaling,
+  independently of curve blur. Named presets retain the historical radius-eight
+  guard, including acceptance of 4,000,000→1 with kernel_width_scale(2.0)
+  (`31ee1548`).
+- `PillowCubicResizer::resize_rgb8` requires an explicit RGB8_SRGB descriptor and
+  refuses other formats. The resizer now implements Debug and Clone (`31917097`).
+- Builder docs specify that custom interpolation overrides up_filter regardless
+  of call order; filter clears it. Equivalent named/custom cubic kernels retain
+  distinct f16/f32 floating row-cache precision (`31ee1548`).
+- API snapshots also include unrelated `simd::__bench_kernels` signature drift
+  inherited from main; this review does not change those kernels.
 - **`Cargo.lock` refreshed within the existing requirements — third-party crates only.** 74 registry packages moved (notably `palette 0.7.6 -> 0.7.7`, `pic-scale 0.7.9 -> 0.7.11`, `pic-scale-safe 0.1.10 -> 0.1.12`, `fast_image_resize 6.0.0 -> 6.1.0`, `imgref 1.12.2 -> 1.12.3`, `anyhow 1.0.102 -> 1.0.104`, `libc 0.2.186 -> 0.2.189`). No manifest requirement changed and no zen-family dependency moved — `archmage`, `magetypes`, `linear-srgb`, `zenpixels`, `zenblend`, `zenbench`, `whereat` are byte-identical in the lock, deliberately, because their requirements are governed separately. Verified green on aarch64 against all three CI test configurations (default / `--no-default-features --lib` / `--features pretty-safe`) plus `clippy --all-targets -D warnings` and `fmt --check`; every test count and result is identical to the pre-update baseline (367 tests, 0 failures). `palette 0.7.7` replaces its `fast-srgb8` backend with the new `palette_math` crate, which makes it a live risk for `tests/vs_palette.rs` — that suite is the oracle comparison for our sRGB transfer path, and all 25 of its cases still pass unchanged, as do `golden_outputs` (21), `dispatch_tiers` (3), `alpha_f32_exact` (3), `f16_hfilter_exact` (2) and `unpremul_u8_exhaustive` (3).
 - **`zenpixels` requirement now spans the published minor and the next one**: `">=0.2.10, <0.4.0"` (was `"0.2.10"`). For a `0.x` crate Cargo treats the minor as the major, so the plain requirement meant `^0.2.10` = `>=0.2.10, <0.3.0` and a `zenpixels 0.3.0` release would have been invisible until this manifest was hand-edited. The floor is unchanged and nothing newer is published, so resolution is identical — `cargo metadata --all-features` still resolves exactly one `zenpixels 0.2.16`. Widening every consumer uniformly is what prevents two copies of a `0.x` crate coexisting in one graph with non-unifying types. The standing current-plus-next rule is documented in the zencodec repo's `CLAUDE.md`.
 
 ### Fixed
+- Extreme downscales retain u32 tap counts instead of truncating at 65,535,
+  correcting pre-existing dark output. Newly supported wide f32 rows use an f64
+  normalization sum; narrower named rows retain their arithmetic (`527edc8d`).
+- Signed, widened weight edges cannot wrap an empty negative range to u32::MAX
+  or truncate Clamp support at an i32 boundary (`31ee1548`).
 - **Pushes to `main` now cancel their superseded CI runs.** `ci.yml` keyed its concurrency group on `${{ github.head_ref || github.run_id }}`. `github.head_ref` is populated only for `pull_request` events, so on a push it was empty and the group fell through to `github.run_id` — unique per run, so no two pushes ever shared a group and `cancel-in-progress` could never fire. Every push started a full matrix that ran to completion even when several commits landed seconds apart. Now keyed on `${{ github.ref }}`, which is set for both event types (`refs/heads/main` on push, `refs/pull/N/merge` on a PR), so PR cancellation is unchanged and consecutive pushes supersede each other.
 
 ### QUEUED BREAKING CHANGES

@@ -31,12 +31,22 @@ selects one source sample and does not widen support. `BoundaryMode::Truncate`
 weights into the closest edge sample.
 
 `ResizeConfigBuilder::interpolation` overrides both named-filter presets.
-A later `.filter(...)` clears the custom override. Existing blur/lobe modifiers
+A later `.filter(...)` clears the custom override. `.up_filter(...)` does not:
+custom interpolation takes precedence regardless of its call order relative to
+`.up_filter(...)`. Existing blur/lobe modifiers
 are applied to the selected descriptor. Invalid custom coefficients, support,
-blur and allocation bounds are refused by `ResizeConfig::validate`.
+blur and allocation bounds are refused by `ResizeConfig::validate`. Support must
+be at least 0.5. Validation checks every sampled custom row for finite normalized
+weights representable by the integer path, after applying blur/lobe modifiers.
+Curve blur changes coefficient values, not support width; the allocation guard
+bounds support divided by the antialias scale, independently of curve blur.
 
 Custom interpolation uses native f32 row caching in the floating pipeline;
 existing named-filter configurations keep their f16 cache and arithmetic.
+Consequently `.filter(Filter::CatmullRom)` and
+`.interpolation(InterpolationDetails::cubic_bc(0.0, 0.5))` can produce different
+output bits despite sharing the same mathematical kernel. Choose a preset to
+retain its historical cache precision, or custom interpolation for f32 caching.
 Nearest copies selected f32 samples directly, preserving non-half-representable
 values and signed zero on the RGBF32 path. The usual format/alpha/compositing
 contract still applies when callers request those operations.
@@ -44,6 +54,9 @@ contract still applies when callers request those operations.
 ## Coordinates
 
 `with_sample_mapping` selects the mapping independently of the kernel.
+`AlignCorners` with antialiasing enabled is refused for weighted kernels:
+that support convention has not been qualified. Use `.with_antialias(false)`.
+Nearest has no widened support and remains supported with either flag.
 
 | Mapping | Source coordinate / nearest index |
 |---|---|
@@ -81,11 +94,11 @@ TensorFlow's public resize default is false.
 ## Pillow RGB integer passes
 
 ```rust
-use zenresize::PillowCubicResizer;
+use zenresize::{PillowCubicResizer, PixelDescriptor};
 let resize = PillowCubicResizer::new(7, 5, 3, 2).unwrap();
 let input = vec![128u8; 7 * 5 * 3];
 let mut output = vec![0u8; 3 * 2 * 3];
-resize.resize_rgb8(&input, 7 * 3, &mut output, 3 * 3).unwrap();
+resize.resize_rgb8(&input, PixelDescriptor::RGB8_SRGB, 7 * 3, &mut output, 3 * 3).unwrap();
 ```
 
 This dedicated full-frame path operates on encoded RGB8 samples. It performs
@@ -102,3 +115,16 @@ The separate OpenCV 11-bit feasibility models do not qualify as exact, so no
 OpenCV integer compatibility path is installed. Nor does this dedicated RGB
 path claim Pillow RGBA's alpha behavior. See the qualification record for all
 residuals, versions and reproducible commands.
+
+## Typed Pillow input and validation
+
+`PillowCubicResizer::resize_rgb8` requires an explicit
+`PixelDescriptor::RGB8_SRGB` input descriptor in addition to its byte buffer and
+stride. RGBA, other channel types and linear transfer descriptors return an
+error. The output is encoded RGB8 with the caller's byte stride. The resizer
+implements `Debug` and `Clone`.
+
+Very wide kernels retain u32 tap counts instead of truncating at 65,535. This
+corrects pre-existing dark output on extreme downscales. Rows beyond that old
+limit also use an f64 sum for f32 coefficient renormalization; narrower named
+kernels retain their previous arithmetic.
