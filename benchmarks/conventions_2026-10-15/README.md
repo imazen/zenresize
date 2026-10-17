@@ -1,5 +1,18 @@
 # Convention qualification — 2026-10-15
 
+**2026-10-17 API update.** The conventions are now `ResizeConfig` settings and
+filter presets instead of a custom `InterpolationDetails` and a dedicated RGB
+resizer ([guide](../../docs/RESAMPLING_CONVENTIONS.md)). Mapping: `cubic_bc(0, 0.75)` →
+`Filter::CubicA075`; `gaussian_tf()` → `Filter::Gaussian` with
+`SampleMapping::HalfPixelFloat32`; `nearest()` → `Filter::Nearest`;
+`with_antialias` / `with_sample_mapping` / `with_boundary_mode` →
+`antialias` / `sample_mapping` / `boundary`; the f32 row cache that custom
+kernels implied → `Arithmetic::F32`; `PillowCubicResizer` → `Filter::CatmullRom`
+with `srgb()` and `Arithmetic::Fixed22`. [`examples/conventions.rs`](../../examples/conventions.rs)
+uses the new API. Re-running the dense panel with it on dev (same pinned
+versions) reproduced all 7,672 native outputs of the 2026-10-15 driver byte for
+byte, so every number below stands.
+
 Unmet exactness targets: weighted cubic/linear f32 outputs are not bit-exact to
 all framework oracles. Exact OpenCV u8 fixed-point cubic/linear paths are not
 installed: the independently specified arithmetic models retain nonzero errors.
@@ -104,18 +117,10 @@ no implementation structure was copied to close that gap.
 
 ```sh
 export TMPDIR=$HOME/tmp/aic-variants-scratch/zenresize
-export CARGO_TARGET_DIR=$HOME/tmp/zenresize-conventions-target
-# Serialize every heavy command with flock ~/tmp/i265-heavy.lock and run-heavy --mem 16G.
 uv venv --python 3.12 "$TMPDIR/venv"
 uv pip install --python "$TMPDIR/venv/bin/python" --torch-backend cpu -r benchmarks/conventions_2026-10-15/requirements.txt
-just conventions-build
-just conventions-compare "$TMPDIR/venv/bin/python" NEW_LABEL --dense
-just conventions-coordinate-probe "$TMPDIR/venv/bin/python"
-just conventions-fixed-study "$TMPDIR/venv/bin/python" NEW_LABEL
-just conventions-cv-fixed-probe "$TMPDIR/venv/bin/python" NEW_LABEL
-just conventions-pins "$TMPDIR/venv/bin/python"
-just conventions-ci
-just api-doc-check
+just conventions-compare "$TMPDIR/venv/bin/python" NEW_LABEL
+just conventions-probes "$TMPDIR/venv/bin/python" NEW_LABEL
 ```
 
 Output labels must be new: captures are protected from accidental replacement.

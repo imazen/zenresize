@@ -20,48 +20,30 @@ arm-kernel-tiers-macos:
     mkdir -p "$HOME/tmp"
     CARGO_BUILD_JOBS=4 RAYON_NUM_THREADS=4 OMP_NUM_THREADS=4 TMPDIR="$HOME/tmp" nice -n 19 cargo bench --bench kernel_tiers -- --cpu-policy=unrestricted --format=llm > "$HOME/tmp/zenresize-kernel-tiers.log" 2>&1
 
-# Caller serializes heavy work with flock/run-heavy.
+# Resampling-convention oracles (benchmarks/conventions_2026-10-15). `python`
+# is a venv with that directory's requirements.txt; labels must be new.
+# Build the driver, then compare it with the pinned frameworks on the dense panel.
+conventions-compare python label:
+    cargo build --locked --example conventions
+    {{python}} benchmarks/conventions_2026-10-15/compare.py "${CARGO_TARGET_DIR:-target}/debug/examples/conventions" {{label}} --dense
+
+# Re-run the public-API probes behind the pinned constants and unit-test pins.
+conventions-probes python label:
+    {{python}} benchmarks/conventions_2026-10-15/probe_gaussian.py
+    {{python}} benchmarks/conventions_2026-10-15/pin_gaussian_support.py
+    {{python}} benchmarks/conventions_2026-10-15/probe_coordinates.py
+    {{python}} benchmarks/conventions_2026-10-15/probe_torch_layout.py
+    {{python}} benchmarks/conventions_2026-10-15/probe_cv_fixed.py {{label}}
+    {{python}} benchmarks/conventions_2026-10-15/fixed_point.py {{label}}
+    {{python}} benchmarks/conventions_2026-10-15/pins.py
+
+# Write the all-filter default-output byte capture to `out`.
 conventions-defaults out:
     cargo run --locked --example conventions_defaults -- {{out}}
 
-conventions-ci:
-    cargo test --locked
-    cargo test --locked --no-default-features --lib
-    cargo test --locked --features pretty-safe
-    cargo build --locked --no-default-features
-    cargo clippy --locked --all-targets -- -D warnings
-    cargo fmt --all -- --check
-
-conventions-gaussian-probe python:
-    {{python}} benchmarks/conventions_2026-10-15/probe_gaussian.py
-
-conventions-build:
-    cargo build --locked --examples
-
-conventions-test:
-    cargo test --locked --test conventions
-
-conventions-compare python label *flags:
-    {{python}} benchmarks/conventions_2026-10-15/compare.py "$CARGO_TARGET_DIR/debug/examples/conventions" {{label}} {{flags}}
-
-conventions-fixed-study python label:
-    {{python}} benchmarks/conventions_2026-10-15/fixed_point.py {{label}}
-
-conventions-layout-probe python:
-    {{python}} benchmarks/conventions_2026-10-15/probe_torch_layout.py
-
-conventions-coordinate-probe python:
-    {{python}} benchmarks/conventions_2026-10-15/probe_coordinates.py
-
-conventions-cv-fixed-probe python label:
-    {{python}} benchmarks/conventions_2026-10-15/probe_cv_fixed.py {{label}}
-
-conventions-pins python:
-    {{python}} benchmarks/conventions_2026-10-15/pins.py
-
-conventions-gaussian-support-pins python:
-    {{python}} benchmarks/conventions_2026-10-15/pin_gaussian_support.py
-
-# Round-8 review regressions, including the deterministic pre-change output hash.
-conventions-review-tests:
-    cargo test --locked --test conventions --test default_conventions_hash
+# Default-configuration A/B vs main (benchmarks/pr18_ab_2026-10-17): timed, then
+# retired instructions (needs perf). The timed run pins one CCD on asymmetric-L3 hosts.
+pr18-ab:
+    cd benchmarks/pr18_ab_2026-10-17 && taskset -c 0-7,16-23 cargo bench -- --format=llm --cpu-policy=unrestricted
+    benchmarks/pr18_ab_2026-10-17/count.sh
+    benchmarks/pr18_ab_2026-10-17/count.sh new-only

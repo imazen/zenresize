@@ -355,6 +355,41 @@ fn fixed22_is_per_channel_and_stride_independent() {
 }
 
 #[test]
+fn fixed22_crop_and_padding_match_their_definitions() {
+    let (w, h) = (13, 9);
+    let rgb = texture(w * h * 3);
+    // Crop: resizing a region equals resizing a pre-cropped copy.
+    let (cx, cy, cw, ch) = (2, 1, 9, 7);
+    let mut cropped = Vec::new();
+    for y in cy..cy + ch {
+        cropped.extend_from_slice(&rgb[(y * w + cx) as usize * 3..][..cw as usize * 3]);
+    }
+    let direct = fixed22(w, h, 5, 4, PixelDescriptor::RGB8_SRGB)
+        .crop(cx, cy, cw, ch)
+        .build();
+    let reference = fixed22(cw, ch, 5, 4, PixelDescriptor::RGB8_SRGB).build();
+    assert_eq!(
+        Resizer::new(&direct).resize(&rgb),
+        Resizer::new(&reference).resize(&cropped)
+    );
+    // Padding: the resized block sits inside the padded canvas unchanged.
+    let plain = Resizer::new(&fixed22(w, h, 5, 4, PixelDescriptor::RGB8_SRGB).build()).resize(&rgb);
+    let padded_cfg = fixed22(w, h, 5, 4, PixelDescriptor::RGB8_SRGB)
+        .padding(1, 2, 3, 1)
+        .build();
+    let padded = Resizer::new(&padded_cfg).resize(&rgb);
+    let canvas_w = 1 + 5 + 2;
+    for y in 0..4 {
+        let start = ((1 + y) * canvas_w + 1) * 3;
+        assert_eq!(
+            &padded[start..start + 15],
+            &plain[y * 15..y * 15 + 15],
+            "row {y}"
+        );
+    }
+}
+
+#[test]
 fn fixed22_refuses_conversions_it_cannot_express() {
     let f = || fixed22(8, 8, 4, 4, PixelDescriptor::RGB8_SRGB);
     assert!(f().build().validate().is_ok());

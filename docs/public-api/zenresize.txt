@@ -6,7 +6,7 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: zenresize.txt 309 lines (supported surface) | zenresize.features.txt 0 added (features: avx512,bench-simd-competitors,pretty-safe,std) | zenresize.internal.txt 229 lines (304 hidden + 0 excluded-feature)
+# files: zenresize.txt 317 lines (supported surface) | zenresize.features.txt 0 added (features: avx512,bench-simd-competitors,pretty-safe,std) | zenresize.internal.txt 226 lines (302 hidden + 0 excluded-feature)
 
 ## summary
 #
@@ -14,21 +14,21 @@
 #   pub types (struct/enum/trait/alias)        36
 #   pub consts/statics                          4
 #   free functions                             17
-#   inherent methods                          157
-#   struct fields                              28
-#   enum variants                              27
-#   re-exports                                 23
-#   trait roster entries (type × trait)        90
+#   inherent methods                          158
+#   struct fields                              31
+#   enum variants                              32
+#   re-exports                                 22
+#   trait roster entries (type × trait)        95
 #   auto-trait-complete types                  22
 #   auto-trait exceptions                       2
 #
 # per-module pub lines:
-#   (root)                          242
-#   composite                        34
+#   (root)                          249
+#   composite                        35
 #   fit                               7
 #   plane                            13
 
-## items (282 lines)
+## items (290 lines)
 
 pub mod zenresize
 pub use AlphaMode
@@ -38,7 +38,6 @@ pub use BoundaryMode
 pub use ChannelLayout
 pub use ChannelType
 pub use Filter
-pub use InterpolationDetails
 pub use LinearGradientMask
 pub use MaskFill
 pub use MaskSource
@@ -56,6 +55,7 @@ pub use mask_pixel_align
 pub mod composite
 pub use composite::BlendMode
 pub composite::CompositeError::PremultipliedInput
+pub composite::CompositeError::UnsupportedArithmetic
 pub fn composite::SliceBackground<'a>::new(&'a [f32], usize) -> Self
 pub fn composite::SolidBackground::black(zenpixels::descriptor::PixelDescriptor) -> Self
 pub fn composite::SolidBackground::from_linear(f32, f32, f32, f32, zenpixels::descriptor::PixelDescriptor) -> Self
@@ -81,8 +81,13 @@ pub fn plane::PlaneResizer::new(Filter, u32, u32, u32, u32) -> Self
 pub fn plane::PlaneResizer::resize_plane(&mut self, &[i16], usize, &mut [i16], usize)
 pub fn plane::PlaneResizer::src_height(&self) -> usize
 pub fn plane::PlaneResizer::src_width(&self) -> usize
+#[non_exhaustive] pub enum Arithmetic
+pub Arithmetic::Auto
+pub Arithmetic::F32
+pub Arithmetic::Fixed22
 #[non_exhaustive] pub enum CompositeError [also: composite]
 pub CompositeError::PremultipliedInput
+pub CompositeError::UnsupportedArithmetic
 #[non_exhaustive] pub enum FitMode [also: fit]
 pub FitMode::Cover
 pub FitMode::Fit
@@ -127,9 +132,6 @@ pub Padding::top: u32
 pub fn Padding::is_empty(&self) -> bool
 pub fn Padding::uniform(u32) -> Self
 pub fn Padding::with_color(self, [f32; 4]) -> Self
-pub struct PillowCubicResizer
-pub fn PillowCubicResizer::new(u32, u32, u32, u32) -> core::result::Result<Self, &'static str>
-pub fn PillowCubicResizer::resize_rgb8(&self, &[u8], zenpixels::descriptor::PixelDescriptor, usize, &mut [u8], usize) -> core::result::Result<(), &'static str>
 pub struct PlaneResizer [also: plane]
 pub fn plane::PlaneResizer::dst_height(&self) -> usize
 pub fn plane::PlaneResizer::dst_width(&self) -> usize
@@ -139,12 +141,14 @@ pub fn plane::PlaneResizer::src_height(&self) -> usize
 pub fn plane::PlaneResizer::src_width(&self) -> usize
 pub struct Pq
 #[non_exhaustive] pub struct ResizeConfig
+pub ResizeConfig::antialias: bool
+pub ResizeConfig::arithmetic: Arithmetic
+pub ResizeConfig::boundary: crate::filter::BoundaryMode
 pub ResizeConfig::filter: crate::filter::Filter
 pub ResizeConfig::in_height: u32
 pub ResizeConfig::in_stride: usize
 pub ResizeConfig::in_width: u32
 pub ResizeConfig::input: zenpixels::descriptor::PixelDescriptor
-pub ResizeConfig::interpolation: core::option::Option<crate::filter::InterpolationDetails>
 pub ResizeConfig::kernel_width_scale: core::option::Option<f64>
 pub ResizeConfig::linear: bool
 pub ResizeConfig::lobe_ratio: LobeRatio
@@ -156,6 +160,7 @@ pub ResizeConfig::output: zenpixels::descriptor::PixelDescriptor
 pub ResizeConfig::padding: core::option::Option<Padding>
 pub ResizeConfig::post_blur_sigma: f32
 pub ResizeConfig::post_sharpen: f32
+pub ResizeConfig::sample_mapping: crate::filter::SampleMapping
 pub ResizeConfig::source_region: core::option::Option<SourceRegion>
 pub ResizeConfig::up_filter: core::option::Option<crate::filter::Filter>
 pub fn ResizeConfig::builder(u32, u32, u32, u32) -> ResizeConfigBuilder
@@ -177,6 +182,9 @@ pub fn ResizeConfig::total_output_row_len(&self) -> usize
 pub fn ResizeConfig::total_output_width(&self) -> u32
 pub fn ResizeConfig::validate(&self) -> core::result::Result<(), &'static str>
 pub struct ResizeConfigBuilder
+pub fn ResizeConfigBuilder::antialias(self, bool) -> Self
+pub fn ResizeConfigBuilder::arithmetic(self, Arithmetic) -> Self
+pub fn ResizeConfigBuilder::boundary(self, BoundaryMode) -> Self
 pub fn ResizeConfigBuilder::build(self) -> ResizeConfig
 pub fn ResizeConfigBuilder::crop(self, u32, u32, u32, u32) -> Self
 pub fn ResizeConfigBuilder::filter(self, crate::filter::Filter) -> Self
@@ -184,7 +192,6 @@ pub fn ResizeConfigBuilder::fit(self, fit::FitMode, u32, u32) -> Self
 pub fn ResizeConfigBuilder::format(self, zenpixels::descriptor::PixelDescriptor) -> Self
 pub fn ResizeConfigBuilder::in_stride(self, usize) -> Self
 pub fn ResizeConfigBuilder::input(self, zenpixels::descriptor::PixelDescriptor) -> Self
-pub fn ResizeConfigBuilder::interpolation(self, crate::filter::InterpolationDetails) -> Self
 pub fn ResizeConfigBuilder::kernel_width_scale(self, f64) -> Self
 pub fn ResizeConfigBuilder::linear(self) -> Self
 pub fn ResizeConfigBuilder::lobe_ratio(self, LobeRatio) -> Self
@@ -197,6 +204,7 @@ pub fn ResizeConfigBuilder::padding_uniform(self, u32) -> Self
 pub fn ResizeConfigBuilder::post_blur(self, f32) -> Self
 pub fn ResizeConfigBuilder::post_sharpen(self, f32) -> Self
 pub fn ResizeConfigBuilder::resize_sharpen(self, f32) -> Self
+pub fn ResizeConfigBuilder::sample_mapping(self, SampleMapping) -> Self
 pub fn ResizeConfigBuilder::source_region(self, SourceRegion) -> Self
 pub fn ResizeConfigBuilder::srgb(self) -> Self
 pub fn ResizeConfigBuilder::up_filter(self, crate::filter::Filter) -> Self
@@ -315,6 +323,7 @@ pub fn unpremultiply_f32_row(&mut [f32]) [also: composite]
 
 ## trait impls (24 types)
 
+Arithmetic: Clone, Copy, Debug, Default, Eq, Hash, PartialEq
 Bt709: Clone, Copy, Debug, Default, TransferCurve
 ConfigError: Clone, Copy, Debug, Display, Eq, Error, PartialEq
 Hlg: Clone, Copy, Debug, Default, TransferCurve
@@ -322,7 +331,6 @@ LobeRatio: Clone, Debug, Default, PartialEq
 NoTransfer: Clone, Copy, Debug, Default, TransferCurve
 OrientOutput: Clone, Copy, Debug, Default, Eq, From<zenpixels::orientation::Orientation>, PartialEq
 Padding: Clone, Debug, Default, PartialEq
-PillowCubicResizer: Clone, Debug
 Pq: Clone, Copy, Debug, Default, TransferCurve
 ResizeConfig: Clone, Debug
 SourceRegion: Clone, Debug, Eq, PartialEq

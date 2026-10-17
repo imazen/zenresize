@@ -1,130 +1,121 @@
 # Resampling conventions
 
-Custom kernels, support scaling and coordinates are additive. Named-filter
-configuration keeps its existing output bits. These options specify sampling
-geometry; they do not promise every framework's floating-point accumulation bits.
-The [qualification record](../benchmarks/conventions_2026-10-15/README.md)
-reports strict differences, including the remaining nonzero targets.
+Four `ResizeConfig` settings describe sampling geometry and arithmetic. They
+apply to every `Filter`, and their defaults reproduce earlier releases byte for
+byte.
 
-## Custom interpolation
+| Builder method | Default | Controls |
+|---|---|---|
+| `antialias(bool)` | `true` | whether kernel support widens by `in/out` when downscaling |
+| `sample_mapping(SampleMapping)` | `HalfPixel` | where output sample `i` lands in input coordinates |
+| `boundary(BoundaryMode)` | `Truncate` | what happens to kernel taps outside the image |
+| `arithmetic(Arithmetic)` | `Auto` | numeric representation of the two passes |
+
+Three filter presets cover kernels that reference implementations use:
+`Filter::Nearest` (point sampling), `Filter::Gaussian` (sigma 0.5, radius 1.5)
+and `Filter::CubicA075` (Keys cubic, a = −0.75).
 
 ```rust
-use zenresize::{BoundaryMode, InterpolationDetails, PixelDescriptor, ResizeConfig};
+use zenresize::{Arithmetic, BoundaryMode, Filter, PixelDescriptor, ResizeConfig};
 
-let cubic = InterpolationDetails::cubic_bc(0.0, 0.75)
-    .with_antialias(false)
-    .with_boundary_mode(BoundaryMode::Clamp);
+// Bicubic with fixed support and replicated edges, in f32 throughout.
 let config = ResizeConfig::builder(641, 479, 224, 224)
     .format(PixelDescriptor::RGBF32_LINEAR)
-    .interpolation(cubic)
+    .filter(Filter::CubicA075)
+    .antialias(false)
+    .boundary(BoundaryMode::Clamp)
+    .arithmetic(Arithmetic::F32)
     .build();
 ```
 
-`cubic_bc(b,c)` is Mitchell–Netravali. Keys parameter `a` is `-c` with
-`b=0`: `c=0.5` gives Catmull–Rom/Pillow/MATLAB's mathematical kernel;
-`c=0.75` gives torch/OpenCV's non-antialiased cubic kernel.
+## Matching other libraries
 
-Antialiasing defaults to true: on downscale, kernel support expands by
-`input/output`. `with_antialias(false)` keeps support fixed. Nearest always
-selects one source sample and does not widen support. `BoundaryMode::Truncate`
-(default) removes out-of-image taps and renormalizes. `Clamp` folds their
-weights into the closest edge sample.
+Measured on a 548-case panel (shapes 1–40 px, four patterns, 227,236 pixels per
+row) against pinned public APIs; see the
+[qualification record](../benchmarks/conventions_2026-10-15/README.md).
+"±1 on" is the share of pixels whose rounded 8-bit value differs, never by
+more than 1. The two references for the same kernel disagree with each other
+at that level too, so no single f32 arithmetic matches both bit for bit.
 
-`ResizeConfigBuilder::interpolation` overrides both named-filter presets.
-A later `.filter(...)` clears the custom override. `.up_filter(...)` does not:
-custom interpolation takes precedence regardless of its call order relative to
-`.up_filter(...)`. Existing blur/lobe modifiers
-are applied to the selected descriptor. Invalid custom coefficients, support,
-blur and allocation bounds are refused by `ResizeConfig::validate`. Support must
-be at least 0.5. Validation checks every sampled custom row for finite normalized
-weights representable by the integer path, after applying blur/lobe modifiers.
-Curve blur changes coefficient values, not support width; the allocation guard
-bounds support divided by the antialias scale, independently of curve blur.
+| Reference | Settings | Result |
+|---|---|---|
+| OpenCV `INTER_CUBIC` (f32) | `CubicA075`, `antialias(false)`, `Clamp`, `F32` | ±1 on 0.04% |
+| OpenCV `INTER_LINEAR` (f32) | `Triangle`, `antialias(false)`, `Clamp`, `F32` | ±1 on 0.40% |
+| OpenCV `INTER_NEAREST` | `Nearest`, `AsymmetricFloat64` | exact |
+| PyTorch `bicubic` | `CubicA075`, `antialias(false)`, `Clamp`, `F32` | ±1 on 0.10% (0.07% with `AlignCorners`) |
+| PyTorch `bilinear` | `Triangle`, `antialias(false)`, `Clamp`, `F32` | ±1 on 0.86% (0.35% with `AlignCorners`) |
+| PyTorch `bicubic`, `antialias=True` | `CatmullRom`, `F32` | ±1 on 0.08%, except output width 1 (below) |
+| PyTorch `nearest` / `nearest-exact` | `Nearest` with `AsymmetricFloat32` / `HalfPixel` | exact |
+| TensorFlow `gaussian` | `Gaussian`, `HalfPixelFloat32`, `F32`, `antialias` as the caller sets it | ±1 on 0.08% (0.01% antialiased) |
+| Pillow `BICUBIC` (RGB) | `CatmullRom`, `srgb()`, `Fixed22` | exact |
 
-Custom interpolation uses native f32 row caching in the floating pipeline;
-existing named-filter configurations keep their f16 cache and arithmetic.
-Consequently `.filter(Filter::CatmullRom)` and
-`.interpolation(InterpolationDetails::cubic_bc(0.0, 0.5))` can produce different
-output bits despite sharing the same mathematical kernel. Choose a preset to
-retain its historical cache precision, or custom interpolation for f32 caching.
-Nearest copies selected f32 samples directly, preserving non-half-representable
-values and signed zero on the RGBF32 path. The usual format/alpha/compositing
-contract still applies when callers request those operations.
+Not covered: OpenCV's 8-bit fixed-point cubic and linear (the independently
+written models left ±1 on 0.0035% and 19% of pixels, so no mode ships), PyTorch
+antialiased bicubic at output width 1 (PyTorch returns a flat column), and
+Pillow's RGBA path (it premultiplies in 8 bits first). `Fixed22` with filters
+other than `CatmullRom` uses Pillow's arithmetic but has not been compared to
+Pillow's other kernels.
 
-## Coordinates
+## Antialiasing
 
-`with_sample_mapping` selects the mapping independently of the kernel.
-`AlignCorners` with antialiasing enabled is refused for weighted kernels:
-that support convention has not been qualified. Use `.with_antialias(false)`.
-Nearest has no widened support and remains supported with either flag.
+On downscale, the kernel normally stretches by `in/out` so it averages every
+input pixel it covers. `antialias(false)` keeps the kernel at its own radius, so
+a downscale samples rather than averages. `Filter::Nearest` never widens.
 
-| Mapping | Source coordinate / nearest index |
-|---|---|
-| `HalfPixel` (default) | `(i+0.5)*input/output-0.5`; nearest uses exact integer `floor((i+0.5)*input/output)` |
-| `AlignCorners` | `i*(input-1)/(output-1)`; output length one maps to zero |
-| `Asymmetric` | exact-rational nearest `floor(i*input/output)` |
-| `AsymmetricFloat32` | legacy torch nearest: floor of the f32 product `i*(input/output)` |
-| `AsymmetricFloat64` | OpenCV nearest: floor of the f64 product `i*(1/(output/input))` |
+## Sample mapping
 
-The last three agree mathematically but can select different samples at integer
-boundaries because of their floating-point operations. Public-oracle probes of
-all 1-D size pairs 1..=64 identify the OpenCV reciprocal variant; unit tests pin
-its `6→34, i=17` boundary and torch's `26→22, i=11` boundary.
+`in` and `out` are the axis lengths, `i` the output index.
 
-```rust
-use zenresize::{InterpolationDetails, SampleMapping};
-let torch_nearest = InterpolationDetails::nearest()
-    .with_sample_mapping(SampleMapping::AsymmetricFloat32);
-let opencv_nearest = InterpolationDetails::nearest()
-    .with_sample_mapping(SampleMapping::AsymmetricFloat64);
-```
+| `SampleMapping` | Source position | `Nearest` picks |
+|---|---|---|
+| `HalfPixel` (default) | `(i + 0.5)·in/out − 0.5` | `floor((i + 0.5)·in/out)`, exact integer |
+| `HalfPixelFloat32` | same, in f32: `s = 1/(out/in)`, sample `(i + 0.5)·s`, tap `j` at `k·(j + 0.5 − sample)` | floor of the f32 sample |
+| `AlignCorners` | `i·(in − 1)/(out − 1)`; one output maps to 0 | nearest sample, ties round up |
+| `Asymmetric` | `i·in/out` | `floor(i·in/out)`, exact integer |
+| `AsymmetricFloat32` | `i · (in/out)` in f32 | floor of the f32 product |
+| `AsymmetricFloat64` | `i · (1/(out/in))` in f64 | floor of the f64 product |
 
-## TensorFlow Gaussian
+In `HalfPixelFloat32`, `k` is `1/s` when antialiasing widens the support and 1
+otherwise. The floating-point variants exist because rounding decides which
+sample is chosen at exact integer positions (unit tests pin 26→22 at i=11 for
+`AsymmetricFloat32` and 6→34 at i=17 for `AsymmetricFloat64`) and which taps
+fall inside a hard kernel cutoff such as the Gaussian's (dropping the f32
+arithmetic raises the TensorFlow ±1 share from 0.08% to 0.53%).
 
-`InterpolationDetails::gaussian_tf()` supplies sigma 0.5 and support radius
-1.5. These parameters and hard support boundaries were measured with basis-image
-impulses through [tf.image.resize](https://www.tensorflow.org/api_docs/python/tf/image/resize),
-TensorFlow CPU 2.21.0, with and without antialiasing. Its default half-pixel
-mapping uses reciprocal f32 scale and f32 source-centre arithmetic before the
-hard cutoff. Kernel normalization remains f64; weighted outputs retain small
-nonzero floating differences from TensorFlow. This is not a bit-exact TensorFlow
-arithmetic implementation. Override antialiasing explicitly to match the caller;
-TensorFlow's public resize default is false.
+`AlignCorners` with antialiasing on is refused for weighted filters: widened
+support has no defined align-corners geometry. Use `antialias(false)`.
 
-## Pillow RGB integer passes
+## Boundary
 
-```rust
-use zenresize::{PillowCubicResizer, PixelDescriptor};
-let resize = PillowCubicResizer::new(7, 5, 3, 2).unwrap();
-let input = vec![128u8; 7 * 5 * 3];
-let mut output = vec![0u8; 3 * 2 * 3];
-resize.resize_rgb8(&input, PixelDescriptor::RGB8_SRGB, 7 * 3, &mut output, 3 * 3).unwrap();
-```
+`Truncate` (default) drops taps outside the image and renormalizes the rest.
+`Clamp` adds each outside tap's weight to the nearest edge sample, as if the
+edge pixels repeated indefinitely.
 
-This dedicated full-frame path operates on encoded RGB8 samples. It performs
-horizontal then vertical cubic passes, using 22-bit coefficients, i64 products,
-and a rounded/clipped u8 intermediate. There is no color conversion, alpha
-handling, crop or compositing. Input/output row strides are in bytes; padding
-is untouched. The horizontal intermediate is capped at 120 MP and allocated
-fallibly. It matches every measured Pillow RGB bicubic byte in the dense panel;
-exact pins are regenerated by `benchmarks/conventions_2026-10-15/pins.py`.
-[Pillow's public resize API](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.resize)
-is the oracle; its implementation source was not used.
+## Arithmetic
 
-The separate OpenCV 11-bit feasibility models do not qualify as exact, so no
-OpenCV integer compatibility path is installed. Nor does this dedicated RGB
-path claim Pillow RGBA's alpha behavior. See the qualification record for all
-residuals, versions and reproducible commands.
+- **`Auto`** (default): the fastest representation within the crate's accuracy
+  targets: 14-bit fixed point for eligible 4-channel u8 inputs, otherwise f32
+  arithmetic with input rows cached as f16.
+- **`F32`**: f32 arithmetic and f32 storage for every intermediate. Use it when
+  results must track an f32 reference. With `Filter::Nearest` it copies f32
+  samples exactly, which f16 storage cannot.
+- **`Fixed22`**: Pillow's arithmetic. u8 samples, horizontal pass then vertical
+  pass, coefficients with 22 fractional bits, and each pass rounds half up and
+  clamps to `0..=255`. It works for any channel count and honors strides, crop
+  and padding. It requires u8 input and output with no transfer
+  conversion (call `srgb()` for gamma-encoded data) and no straight alpha.
+  Background compositing returns `CompositeError::UnsupportedArithmetic`,
+  `with_mask` panics, and the `resize_hfirst_streaming*` helpers return an error.
 
-## Typed Pillow input and validation
+## Validation
 
-`PillowCubicResizer::resize_rgb8` requires an explicit
-`PixelDescriptor::RGB8_SRGB` input descriptor in addition to its byte buffer and
-stride. RGBA, other channel types and linear transfer descriptors return an
-error. The output is encoded RGB8 with the caller's byte stride. The resizer
-implements `Debug` and `Clone`.
+`ResizeConfig::validate` (and every constructor) refuses weighted
+`AlignCorners` with antialiasing on, and `Fixed22` outside the formats above.
+The weight-table memory bound is unchanged: every preset, the new ones
+included, fits its radius-8 estimate.
 
-Very wide kernels retain u32 tap counts instead of truncating at 65,535. This
-corrects pre-existing dark output on extreme downscales. Rows beyond that old
-limit also use an f64 sum for f32 coefficient renormalization; narrower named
-kernels retain their previous arithmetic.
+Weight tables store tap counts as u32. Earlier releases stored u16, so
+downscales needing more than 65,535 taps (for example Lanczos from 2,000,000 to
+100) lost taps and came out dark. Rows that wide also sum their f32
+coefficients in f64 before renormalizing; narrower rows keep their previous
+arithmetic.

@@ -57,7 +57,7 @@ All operations work in the streaming API. Crop and padding also work independent
 
 | Operation | What it does | Builder method |
 |-----------|-------------|----------------|
-| **Resize** | Resample to new dimensions with a choice of 31 filters | `.filter(Filter::Lanczos)` |
+| **Resize** | Resample to new dimensions with a choice of 34 filters | `.filter(Filter::Lanczos)` |
 | **Fit** | Aspect-preserving resize to a target box | `.fit(FitMode::Fit, max_w, max_h)` |
 | **Crop** | Extract a rectangular region from the input | `.crop(x, y, w, h)` |
 | **Pad** | Add solid-color border around the output | `.padding(top, right, bottom, left)` |
@@ -533,15 +533,17 @@ All five transfer functions work with all channel types and layouts:
 
 ## Resampling conventions
 
-Use `.interpolation(InterpolationDetails::cubic_bc(b, c))` for custom cubic
-kernels, antialias-off support, coordinate mappings and boundary modes.
-`InterpolationDetails::gaussian_tf()` and `PillowCubicResizer` cover the measured
-Gaussian and RGB integer-pass conventions. See [usage and numerical limits](https://github.com/imazen/zenresize/blob/main/docs/RESAMPLING_CONVENTIONS.md)
-and the [oracle qualification](https://github.com/imazen/zenresize/blob/main/benchmarks/conventions_2026-10-15/README.md).
+To reproduce another library's resize, for example when porting an image
+metric, set the sampling conventions on the builder: `antialias(false)`,
+`sample_mapping(..)`, `boundary(BoundaryMode::Clamp)` and
+`arithmetic(Arithmetic::F32)` or `Arithmetic::Fixed22`. They combine with any
+filter. The [conventions guide](https://github.com/imazen/zenresize/blob/main/docs/RESAMPLING_CONVENTIONS.md)
+lists the settings that match OpenCV, PyTorch, TensorFlow and Pillow, with
+measured differences.
 
 ## Filters
 
-31 filters covering a range of sharpness/smoothness tradeoffs:
+34 filters covering a range of sharpness/smoothness tradeoffs:
 
 | Filter | Category | Window | Notes |
 |--------|----------|--------|-------|
@@ -556,9 +558,10 @@ and the [oracle qualification](https://github.com/imazen/zenresize/blob/main/ben
 | `CubicBSpline` | Cubic | 2.0 | Very smooth, blurs. B-spline (B=1, C=0). |
 | `Triangle` | Linear | 1.0 | Bilinear interpolation. |
 | `Box` | Nearest | 0.5 | Nearest neighbor. Fastest, blocky. |
+| `Nearest` | Point | — | One source sample per output; unlike `Box`, never averages on downscale. |
 | `Fastest` | Cubic | 0.74 | Minimal quality, maximum speed. |
 
-Plus `LanczosSharp`, `Lanczos2Sharp`, `RobidouxFast`, `GinsengSharp`, `CubicFast`, `Cubic`, `CubicSharp`, `CatmullRomFast`, `CatmullRomFastSharp`, `MitchellFast`, `NCubic`, `NCubicSharp`, `RawLanczos2`, `RawLanczos2Sharp`, `RawLanczos3`, `RawLanczos3Sharp`, `Jinc`, `Linear`, `LegacyIDCTFilter`.
+Plus `LanczosSharp`, `Lanczos2Sharp`, `RobidouxFast`, `GinsengSharp`, `CubicFast`, `Cubic`, `CubicSharp`, `CatmullRomFast`, `CatmullRomFastSharp`, `MitchellFast`, `NCubic`, `NCubicSharp`, `RawLanczos2`, `RawLanczos2Sharp`, `RawLanczos3`, `RawLanczos3Sharp`, `Jinc`, `Linear`, `LegacyIDCTFilter`, `Gaussian` (sigma 0.5, radius 1.5) and `CubicA075` (Keys cubic, a = −0.75).
 
 Sharp variants use a slightly reduced blur factor for tighter kernels. Fast variants use smaller windows.
 
@@ -566,7 +569,7 @@ Sharp variants use a slightly reduced blur factor for tighter kernels. Fast vari
 use zenresize::Filter;
 
 let f = Filter::default();      // Robidoux
-let all = Filter::all();        // &[Filter] -- all 31 variants
+let all = Filter::all();        // &[Filter] -- all 34 variants
 ```
 
 ## imgref Integration
