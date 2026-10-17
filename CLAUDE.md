@@ -20,6 +20,18 @@ Two resize APIs with different pipeline architectures:
   - **F32**: Full f32 pipeline with linearization/premul. Used for compositing, 3ch, f32 I/O, u16 I/O.
   - **I16Srgb**: u8 ring buffer → `filter_v_row_u8_i16` → `filter_h_u8_i16` → u8. For sRGB 4ch without linearization. ~2× faster.
   - **I16Linear**: i16 ring buffer → `filter_v_row_i16` → `filter_h_i16_i16` → `linear_i12_to_srgb_u8`. For Rgbx 4ch with linearization, no premul.
+  - `Arithmetic::F32` forces the F32 path and swaps the f16 ring (`v_cache`) for an f32 one (`f32_v_cache`).
+  - `Arithmetic::Fixed22` (Pillow's arithmetic) runs on the I16Srgb path for any channel count, with `fixed22: Some(..)`
+    replacing the i16 tables. Its push/produce work lives in `#[cold] #[inline(never)]` helpers on purpose: the same
+    branch inlined into `produce_next_i16_srgb` cost +3.9–4.2% on sRGB 512²→1024² (`benchmarks/pr18_ab_2026-10-17`).
+
+### Sampling conventions
+
+`ResizeConfig::{antialias, sample_mapping, boundary}` reach the weights through
+`InterpolationDetails::with_conventions` (crate-private fields). In `weights.rs`, `compute_pixel_weights` takes a
+direct path for the default geometry (half-pixel, truncate, weighted) and sends every other convention to
+`convention_weights` (out of line). Keep it that way: a per-tap `match` on the mapping plus eager f32 setup cost
++0.9–1.2% instructions per tiny resize. Guide: `docs/RESAMPLING_CONVENTIONS.md`.
 
 ### SIMD Kernels
 
@@ -265,6 +277,15 @@ way: **4.55x**. For `channels == 4` this is exact, because a flat chunk of 4 IS
 one output pixel; other channel counts still take the original path.
 
 ## Investigation Notes
+
+### Measuring small default-path costs on `dev` (2026-10-17)
+
+Timed A/B at the 1–2% level is unreliable on `dev`: an A/A control (two copies of identical `main` code in one
+zenbench binary) moved by ±4% routinely and by +15–29% in one isolated run. Use retired instructions
+(`benchmarks/pr18_ab_2026-10-17/count.sh`, `perf stat -e instructions:u`) and callgrind for exact per-function
+counts; `perf record` on this box throttles to a few percent of samples, so its per-symbol attribution misleads.
+zenbench refuses the asymmetric-L3 topology unless pinned; user scopes have no cpuset controller, so run with
+`taskset -c 0-7,16-23` and `--cpu-policy=unrestricted` and read paired ratios against the A/A column.
 
 ### i16 accuracy gap [FIXED]
 Intermediate clamping removed from all i16 kernels. Max diff 52→1.
