@@ -1,0 +1,26 @@
+# Paired A/B: this checkout of zenresize vs main at e595ef8f, in one binary so
+# zenbench interleaves them round by round. Detached from the parent package
+# by the empty [workspace] table. Run: `just pr18-ab` from the repo root.
+[package]
+name = "zenresize-pr18-ab"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+new = { package = "zenresize", path = "../.." }
+old = { package = "zenresize", git = "https://github.com/imazen/zenresize", rev = "e595ef8f1dd929aebc01dd139936fca127557aad" }
+# A/A control: the same main commit again, from a local checkout. Its distance
+# from `old` is the code-layout noise floor of a two-copy binary. Adjust the
+# file:// path to your checkout.
+same = { package = "zenresize", git = "file:///home/lilith/work/zen/zenresize", rev = "e595ef8f1dd929aebc01dd139936fca127557aad" }
+zenbench = "0.1.8"
+
+[[bench]]
+name = "ab"
+harness = false
+
+[profile.bench]
+debug = false

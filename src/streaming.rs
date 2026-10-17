@@ -1288,25 +1288,30 @@ impl<B: Background> StreamingResize<B> {
                 // H-first: u8 → optional premul → H-filter to i16 → ring buffer
                 self.check_ring_buffer().at()?;
                 let cache_slot = self.cache_write_idx % self.cache_size;
+                if self.fixed22.is_some() {
+                    self.push_fixed22_row(cache_slot, pixel_data);
+                    self.cache_write_idx += 1;
+                    self.input_rows_received += 1;
+                    self.eagerly_capture_orient_rows();
+                    return Ok(());
+                }
+                let i16_h_weights = self.i16_h_weights.as_ref().unwrap();
                 let out_row_len = self.config.out_width as usize * self.channels;
 
-                let ring_row = &mut self.i16_v_cache[cache_slot][..out_row_len];
-                if let Some(tables) = &self.fixed22 {
-                    fixed22::filter_h(pixel_data, ring_row, &tables.h, self.channels);
+                let src = if self.needs_premul {
+                    simd::premultiply_u8_row(pixel_data, &mut self.temp_v_output_u8[..pixel_len]);
+                    &self.temp_v_output_u8[..]
                 } else {
-                    let src = if self.needs_premul {
-                        simd::premultiply_u8_row(
-                            pixel_data,
-                            &mut self.temp_v_output_u8[..pixel_len],
-                        );
-                        &self.temp_v_output_u8[..]
-                    } else {
-                        pixel_data
-                    };
-                    // H-filter u8 → i16 (unclamped, preserves ringing)
-                    let i16_h_weights = self.i16_h_weights.as_ref().unwrap();
-                    simd::filter_h_u8_to_i16(src, ring_row, i16_h_weights, self.channels);
-                }
+                    pixel_data
+                };
+
+                // H-filter u8 → i16 (unclamped, preserves ringing)
+                simd::filter_h_u8_to_i16(
+                    src,
+                    &mut self.i16_v_cache[cache_slot][..out_row_len],
+                    i16_h_weights,
+                    self.channels,
+                );
                 self.cache_write_idx += 1;
                 self.input_rows_received += 1;
                 self.eagerly_capture_orient_rows();
@@ -1713,19 +1718,14 @@ impl<B: Background> StreamingResize<B> {
                 // H-first: H-filter i16 input → ring buffer (out_width wide)
                 self.check_ring_buffer().at()?;
                 let cache_slot = self.cache_write_idx % self.cache_size;
-                let out_row_len = self.config.out_width as usize * self.channels;
-                if let Some(tables) = &self.fixed22 {
-                    fixed22::filter_h(
-                        row,
-                        &mut self.i16_v_cache[cache_slot][..out_row_len],
-                        &tables.h,
-                        self.channels,
-                    );
+                if self.fixed22.is_some() {
+                    self.push_fixed22_row(cache_slot, row);
                     self.cache_write_idx += 1;
                     self.input_rows_received += 1;
                     return Ok(());
                 }
                 let i16_h_weights = self.i16_h_weights.as_ref().unwrap();
+                let out_row_len = self.config.out_width as usize * self.channels;
                 // Copy to linearized_row for SIMD padding, then H-filter
                 self.linearized_row_i16
                     .resize(pixel_len + i16_h_weights.groups4 * 16, 0);
@@ -2594,20 +2594,8 @@ impl<B: Background> StreamingResize<B> {
     fn produce_next_i16_srgb(&mut self, dst: &mut [u8]) {
         let out_y = self.output_rows_produced as usize;
         let out_h = self.config.out_height as usize;
-        if let Some(tables) = &self.fixed22 {
-            let (top, weights) = &tables.v[out_y];
-            let out_row_len = self.config.out_width as usize * self.channels;
-            with_v_rows(
-                &self.i16_v_cache,
-                self.cache_size,
-                *top as i32,
-                weights.len(),
-                self.config.resize_in_height(),
-                out_row_len,
-                |rows| fixed22::filter_v(rows, &mut dst[..out_row_len], weights),
-            );
-            self.output_rows_produced += 1;
-            return;
+        if self.fixed22.is_some() {
+            return self.produce_next_fixed22(dst);
         }
         let i16_v_weights = self.i16_v_weights.as_ref().unwrap();
 
@@ -2684,6 +2672,41 @@ impl<B: Background> StreamingResize<B> {
             }
             self.paired_row_ready = true;
         }
+    }
+
+    /// `Arithmetic::Fixed22` variant of [`produce_next_i16_srgb`](Self::produce_next_i16_srgb).
+    /// Kept out of line so the default path's codegen is unaffected.
+    #[cold]
+    #[inline(never)]
+    fn produce_next_fixed22(&mut self, dst: &mut [u8]) {
+        let tables = self.fixed22.as_ref().unwrap();
+        let (top, weights) = &tables.v[self.output_rows_produced as usize];
+        let out_row_len = self.config.out_width as usize * self.channels;
+        with_v_rows(
+            &self.i16_v_cache,
+            self.cache_size,
+            *top as i32,
+            weights.len(),
+            self.config.resize_in_height(),
+            out_row_len,
+            |rows| fixed22::filter_v(rows, &mut dst[..out_row_len], weights),
+        );
+        self.output_rows_produced += 1;
+    }
+
+    /// `Arithmetic::Fixed22` horizontal pass of one input row into ring slot
+    /// `slot`. Kept out of line so the default path's codegen is unaffected.
+    #[cold]
+    #[inline(never)]
+    fn push_fixed22_row<T: Copy + Into<i64>>(&mut self, slot: usize, row: &[T]) {
+        let tables = self.fixed22.as_ref().unwrap();
+        let out_row_len = self.config.out_width as usize * self.channels;
+        fixed22::filter_h(
+            row,
+            &mut self.i16_v_cache[slot][..out_row_len],
+            &tables.h,
+            self.channels,
+        );
     }
 
     /// Produce one output row via the I16Linear H-first path.
