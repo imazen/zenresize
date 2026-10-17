@@ -40,7 +40,7 @@ pub(crate) fn gaussian_weight_table(size: u32, sigma: f32) -> F32WeightTable {
         let taps = clamped_last - clamped_first + 1;
 
         left.push(clamped_first as i32);
-        tap_counts.push(taps as u16);
+        tap_counts.push(taps as u32);
 
         let offset = pixel * max_taps;
         let mut sum = 0.0f64;

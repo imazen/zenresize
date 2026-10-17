@@ -9,72 +9,108 @@
 
 ## summary
 #
-#   pub modules                                 4
-#   pub types (struct/enum/trait/alias)         5
+#   pub modules                                 5
+#   pub types (struct/enum/trait/alias)         9
 #   pub consts/statics                          2
-#   free functions                              2
-#   inherent methods                           46
-#   struct fields                              16
-#   enum variants                              62
+#   free functions                             31
+#   inherent methods                           53
+#   struct fields                              18
+#   enum variants                              84
 #   re-exports                                  8
-#   trait roster entries (type × trait)        25
-#   auto-trait-complete types                   4
+#   trait roster entries (type × trait)        43
+#   auto-trait-complete types                   6
 #
 # per-module pub lines:
-#   (root)                           47
-#   composite                         1
+#   (root)                           61
 #   fastmath                          8
-#   filter                           61
-#   fit                               1
+#   filter                           84
 #   plane                             1
-#   simd                              2
+#   simd                             32
 #   weights                          24
 
-## items (144 lines)
+## items (207 lines)
 
 #[non_exhaustive] #[repr(u8)] pub enum Filter [also: filter]
+#[non_exhaustive] pub enum BoundaryMode [also: filter]
+#[non_exhaustive] pub enum SampleMapping [also: filter]
 pub const weights::I16_PRECISION: i32
 pub const weights::WEIGHT_THRESHOLD: f64
 pub fn ConfigError::assert_fields_are_eq(&self)
-pub fn OrientOutput::assert_fields_are_eq(&self)
+pub fn ResizeConfigBuilder::boundary(self, filter::BoundaryMode) -> Self
 pub fn ResizeConfigBuilder::filter(self, filter::Filter) -> Self
+pub fn ResizeConfigBuilder::sample_mapping(self, filter::SampleMapping) -> Self
 pub fn ResizeConfigBuilder::sharpen(self, f32) -> Self
 pub fn ResizeConfigBuilder::sharpen_percent(self, f32) -> Self
 pub fn ResizeConfigBuilder::up_filter(self, filter::Filter) -> Self
 pub fn SourceRegion::assert_fields_are_eq(&self)
-pub fn StreamingError::assert_fields_are_eq(&self)
-pub fn WorkingFormat::assert_fields_are_eq(&self)
-pub fn composite::CompositeError::assert_fields_are_eq(&self)
+pub fn filter::BoundaryMode::clone(&self) -> Self
+pub fn filter::BoundaryMode::default() -> Self
+pub fn filter::BoundaryMode::eq(&self, &Self) -> bool
+pub fn filter::BoundaryMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn filter::BoundaryMode::hash<__H: core::hash::Hasher>(&self, &mut __H)
 pub fn filter::Filter::all() -> &'static [filter::Filter]
-pub fn filter::Filter::assert_fields_are_eq(&self)
-pub fn filter::Filter::clone(&self) -> filter::Filter
-pub fn filter::Filter::cmp(&self, &filter::Filter) -> core::cmp::Ordering
-pub fn filter::Filter::default() -> filter::Filter
-pub fn filter::Filter::eq(&self, &filter::Filter) -> bool
+pub fn filter::Filter::clone(&self) -> Self
+pub fn filter::Filter::cmp(&self, &Self) -> core::cmp::Ordering
+pub fn filter::Filter::default() -> Self
+pub fn filter::Filter::eq(&self, &Self) -> bool
 pub fn filter::Filter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub fn filter::Filter::hash<__H: core::hash::Hasher>(&self, &mut __H)
 pub fn filter::Filter::name(&self) -> &'static str
-pub fn filter::Filter::partial_cmp(&self, &filter::Filter) -> core::option::Option<core::cmp::Ordering>
+pub fn filter::Filter::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
 pub fn filter::InterpolationDetails::calculate_percent_negative_weight(&self) -> f64
-pub fn filter::InterpolationDetails::clone(&self) -> filter::InterpolationDetails
+pub fn filter::InterpolationDetails::clone(&self) -> Self
 pub fn filter::InterpolationDetails::create(filter::Filter) -> Self
 pub fn filter::InterpolationDetails::default() -> Self
 pub fn filter::InterpolationDetails::filter(&self, f64) -> f64
+pub fn filter::InterpolationDetails::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub fn filter::InterpolationDetails::with_blur(self, f64) -> Self
 pub fn filter::InterpolationDetails::with_lobe_ratio(self, f32) -> Self
 pub fn filter::InterpolationDetails::with_sharpen_percent(self, f32) -> Self
-pub fn fit::FitMode::assert_fields_are_eq(&self)
+pub fn filter::SampleMapping::clone(&self) -> Self
+pub fn filter::SampleMapping::default() -> Self
+pub fn filter::SampleMapping::eq(&self, &Self) -> bool
+pub fn filter::SampleMapping::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn filter::SampleMapping::hash<__H: core::hash::Hasher>(&self, &mut __H)
 pub fn plane::PlaneResizer::new(filter::Filter, u32, u32, u32, u32) -> Self
+pub fn simd::__bench_kernels::f16_to_f32_row(&[u16], &mut [f32])
+pub fn simd::__bench_kernels::f32_to_f16_row(&[f32], &mut [u16])
+pub fn simd::__bench_kernels::f32_to_u8_row(&[f32], &mut [u8])
+pub fn simd::__bench_kernels::filter_h_i16_i16(&[i16], &mut [i16], &weights::I16WeightTable, usize)
+pub fn simd::__bench_kernels::filter_h_row_f32(&[f32], &mut [f32], &weights::F32WeightTable, usize)
+pub fn simd::__bench_kernels::filter_h_row_f32_to_f16(&[f32], &mut [u16], &weights::F32WeightTable, usize)
+pub fn simd::__bench_kernels::filter_h_u8_i16(&[u8], &mut [u8], &weights::I16WeightTable, usize)
+pub fn simd::__bench_kernels::filter_h_u8_i16_4rows(&[u8], &[u8], &[u8], &[u8], &mut [u8], &mut [u8], &mut [u8], &mut [u8], &weights::I16WeightTable)
+pub fn simd::__bench_kernels::filter_h_u8_to_i16(&[u8], &mut [i16], &weights::I16WeightTable, usize)
+pub fn simd::__bench_kernels::filter_h_u8_to_i16_4rows(&[u8], &[u8], &[u8], &[u8], &mut [i16], &mut [i16], &mut [i16], &mut [i16], &weights::I16WeightTable)
+pub fn simd::__bench_kernels::filter_v_all_f16(&[u16], &mut [f32], usize, usize, usize, &weights::F32WeightTable)
+pub fn simd::__bench_kernels::filter_v_all_i16_i16(&[i16], &mut [i16], usize, usize, usize, &weights::I16WeightTable)
+pub fn simd::__bench_kernels::filter_v_row_f16(&[&[u16]], &mut [f32], &[f32])
+pub fn simd::__bench_kernels::filter_v_row_f32(&[&[f32]], &mut [f32], &[f32])
+pub fn simd::__bench_kernels::filter_v_row_i16(&[&[i16]], &mut [i16], &[i16])
+pub fn simd::__bench_kernels::filter_v_row_u8_i16(&[&[u8]], &mut [u8], &[i16])
+pub fn simd::__bench_kernels::hlg_to_linear_row(&mut [f32], usize, bool)
+pub fn simd::__bench_kernels::linear_f32_to_srgb_u8(&[f32], &mut [u8], usize, bool)
+pub fn simd::__bench_kernels::pq_to_linear_row(&mut [f32], usize, bool)
+pub fn simd::__bench_kernels::premultiply_alpha_row(&mut [f32])
+pub fn simd::__bench_kernels::premultiply_u8_row(&[u8], &mut [u8])
+pub fn simd::__bench_kernels::srgb_from_linear_row(&mut [f32], usize, bool)
+pub fn simd::__bench_kernels::srgb_to_linear_row(&mut [f32], usize, bool)
+pub fn simd::__bench_kernels::srgb_u8_to_linear_f32(&[u8], &mut [f32], usize, bool)
+pub fn simd::__bench_kernels::srgb_u8_to_linear_premultiply_f32(&[u8], &mut [f32])
+pub fn simd::__bench_kernels::u8_to_f32_premultiply_row(&[u8], &mut [f32])
+pub fn simd::__bench_kernels::u8_to_f32_row(&[u8], &mut [f32])
+pub fn simd::__bench_kernels::unpremultiply_alpha_row(&mut [f32])
+pub fn simd::__bench_kernels::unpremultiply_u8_row(&mut [u8])
 pub fn simd::filter_v_all_u8_i16(&[u8], &mut [u8], usize, usize, usize, &weights::I16WeightTable)
 pub fn simd::filter_v_all_u8_i16_tiled(&[u8], &mut [u8], usize, usize, usize, &weights::I16WeightTable, usize)
-pub fn weights::F32WeightTable::clone(&self) -> weights::F32WeightTable
+pub fn weights::F32WeightTable::clone(&self) -> Self
 pub fn weights::F32WeightTable::is_empty(&self) -> bool
 pub fn weights::F32WeightTable::len(&self) -> usize
 pub fn weights::F32WeightTable::new(u32, u32, &filter::InterpolationDetails) -> Self
 pub fn weights::F32WeightTable::tap_count(&self, usize) -> usize
 pub fn weights::F32WeightTable::weights(&self, usize) -> &[f32]
 pub fn weights::F32WeightTable::weights_padded(&self, usize) -> &[f32]
-pub fn weights::I16WeightTable::clone(&self) -> weights::I16WeightTable
+pub fn weights::I16WeightTable::clone(&self) -> Self
 pub fn weights::I16WeightTable::expanded_4ch_all(&self) -> &[i16]
 pub fn weights::I16WeightTable::is_empty(&self) -> bool
 pub fn weights::I16WeightTable::len(&self) -> usize
@@ -86,6 +122,7 @@ pub fn weights::I16WeightTable::weights_padded(&self, usize) -> &[i16]
 pub mod fastmath
 pub mod filter
 pub mod simd
+pub mod simd::__bench_kernels
 pub mod weights
 pub struct filter::InterpolationDetails
 pub struct weights::F32WeightTable
@@ -98,15 +135,19 @@ pub use fastmath::pq_from_linear
 pub use fastmath::pq_to_linear
 pub use fastmath::srgb_from_linear
 pub use fastmath::srgb_to_linear
+pub BoundaryMode::Clamp
+pub BoundaryMode::Truncate
 pub Filter::Box = 24
 pub Filter::CatmullRom = 13
 pub Filter::CatmullRomFast = 25
 pub Filter::CatmullRomFastSharp = 26
 pub Filter::Cubic = 11
+pub Filter::CubicA075 = 34
 pub Filter::CubicBSpline = 15
 pub Filter::CubicFast = 10
 pub Filter::CubicSharp = 12
 pub Filter::Fastest = 27
+pub Filter::Gaussian = 33
 pub Filter::Ginseng = 4
 pub Filter::GinsengSharp = 5
 pub Filter::Hermite = 16
@@ -121,6 +162,7 @@ pub Filter::Mitchell = 14
 pub Filter::MitchellFast = 28
 pub Filter::NCubic = 29
 pub Filter::NCubicSharp = 30
+pub Filter::Nearest = 32
 pub Filter::RawLanczos2 = 20
 pub Filter::RawLanczos2Sharp = 21
 pub Filter::RawLanczos3 = 18
@@ -129,17 +171,29 @@ pub Filter::Robidoux = 2
 pub Filter::RobidouxFast = 1
 pub Filter::RobidouxSharp = 3
 pub Filter::Triangle = 22
+pub ResizeConfig::boundary: filter::BoundaryMode
 pub ResizeConfig::filter: filter::Filter
+pub ResizeConfig::sample_mapping: filter::SampleMapping
 pub ResizeConfig::up_filter: core::option::Option<filter::Filter>
+pub SampleMapping::AlignCorners
+pub SampleMapping::Asymmetric
+pub SampleMapping::AsymmetricFloat32
+pub SampleMapping::AsymmetricFloat64
+pub SampleMapping::HalfPixel
+pub SampleMapping::HalfPixelFloat32
+pub filter::BoundaryMode::Clamp
+pub filter::BoundaryMode::Truncate
 pub filter::Filter::Box = 24
 pub filter::Filter::CatmullRom = 13
 pub filter::Filter::CatmullRomFast = 25
 pub filter::Filter::CatmullRomFastSharp = 26
 pub filter::Filter::Cubic = 11
+pub filter::Filter::CubicA075 = 34
 pub filter::Filter::CubicBSpline = 15
 pub filter::Filter::CubicFast = 10
 pub filter::Filter::CubicSharp = 12
 pub filter::Filter::Fastest = 27
+pub filter::Filter::Gaussian = 33
 pub filter::Filter::Ginseng = 4
 pub filter::Filter::GinsengSharp = 5
 pub filter::Filter::Hermite = 16
@@ -154,6 +208,7 @@ pub filter::Filter::Mitchell = 14
 pub filter::Filter::MitchellFast = 28
 pub filter::Filter::NCubic = 29
 pub filter::Filter::NCubicSharp = 30
+pub filter::Filter::Nearest = 32
 pub filter::Filter::RawLanczos2 = 20
 pub filter::Filter::RawLanczos2Sharp = 21
 pub filter::Filter::RawLanczos3 = 18
@@ -172,13 +227,20 @@ pub filter::InterpolationDetails::q2: f64
 pub filter::InterpolationDetails::q3: f64
 pub filter::InterpolationDetails::q4: f64
 pub filter::InterpolationDetails::window: f64
+pub filter::SampleMapping::AlignCorners
+pub filter::SampleMapping::Asymmetric
+pub filter::SampleMapping::AsymmetricFloat32
+pub filter::SampleMapping::AsymmetricFloat64
+pub filter::SampleMapping::HalfPixel
+pub filter::SampleMapping::HalfPixelFloat32
 pub weights::F32WeightTable::left: alloc::vec::Vec<i32>
 pub weights::F32WeightTable::max_taps: usize
 pub weights::I16WeightTable::left: alloc::vec::Vec<i32>
 pub weights::I16WeightTable::max_taps: usize
 
-## trait impls (15 types)
+## trait impls (18 types)
 
+Arithmetic: TrivialClone
 Bt709: TrivialClone
 ConfigError: TrivialClone
 Hlg: TrivialClone
@@ -189,12 +251,14 @@ Srgb: TrivialClone
 WorkingFormat: TrivialClone
 composite::NoBackground: TrivialClone
 composite::SliceBackground<'a>: TrivialClone
+filter::BoundaryMode: Clone, Copy, Debug, Default, Eq, Hash, PartialEq, TrivialClone
 filter::Filter: Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, TrivialClone
-filter::InterpolationDetails: Clone, Default
+filter::InterpolationDetails: Clone, Debug, Default
+filter::SampleMapping: Clone, Copy, Debug, Default, Eq, Hash, PartialEq, TrivialClone
 fit::FitMode: TrivialClone
 weights::F32WeightTable: Clone
 weights::I16WeightTable: Clone
 
 ## auto traits
 
-4 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+6 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe

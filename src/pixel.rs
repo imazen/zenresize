@@ -3,6 +3,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::{vec, vec::Vec};
 
+use crate::filter::{BoundaryMode, Filter, SampleMapping};
 use zenpixels::{AlphaMode, ChannelType, PixelDescriptor, TransferFunction};
 
 // =============================================================================
@@ -244,6 +245,28 @@ impl core::fmt::Display for ConfigError {
 #[cfg(feature = "std")]
 impl std::error::Error for ConfigError {}
 
+/// Numeric representation of the separable resampling passes.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Arithmetic {
+    /// The fastest representation within the crate's accuracy targets (default):
+    /// 14-bit fixed point for eligible 4-channel u8 inputs, otherwise f32
+    /// arithmetic with input rows cached as f16.
+    #[default]
+    Auto,
+    /// f32 arithmetic and f32 storage for every intermediate. Slower than
+    /// `Auto`; use it when outputs must track an f32 reference implementation.
+    F32,
+    /// u8 samples, horizontal pass then vertical pass. Coefficients have 22
+    /// fractional bits; each pass rounds half up and clamps to `0..=255`.
+    /// This is Pillow's resampling arithmetic.
+    ///
+    /// Requires u8 input and output with no transfer conversion (use
+    /// [`srgb()`](ResizeConfigBuilder::srgb) for gamma-encoded data) and no
+    /// straight alpha. Background compositing and masks are refused.
+    Fixed22,
+}
+
 /// Resize configuration built with [`ResizeConfigBuilder`].
 ///
 /// Use [`ResizeConfig::builder()`] to create one.
@@ -290,6 +313,18 @@ pub struct ResizeConfig {
     ///
     /// Zero cost — applied during weight computation.
     pub lobe_ratio: LobeRatio,
+    /// Widen the kernel support by `in/out` when downscaling (default `true`).
+    ///
+    /// `false` keeps the support fixed, as OpenCV and PyTorch
+    /// (`antialias=False`) do. [`Filter::Nearest`](crate::Filter::Nearest)
+    /// never widens.
+    pub antialias: bool,
+    /// Output-to-input sample position mapping. See [`SampleMapping`].
+    pub sample_mapping: SampleMapping,
+    /// Handling of kernel taps outside the input. See [`BoundaryMode`].
+    pub boundary: BoundaryMode,
+    /// Numeric representation of the resampling passes. See [`Arithmetic`].
+    pub arithmetic: Arithmetic,
     /// Whether to resize in linear light (true) or sRGB gamma space (false).
     ///
     /// Linear light (default) converts sRGB u8 to linear f32 before resampling.
@@ -355,6 +390,29 @@ impl ResizeConfig {
         }
         if self.out_width == 0 || self.out_height == 0 {
             return Err("output dimensions must be positive");
+        }
+
+        // Antialiased (widened) support has no defined AlignCorners geometry.
+        if self.antialias
+            && self.sample_mapping == SampleMapping::AlignCorners
+            && self.resolved_filter() != Filter::Nearest
+        {
+            return Err("AlignCorners with a weighted filter requires antialias(false)");
+        }
+        if self.arithmetic == Arithmetic::Fixed22 {
+            if self.input.channel_type() != ChannelType::U8
+                || self.output.channel_type() != ChannelType::U8
+            {
+                return Err("Arithmetic::Fixed22 requires u8 input and output");
+            }
+            if self.effective_input_transfer() != TransferFunction::Linear
+                || self.effective_output_transfer() != TransferFunction::Linear
+            {
+                return Err("Arithmetic::Fixed22 cannot convert transfer functions; use srgb()");
+            }
+            if self.needs_premultiply() {
+                return Err("Arithmetic::Fixed22 does not support straight alpha");
+            }
         }
 
         // Bound the resulting weight-table size.
@@ -680,6 +738,18 @@ impl ResizeConfig {
         self.output.transfer
     }
 
+    /// The filter used for both axes: `up_filter` (when set) for a net
+    /// upscale by area, otherwise `filter`.
+    pub(crate) fn resolved_filter(&self) -> Filter {
+        let in_area = self.in_width as u64 * self.in_height as u64;
+        let out_area = self.out_width as u64 * self.out_height as u64;
+        if out_area > in_area {
+            self.up_filter.unwrap_or(self.filter)
+        } else {
+            self.filter
+        }
+    }
+
     /// Number of channels per pixel (from input descriptor).
     #[inline]
     pub fn channels(&self) -> usize {
@@ -730,6 +800,10 @@ pub struct ResizeConfigBuilder {
     post_blur_sigma: f32,
     kernel_width_scale: Option<f64>,
     lobe_ratio: LobeRatio,
+    antialias: bool,
+    sample_mapping: SampleMapping,
+    boundary: BoundaryMode,
+    arithmetic: Arithmetic,
     linear: bool,
     in_stride: usize,
     out_stride: usize,
@@ -753,6 +827,10 @@ impl ResizeConfigBuilder {
             post_blur_sigma: 0.0,
             kernel_width_scale: None,
             lobe_ratio: LobeRatio::Natural,
+            antialias: true,
+            sample_mapping: SampleMapping::HalfPixel,
+            boundary: BoundaryMode::Truncate,
+            arithmetic: Arithmetic::Auto,
             linear: true,
             in_stride: 0,
             out_stride: 0,
@@ -772,6 +850,31 @@ impl ResizeConfigBuilder {
     /// is used for both up and down operations.
     pub fn up_filter(mut self, filter: crate::filter::Filter) -> Self {
         self.up_filter = Some(filter);
+        self
+    }
+
+    /// Widen the kernel support on downscale (default `true`). See
+    /// [`ResizeConfig::antialias`].
+    pub fn antialias(mut self, enabled: bool) -> Self {
+        self.antialias = enabled;
+        self
+    }
+
+    /// Set the output-to-input sample position mapping.
+    pub fn sample_mapping(mut self, mapping: SampleMapping) -> Self {
+        self.sample_mapping = mapping;
+        self
+    }
+
+    /// Set the handling of kernel taps outside the input.
+    pub fn boundary(mut self, mode: BoundaryMode) -> Self {
+        self.boundary = mode;
+        self
+    }
+
+    /// Set the numeric representation of the resampling passes.
+    pub fn arithmetic(mut self, arithmetic: Arithmetic) -> Self {
+        self.arithmetic = arithmetic;
         self
     }
 
@@ -1028,6 +1131,10 @@ impl ResizeConfigBuilder {
             post_blur_sigma: self.post_blur_sigma,
             kernel_width_scale: self.kernel_width_scale,
             lobe_ratio: self.lobe_ratio,
+            antialias: self.antialias,
+            sample_mapping: self.sample_mapping,
+            boundary: self.boundary,
+            arithmetic: self.arithmetic,
             linear: self.linear,
             in_stride: self.in_stride,
             out_stride: self.out_stride,

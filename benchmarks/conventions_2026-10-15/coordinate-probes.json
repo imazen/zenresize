@@ -1,0 +1,30 @@
+{
+  "cv_nearest_index_mismatches": {
+    "rational": 140,
+    "direct64": 143,
+    "reciprocal64": 0,
+    "division64": 121
+  },
+  "tf_gaussian": {
+    "reciprocal=False,divide=False": {
+      "max_abs": 0.00907476618885994,
+      "support_mismatches": 8,
+      "cells": 7832
+    },
+    "reciprocal=False,divide=True": {
+      "max_abs": 0.00907476618885994,
+      "support_mismatches": 8,
+      "cells": 7832
+    },
+    "reciprocal=True,divide=False": {
+      "max_abs": 9.309383597333465e-08,
+      "support_mismatches": 0,
+      "cells": 7832
+    },
+    "reciprocal=True,divide=True": {
+      "max_abs": 9.309383597333465e-08,
+      "support_mismatches": 0,
+      "cells": 7832
+    }
+  }
+}

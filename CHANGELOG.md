@@ -2,11 +2,34 @@
 
 ## [Unreleased]
 
+### Added
+- Sampling conventions on `ResizeConfig`, applying to every filter:
+  `antialias(bool)`, `sample_mapping(SampleMapping)` (half-pixel, align-corners,
+  asymmetric, and f32/f64 variants that reproduce other libraries' rounding),
+  `boundary(BoundaryMode)` (truncate or clamp) and `arithmetic(Arithmetic)`
+  (`Auto`, full `F32`, or `Fixed22`: 22-bit coefficients with rounded 8-bit
+  passes, Pillow's arithmetic). Defaults are byte-identical to before, and
+  retired instructions per call stay within −0.17%..+0.15% from 32² to 1 MP on
+  every path ([measurements](benchmarks/pr18_ab_2026-10-17/RESULTS.md))
+  (`97896e1c`, `ef7186ee`).
+- `Filter::Nearest`, `Filter::Gaussian` (sigma 0.5, radius 1.5) and
+  `Filter::CubicA075` (Keys a = −0.75) (`97896e1c`).
+- `CompositeError::UnsupportedArithmetic` for compositing under `Fixed22`
+  (`97896e1c`).
+- [Resampling conventions guide](docs/RESAMPLING_CONVENTIONS.md) and the
+  [qualification record](benchmarks/conventions_2026-10-15/README.md) against
+  pinned OpenCV, PyTorch, TensorFlow and Pillow releases. Exact: OpenCV and
+  PyTorch nearest, Pillow RGB bicubic. Within ±1 on under 1% of pixels: f32
+  cubic and linear, TensorFlow Gaussian (`3ce639ab`, `97896e1c`).
+
 ### Changed
 - **`Cargo.lock` refreshed within the existing requirements — third-party crates only.** 74 registry packages moved (notably `palette 0.7.6 -> 0.7.7`, `pic-scale 0.7.9 -> 0.7.11`, `pic-scale-safe 0.1.10 -> 0.1.12`, `fast_image_resize 6.0.0 -> 6.1.0`, `imgref 1.12.2 -> 1.12.3`, `anyhow 1.0.102 -> 1.0.104`, `libc 0.2.186 -> 0.2.189`). No manifest requirement changed and no zen-family dependency moved — `archmage`, `magetypes`, `linear-srgb`, `zenpixels`, `zenblend`, `zenbench`, `whereat` are byte-identical in the lock, deliberately, because their requirements are governed separately. Verified green on aarch64 against all three CI test configurations (default / `--no-default-features --lib` / `--features pretty-safe`) plus `clippy --all-targets -D warnings` and `fmt --check`; every test count and result is identical to the pre-update baseline (367 tests, 0 failures). `palette 0.7.7` replaces its `fast-srgb8` backend with the new `palette_math` crate, which makes it a live risk for `tests/vs_palette.rs` — that suite is the oracle comparison for our sRGB transfer path, and all 25 of its cases still pass unchanged, as do `golden_outputs` (21), `dispatch_tiers` (3), `alpha_f32_exact` (3), `f16_hfilter_exact` (2) and `unpremul_u8_exhaustive` (3).
 - **`zenpixels` requirement now spans the published minor and the next one**: `">=0.2.10, <0.4.0"` (was `"0.2.10"`). For a `0.x` crate Cargo treats the minor as the major, so the plain requirement meant `^0.2.10` = `>=0.2.10, <0.3.0` and a `zenpixels 0.3.0` release would have been invisible until this manifest was hand-edited. The floor is unchanged and nothing newer is published, so resolution is identical — `cargo metadata --all-features` still resolves exactly one `zenpixels 0.2.16`. Widening every consumer uniformly is what prevents two copies of a `0.x` crate coexisting in one graph with non-unifying types. The standing current-plus-next rule is documented in the zencodec repo's `CLAUDE.md`.
 
 ### Fixed
+- Downscales needing more than 65,535 taps per output (e.g. Lanczos
+  2,000,000→100) no longer truncate their tap counts and come out dark. Rows
+  that wide sum their f32 coefficients in f64 before renormalizing (`527edc8d`).
 - **Pushes to `main` now cancel their superseded CI runs.** `ci.yml` keyed its concurrency group on `${{ github.head_ref || github.run_id }}`. `github.head_ref` is populated only for `pull_request` events, so on a push it was empty and the group fell through to `github.run_id` — unique per run, so no two pushes ever shared a group and `cancel-in-progress` could never fire. Every push started a full matrix that ran to completion even when several commits landed seconds apart. Now keyed on `${{ github.ref }}`, which is set for both event types (`refs/heads/main` on push, `refs/pull/N/merge` on a PR), so PR cancellation is unchanged and consecutive pushes supersede each other.
 
 ### QUEUED BREAKING CHANGES

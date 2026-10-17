@@ -1,0 +1,38 @@
+Round 8 review qualification — 2026-10-15
+Functional source and tests: 40e143867c08f08d1a29e57f31f91c0a7cdb5577
+Platform: x86_64 Linux (i265)
+
+Commands, with TMPDIR=$HOME/tmp/aic-variants-scratch/zenresize and
+CARGO_TARGET_DIR=$HOME/tmp/zenresize-conventions-target; serialized under
+flock and run-heavy --mem 16G:
+  cargo fmt --all
+  just conventions-ci
+  just api-doc
+  just api-doc-check
+  just conventions-build
+  just conventions-defaults "$TMPDIR/round8-defaults-final.bin"
+  just conventions-compare "$TMPDIR/venv/bin/python" oracle-round8 --dense
+
+Final full gates: exit 0.
+run-heavy: done rc=0 65s | peak-RSS 0.43GiB | min-avail 20886MiB | peak-load 27.84
+Default / no-default-features --lib / pretty-safe tests, no_std build,
+all-target clippy -D warnings, fmt check, API regeneration/check all passed.
+No-default-feature tests retain six existing warnings; the library build
+retains two existing unused-import warnings. Default all-target clippy is clean.
+The 22 convention regressions and the deterministic default hash pass.
+
+Full default capture: 438960 bytes; cmp against the pre-conventions capture passed.
+SHA256: 765c3d0f737f79ee495e17ed76c11134b78d6c330c2a7b6fd1f86ed60bc38442
+CI hash: FNV1a64 6bcaf1e70817a20c over the 87792 encoded RGBA bytes of that capture.
+The integer fixture avoids floating SIMD FMA tier differences.
+
+Fresh oracle panel: exit 0; 548 cases / 227236 pixels per convention.
+run-heavy: done rc=0 11s | peak-RSS 0.66GiB | min-avail 21088MiB | peak-load 26.98
+All per-case measurements and all summaries equal the prior public-source panel.
+All three nearest modes and the dedicated Pillow22 RGB mode have zero differences.
+The documented weighted-framework residuals, including torch's one-column
+antialiased case, remain unchanged; this review does not qualify those targets.
+Summary: summary-round8.json. Raw arrays/results and complete logs are retained
+under $TMPDIR/oracle-round8 and $TMPDIR/round8-*.log (not committed).
+
+No implementation source from the oracle frameworks was used.

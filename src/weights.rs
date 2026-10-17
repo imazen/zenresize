@@ -13,7 +13,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::{vec, vec::Vec};
 
-use crate::filter::InterpolationDetails;
+use crate::filter::{BoundaryMode, InterpolationDetails, SampleMapping};
 
 /// Threshold below which weights are considered zero.
 /// Matches imageflow for cross-platform consistency.
@@ -37,7 +37,7 @@ pub struct F32WeightTable {
     /// Flat array: `out_size * max_taps` elements, zero-padded.
     weights_flat: Vec<f32>,
     /// Number of actual (non-zero) taps per output pixel.
-    tap_counts: Vec<u16>,
+    tap_counts: Vec<u32>,
     /// Maximum taps across all output pixels.
     pub max_taps: usize,
 }
@@ -58,7 +58,7 @@ pub struct I16WeightTable {
     /// Flat array: `out_size * max_taps` elements, zero-padded.
     weights_flat: Vec<i16>,
     /// Number of actual (non-zero) taps per output pixel.
-    tap_counts: Vec<u16>,
+    tap_counts: Vec<u32>,
     /// Maximum taps across all output pixels.
     pub max_taps: usize,
     /// Pre-expanded weights for 4ch ymm horizontal convolution.
@@ -85,9 +85,7 @@ impl F32WeightTable {
         debug_assert!(in_size > 0, "in_size must be positive");
         debug_assert!(out_size > 0, "out_size must be positive");
 
-        let scale = out_size as f64 / in_size as f64;
-        let downscale_factor = scale.min(1.0);
-        let effective_window = filter.window / downscale_factor;
+        let axis = Axis::new(in_size, out_size, filter);
 
         // Compute lobe ratio adjustment targets.
         // When lobe_ratio_goal is Some(r), the desired neg/pos ratio is r.
@@ -116,24 +114,17 @@ impl F32WeightTable {
         // First pass: compute weights and find max_taps
         let mut temp_weights: Vec<f64> = Vec::new();
         let mut all_left: Vec<i32> = Vec::with_capacity(out_size as usize);
-        let mut all_tap_counts: Vec<u16> = Vec::with_capacity(out_size as usize);
+        let mut all_tap_counts: Vec<u32> = Vec::with_capacity(out_size as usize);
         let mut all_weights: Vec<Vec<f64>> = Vec::with_capacity(out_size as usize);
         let mut max_taps = 0;
 
         for out_pixel in 0..out_size {
             temp_weights.clear();
-            let (left, tap_count) = compute_pixel_weights(
-                out_pixel,
-                in_size,
-                scale,
-                downscale_factor,
-                effective_window,
-                filter,
-                &mut temp_weights,
-            );
+            let (left, tap_count) =
+                compute_pixel_weights(out_pixel, &axis, filter, &mut temp_weights);
             max_taps = max_taps.max(tap_count);
             all_left.push(left);
-            all_tap_counts.push(tap_count as u16);
+            all_tap_counts.push(tap_count as u32);
             all_weights.push(temp_weights.clone());
         }
 
@@ -202,7 +193,14 @@ impl F32WeightTable {
                 }
             } else {
                 // Standard normalization: renormalize f32 weights to sum to 1.0
-                let f32_sum: f32 = slice.iter().sum();
+                // Very wide kernels previously truncated their u16 tap count.
+                // Accumulate these newly supported rows in f64 as well: an f32
+                // sum of 100k small taps otherwise visibly shifts DC gain.
+                let f32_sum: f32 = if slice.len() > u16::MAX as usize {
+                    slice.iter().map(|&v| f64::from(v)).sum::<f64>() as f32
+                } else {
+                    slice.iter().sum()
+                };
                 if f32_sum != 0.0 {
                     let inv = 1.0f32 / f32_sum;
                     for v in slice.iter_mut() {
@@ -226,7 +224,7 @@ impl F32WeightTable {
     pub(crate) fn from_parts(
         left: Vec<i32>,
         weights_flat: Vec<f32>,
-        tap_counts: Vec<u16>,
+        tap_counts: Vec<u32>,
         max_taps: usize,
     ) -> Self {
         Self {
@@ -281,14 +279,12 @@ impl I16WeightTable {
         debug_assert!(in_size > 0, "in_size must be positive");
         debug_assert!(out_size > 0, "out_size must be positive");
 
-        let scale = out_size as f64 / in_size as f64;
-        let downscale_factor = scale.min(1.0);
-        let effective_window = filter.window / downscale_factor;
+        let axis = Axis::new(in_size, out_size, filter);
 
         let mut temp_weights: Vec<f64> = Vec::new();
         let mut left_vec = Vec::with_capacity(out_size as usize);
         let mut all_weights: Vec<Vec<i16>> = Vec::with_capacity(out_size as usize);
-        let mut all_tap_counts: Vec<u16> = Vec::with_capacity(out_size as usize);
+        let mut all_tap_counts: Vec<u32> = Vec::with_capacity(out_size as usize);
         let mut max_taps = 0;
 
         // Reusable buffers for fixed-point conversion (avoid per-pixel allocation)
@@ -298,15 +294,8 @@ impl I16WeightTable {
 
         for out_pixel in 0..out_size {
             temp_weights.clear();
-            let (left, tap_count) = compute_pixel_weights(
-                out_pixel,
-                in_size,
-                scale,
-                downscale_factor,
-                effective_window,
-                filter,
-                &mut temp_weights,
-            );
+            let (left, tap_count) =
+                compute_pixel_weights(out_pixel, &axis, filter, &mut temp_weights);
             max_taps = max_taps.max(tap_count);
 
             // Convert to fixed-point i16 using largest-remainder method.
@@ -352,7 +341,7 @@ impl I16WeightTable {
             }
 
             left_vec.push(left);
-            all_tap_counts.push(tap_count as u16);
+            all_tap_counts.push(tap_count as u32);
             all_weights.push(fixed.clone());
         }
 
@@ -463,34 +452,210 @@ impl I16WeightTable {
 // Shared weight computation
 // =============================================================================
 
+/// Per-axis constants for weight computation.
+#[derive(Clone, Copy)]
+struct Axis {
+    in_size: u32,
+    out_size: u32,
+    /// `out_size / in_size`.
+    scale: f64,
+    /// Kernel coordinate per input pixel ([`InterpolationDetails::support_scale`]).
+    shrink: f64,
+    /// Kernel half-width in input pixels.
+    window: f64,
+}
+
+impl Axis {
+    fn new(in_size: u32, out_size: u32, filter: &InterpolationDetails) -> Self {
+        let scale = out_size as f64 / in_size as f64;
+        let shrink = filter.support_scale(scale);
+        Self {
+            in_size,
+            out_size,
+            scale,
+            shrink,
+            window: filter.window / shrink,
+        }
+    }
+}
+
 /// Compute normalized f64 weights into a pre-allocated buffer.
 ///
 /// Returns (left_pixel_index, tap_count).
 fn compute_pixel_weights(
     out_pixel: u32,
-    in_size: u32,
-    scale: f64,
-    downscale_factor: f64,
-    effective_window: f64,
+    axis: &Axis,
     filter: &InterpolationDetails,
     weights_out: &mut Vec<f64>,
 ) -> (i32, usize) {
-    // Map output pixel center to input space
-    let center = (out_pixel as f64 + 0.5) / scale - 0.5;
+    if !filter.has_default_geometry() {
+        return convention_weights(out_pixel, axis, filter, weights_out);
+    }
+    // Half-pixel centres, truncated edges.
+    let center = (out_pixel as f64 + 0.5) / axis.scale - 0.5;
+    truncated_weights(
+        center,
+        axis.window,
+        0.0001,
+        axis.in_size,
+        filter,
+        weights_out,
+        |in_pixel| axis.shrink * (in_pixel as f64 - center),
+    )
+}
 
-    // Find input pixel range in filter window
-    let left_edge = f64_ceil(center - effective_window - 0.0001) as i32;
-    let right_edge = f64_floor(center + effective_window + 0.0001) as i32;
+/// Weights for [`crate::Filter::Nearest`] and every non-default
+/// [`SampleMapping`] or [`BoundaryMode`]. Out of line so the default path in
+/// [`compute_pixel_weights`] stays as small as before these conventions.
+#[inline(never)]
+fn convention_weights(
+    out_pixel: u32,
+    axis: &Axis,
+    filter: &InterpolationDetails,
+    weights_out: &mut Vec<f64>,
+) -> (i32, usize) {
+    let (in_size, out_size) = (axis.in_size, axis.out_size);
+    let mapping = filter.mapping();
+    if filter.is_nearest() {
+        weights_out.push(1.0);
+        return (
+            nearest_index(mapping, out_pixel, in_size, out_size) as i32,
+            1,
+        );
+    }
+    let boundary = filter.boundary();
 
-    // Clamp to valid range BEFORE calculating weights
-    let left_pixel = left_edge.max(0) as u32;
-    let right_pixel = right_edge.min(in_size as i32 - 1) as u32;
+    // Map the output pixel to its source-space centre.
+    let center = match mapping {
+        SampleMapping::HalfPixel => (out_pixel as f64 + 0.5) / axis.scale - 0.5,
+        SampleMapping::HalfPixelFloat32 => {
+            // Positions and tap distances in f32 arithmetic.
+            let f32_scale = 1.0f32 / (out_size as f32 / in_size as f32);
+            let sample = (out_pixel as f32 + 0.5) * f32_scale;
+            let shrink = if axis.shrink < 1.0 {
+                1.0 / f32_scale
+            } else {
+                1.0
+            };
+            let center = f64::from(sample) - 0.5;
+            // f32 distances can admit a tap a few ulps beyond the window.
+            let margin = 0.0001 + 2.0 * center.abs() * f64::from(f32::EPSILON);
+            let distance = |in_pixel: i64| f64::from(shrink * (in_pixel as f32 + 0.5 - sample));
+            let window = filter.window / f64::from(shrink);
+            return match boundary {
+                BoundaryMode::Truncate => truncated_weights(
+                    center,
+                    window,
+                    margin,
+                    in_size,
+                    filter,
+                    weights_out,
+                    distance,
+                ),
+                BoundaryMode::Clamp => clamped_weights(
+                    center,
+                    window,
+                    margin,
+                    in_size,
+                    filter,
+                    weights_out,
+                    distance,
+                ),
+            };
+        }
+        SampleMapping::AlignCorners if out_size > 1 => {
+            out_pixel as f64 * (in_size - 1) as f64 / (out_size - 1) as f64
+        }
+        SampleMapping::AlignCorners => 0.0,
+        SampleMapping::Asymmetric => out_pixel as f64 / axis.scale,
+        SampleMapping::AsymmetricFloat32 => {
+            f64::from(out_pixel as f32 * (in_size as f32 / out_size as f32))
+        }
+        SampleMapping::AsymmetricFloat64 => out_pixel as f64 * (1.0 / axis.scale),
+    };
+    let distance = |in_pixel: i64| axis.shrink * (in_pixel as f64 - center);
+    match boundary {
+        BoundaryMode::Truncate => truncated_weights(
+            center,
+            axis.window,
+            0.0001,
+            in_size,
+            filter,
+            weights_out,
+            distance,
+        ),
+        BoundaryMode::Clamp => clamped_weights(
+            center,
+            axis.window,
+            0.0001,
+            in_size,
+            filter,
+            weights_out,
+            distance,
+        ),
+    }
+}
+
+/// Input pixels within `window` (+ `margin`) of `center`, as `(first, last)`.
+#[inline(always)]
+fn window_edges(center: f64, window: f64, margin: f64) -> (i64, i64) {
+    (
+        f64_ceil(center - window - margin) as i64,
+        f64_floor(center + window + margin) as i64,
+    )
+}
+
+/// [`BoundaryMode::Clamp`]: fold every tap in the window onto the nearest
+/// in-image sample, then normalize.
+fn clamped_weights(
+    center: f64,
+    window: f64,
+    margin: f64,
+    in_size: u32,
+    filter: &InterpolationDetails,
+    weights_out: &mut Vec<f64>,
+    distance: impl Fn(i64) -> f64,
+) -> (i32, usize) {
+    let (left_edge, right_edge) = window_edges(center, window, margin);
+    let left = left_edge.clamp(0, in_size as i64 - 1);
+    let right = right_edge.clamp(0, in_size as i64 - 1);
+    weights_out.resize((right - left + 1) as usize, 0.0);
+    for in_pixel in left_edge..=right_edge {
+        let slot = (in_pixel.clamp(left, right) - left) as usize;
+        weights_out[slot] += filter.filter(distance(in_pixel));
+    }
+    let total: f64 = weights_out.iter().sum();
+    if total > 0.0 {
+        for w in weights_out.iter_mut() {
+            *w /= total;
+        }
+    }
+    (left as i32, weights_out.len())
+}
+
+/// [`BoundaryMode::Truncate`]: weights of the in-image pixels within the
+/// window, normalized, with zero weights trimmed from both ends.
+#[inline(always)]
+fn truncated_weights(
+    center: f64,
+    window: f64,
+    margin: f64,
+    in_size: u32,
+    filter: &InterpolationDetails,
+    weights_out: &mut Vec<f64>,
+    distance: impl Fn(i64) -> f64,
+) -> (i32, usize) {
+    let (left_edge, right_edge) = window_edges(center, window, margin);
+
+    // Clamp to valid range BEFORE calculating weights. Signed, so a window
+    // that misses the image yields an empty range instead of wrapping.
+    let left_pixel = left_edge.max(0);
+    let right_pixel = right_edge.min(in_size as i64 - 1);
 
     let mut total_weight = 0.0f64;
 
     for in_pixel in left_pixel..=right_pixel {
-        let x = downscale_factor * (in_pixel as f64 - center);
-        let mut w = filter.filter(x);
+        let mut w = filter.filter(distance(in_pixel));
 
         if w.abs() <= WEIGHT_THRESHOLD {
             w = 0.0;
@@ -523,6 +688,33 @@ fn compute_pixel_weights(
     (trimmed_left as i32, weights_out.len())
 }
 
+/// Input sample chosen by [`crate::Filter::Nearest`] (see [`SampleMapping`]).
+fn nearest_index(mapping: SampleMapping, out_pixel: u32, in_size: u32, out_size: u32) -> u32 {
+    let (i, n, m) = (
+        u64::from(out_pixel),
+        u64::from(in_size),
+        u64::from(out_size),
+    );
+    let index = match mapping {
+        SampleMapping::HalfPixel => (2 * i + 1) * n / (2 * m),
+        SampleMapping::HalfPixelFloat32 => {
+            libm::floorf((out_pixel as f32 + 0.5) * (1.0f32 / (out_size as f32 / in_size as f32)))
+                as u64
+        }
+        // Round half up: floor(i(n-1)/(m-1) + 1/2).
+        SampleMapping::AlignCorners if m > 1 => (2 * i * (n - 1) + (m - 1)) / (2 * (m - 1)),
+        SampleMapping::AlignCorners => 0,
+        SampleMapping::Asymmetric => i * n / m,
+        SampleMapping::AsymmetricFloat32 => {
+            libm::floorf(out_pixel as f32 * (in_size as f32 / out_size as f32)) as u64
+        }
+        SampleMapping::AsymmetricFloat64 => {
+            libm::floor(out_pixel as f64 * (1.0 / (out_size as f64 / in_size as f64))) as u64
+        }
+    };
+    index.min(n - 1) as u32
+}
+
 // no_std math helpers
 #[cfg(feature = "std")]
 #[inline]
@@ -546,6 +738,28 @@ fn f64_floor(x: f64) -> f64 {
 #[inline]
 fn f64_floor(x: f64) -> f64 {
     libm::floor(x)
+}
+
+/// Per-output `(left, coefficients)` rows quantized to 22 fractional bits,
+/// rounded half away from zero, without correcting the quantized sum.
+pub(crate) fn fixed22_rows(
+    in_size: u32,
+    out_size: u32,
+    filter: &InterpolationDetails,
+) -> Vec<(usize, Vec<i32>)> {
+    let axis = Axis::new(in_size, out_size, filter);
+    let mut weights = Vec::new();
+    (0..out_size)
+        .map(|out_pixel| {
+            weights.clear();
+            let (left, _) = compute_pixel_weights(out_pixel, &axis, filter, &mut weights);
+            let fixed = weights
+                .iter()
+                .map(|&w| libm::round(w * (1 << 22) as f64) as i32)
+                .collect();
+            (left as usize, fixed)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -623,6 +837,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn clamp_support_beyond_signed_input_edge_keeps_complete_kernel() {
+        let details = InterpolationDetails::create(Filter::CatmullRom).with_conventions(
+            false,
+            SampleMapping::AlignCorners,
+            BoundaryMode::Clamp,
+        );
+        let table = F32WeightTable::new(i32::MAX as u32, 2, &details);
+        assert_eq!(table.weights(0).iter().sum::<f32>(), 1.0);
+        assert_eq!(table.weights(1).iter().sum::<f32>(), 1.0);
+        assert_eq!(
+            table.left[1] as usize + table.tap_count(1),
+            i32::MAX as usize
+        );
+    }
+
     /// Verify no individual i16 weight deviates from its f64 source by more than 1 LSB.
     #[test]
     fn i16_weights_max_deviation_from_f64() {
@@ -630,24 +860,15 @@ mod tests {
             let filter = InterpolationDetails::create(filter_enum);
             let in_size = 800u32;
             let out_size = 100u32;
-            let scale = out_size as f64 / in_size as f64;
-            let downscale_factor = scale.min(1.0);
-            let effective_window = filter.window / downscale_factor;
+            let axis = Axis::new(in_size, out_size, &filter);
 
             let i16_table = I16WeightTable::new(in_size, out_size, &filter);
             let mut temp_weights: Vec<f64> = Vec::new();
 
             for out_pixel in 0..out_size {
                 temp_weights.clear();
-                let (_left, _tap_count) = compute_pixel_weights(
-                    out_pixel,
-                    in_size,
-                    scale,
-                    downscale_factor,
-                    effective_window,
-                    &filter,
-                    &mut temp_weights,
-                );
+                let (_left, _tap_count) =
+                    compute_pixel_weights(out_pixel, &axis, &filter, &mut temp_weights);
 
                 let i16_weights = i16_table.weights(out_pixel as usize);
                 let scale_factor = (1 << I16_PRECISION) as f64;
@@ -1077,7 +1298,11 @@ mod tests {
         let mut max_dev_filter = Filter::Robidoux;
         let mut max_dev_scaling = (0u32, 0u32);
 
-        for &filter_enum in Filter::all() {
+        // imageflow defines the first 31 presets; later ones have no reference.
+        let imageflow_filters = Filter::all()
+            .iter()
+            .filter(|&&f| f <= Filter::LegacyIDCTFilter);
+        for &filter_enum in imageflow_filters {
             let details = InterpolationDetails::create(filter_enum);
 
             for i in (0..scalings.len()).step_by(2) {
