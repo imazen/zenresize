@@ -335,6 +335,13 @@ impl InterpolationDetails {
             1.0
         }
     }
+    /// Half-pixel centres, truncated edges and a weighted kernel.
+    #[inline]
+    pub(crate) fn has_default_geometry(&self) -> bool {
+        self.mapping == SampleMapping::HalfPixel
+            && self.boundary == BoundaryMode::Truncate
+            && !self.nearest
+    }
     pub(crate) fn mapping(&self) -> SampleMapping {
         self.mapping
     }

@@ -12,10 +12,10 @@ publish = false
 [dependencies]
 new = { package = "zenresize", path = "../.." }
 old = { package = "zenresize", git = "https://github.com/imazen/zenresize", rev = "e595ef8f1dd929aebc01dd139936fca127557aad" }
-# A/A control: the same main commit again, from a local checkout. Its distance
-# from `old` is the code-layout noise floor of a two-copy binary. Adjust the
-# file:// path to your checkout.
-same = { package = "zenresize", git = "file:///home/lilith/work/zen/zenresize", rev = "e595ef8f1dd929aebc01dd139936fca127557aad" }
+# A/A control: the same main commit again. A short rev makes Cargo treat it
+# as a distinct source, so the binary holds two copies of identical code; their
+# distance is the code-layout noise floor.
+same = { package = "zenresize", git = "https://github.com/imazen/zenresize", rev = "e595ef8f1dd9" }
 zenbench = "0.1.8"
 
 [[bench]]

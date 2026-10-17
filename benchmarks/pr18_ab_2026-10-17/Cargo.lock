@@ -1002,7 +1002,7 @@ dependencies = [
 [[package]]
 name = "zenresize"
 version = "0.3.1"
-source = "git+file:///home/lilith/work/zen/zenresize?rev=e595ef8f1dd929aebc01dd139936fca127557aad#e595ef8f1dd929aebc01dd139936fca127557aad"
+source = "git+https://github.com/imazen/zenresize?rev=e595ef8f1dd9#e595ef8f1dd929aebc01dd139936fca127557aad"
 dependencies = [
  "archmage",
  "imgref",
@@ -1039,7 +1039,7 @@ version = "0.0.0"
 dependencies = [
  "zenbench",
  "zenresize 0.3.1",
- "zenresize 0.3.1 (git+file:///home/lilith/work/zen/zenresize?rev=e595ef8f1dd929aebc01dd139936fca127557aad)",
+ "zenresize 0.3.1 (git+https://github.com/imazen/zenresize?rev=e595ef8f1dd9)",
  "zenresize 0.3.1 (git+https://github.com/imazen/zenresize?rev=e595ef8f1dd929aebc01dd139936fca127557aad)",
 ]
 
