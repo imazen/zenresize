@@ -3,6 +3,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::{vec, vec::Vec};
 
+use crate::filter::{BoundaryMode, Filter, SampleMapping};
 use zenpixels::{AlphaMode, ChannelType, PixelDescriptor, TransferFunction};
 
 // =============================================================================
@@ -244,6 +245,28 @@ impl core::fmt::Display for ConfigError {
 #[cfg(feature = "std")]
 impl std::error::Error for ConfigError {}
 
+/// Numeric representation of the separable resampling passes.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Arithmetic {
+    /// The fastest representation within the crate's accuracy targets (default):
+    /// 14-bit fixed point for eligible 4-channel u8 inputs, otherwise f32
+    /// arithmetic with input rows cached as f16.
+    #[default]
+    Auto,
+    /// f32 arithmetic and f32 storage for every intermediate. Slower than
+    /// `Auto`; use it when outputs must track an f32 reference implementation.
+    F32,
+    /// u8 samples, horizontal pass then vertical pass. Coefficients have 22
+    /// fractional bits; each pass rounds half up and clamps to `0..=255`.
+    /// This is Pillow's resampling arithmetic.
+    ///
+    /// Requires u8 input and output with no transfer conversion (use
+    /// [`srgb()`](ResizeConfigBuilder::srgb) for gamma-encoded data) and no
+    /// straight alpha. Background compositing and masks are refused.
+    Fixed22,
+}
+
 /// Resize configuration built with [`ResizeConfigBuilder`].
 ///
 /// Use [`ResizeConfig::builder()`] to create one.
@@ -252,8 +275,6 @@ impl std::error::Error for ConfigError {}
 pub struct ResizeConfig {
     /// Filter to use for resampling.
     pub filter: crate::filter::Filter,
-    /// Custom interpolation details overriding both named filter presets.
-    pub interpolation: Option<crate::filter::InterpolationDetails>,
     /// Optional override filter for upscaling. When `None`, the `filter` field
     /// is used for both up and down. When `Some`, this filter is used when
     /// the output dimension exceeds the input dimension on a given axis.
@@ -292,6 +313,18 @@ pub struct ResizeConfig {
     ///
     /// Zero cost — applied during weight computation.
     pub lobe_ratio: LobeRatio,
+    /// Widen the kernel support by `in/out` when downscaling (default `true`).
+    ///
+    /// `false` keeps the support fixed, as OpenCV and PyTorch
+    /// (`antialias=False`) do. [`Filter::Nearest`](crate::Filter::Nearest)
+    /// never widens.
+    pub antialias: bool,
+    /// Output-to-input sample position mapping. See [`SampleMapping`].
+    pub sample_mapping: SampleMapping,
+    /// Handling of kernel taps outside the input. See [`BoundaryMode`].
+    pub boundary: BoundaryMode,
+    /// Numeric representation of the resampling passes. See [`Arithmetic`].
+    pub arithmetic: Arithmetic,
     /// Whether to resize in linear light (true) or sRGB gamma space (false).
     ///
     /// Linear light (default) converts sRGB u8 to linear f32 before resampling.
@@ -359,15 +392,27 @@ impl ResizeConfig {
             return Err("output dimensions must be positive");
         }
 
-        if self.interpolation.is_some()
-            && (self.in_width > i32::MAX as u32 || self.in_height > i32::MAX as u32)
+        // Antialiased (widened) support has no defined AlignCorners geometry.
+        if self.antialias
+            && self.sample_mapping == SampleMapping::AlignCorners
+            && self.resolved_filter() != Filter::Nearest
         {
-            return Err("custom interpolation input exceeds signed tap-index range");
+            return Err("AlignCorners with a weighted filter requires antialias(false)");
         }
-        if self.interpolation.as_ref().is_some_and(|f| !f.valid()) {
-            return Err(
-                "custom interpolation requires finite coefficients, positive blur, support >= 0.5 and a supported mapping/antialias combination",
-            );
+        if self.arithmetic == Arithmetic::Fixed22 {
+            if self.input.channel_type() != ChannelType::U8
+                || self.output.channel_type() != ChannelType::U8
+            {
+                return Err("Arithmetic::Fixed22 requires u8 input and output");
+            }
+            if self.effective_input_transfer() != TransferFunction::Linear
+                || self.effective_output_transfer() != TransferFunction::Linear
+            {
+                return Err("Arithmetic::Fixed22 cannot convert transfer functions; use srgb()");
+            }
+            if self.needs_premultiply() {
+                return Err("Arithmetic::Fixed22 does not support straight alpha");
+            }
         }
 
         // Bound the resulting weight-table size.
@@ -379,49 +424,27 @@ impl ResizeConfig {
         //
         // We cap the total weight-table elements per axis at
         // MAX_WEIGHT_TABLE_ELEMENTS (~256 MB at f32). For `out_size = 1` this
-        // means the element-count cap also bounds extreme downscale ratios.
-        // Named presets fit within the existing conservative radius of eight;
-        // custom support and antialias scaling are included in the upper bound.
+        // means `max_taps` can be up to ~64M, but `max_taps` itself never
+        // exceeds `2 * MAX_FILTER_WINDOW * in_size + 2`, which for
+        // `in_size = u32::MAX` is `~2^36` — well beyond the cap. So the
+        // element-count cap is the binding constraint.
+        //
+        // The largest legitimate filter window in this crate is `Ginseng` at
+        // 6.0 input pixels (half-width); we use 8.0 as an upper bound.
         const MAX_WEIGHT_TABLE_ELEMENTS: u64 = 64 * 1024 * 1024; // ~256 MB at f32
-        if self
-            .kernel_width_scale
-            .is_some_and(|scale| !scale.is_finite() || scale <= 0.0)
-        {
-            return Err("kernel_width_scale must be finite and positive");
-        }
-        // Curve blur changes coefficient values, not the tap support. Preserve
-        // the historical radius-eight bound for named presets.
-        let support = self.interpolation.as_ref().map_or(8.0, |f| f.window);
-        if !support.is_finite() || support > MAX_WEIGHT_TABLE_ELEMENTS as f64 {
-            return Err("kernel support exceeds weight-table memory cap");
-        }
+        const MAX_FILTER_WINDOW: u64 = 8;
 
         let estimate_axis = |in_size: u32, out_size: u32| -> Result<u64, &'static str> {
-            let scale = f64::from(out_size) / f64::from(in_size);
-            let shrink = self
-                .interpolation
-                .as_ref()
-                .map_or(scale.min(1.0), |f| f.support_scale(scale));
-            // Four samples cover inclusive edges and the Gaussian f32 centre
-            // margin. Bound the raw support too, before Clamp folds edge taps.
-            let max_taps_estimate = if self.interpolation.is_none() {
-                // Exactly the previous conservative preset bound.
-                16 * u64::from(in_size).div_ceil(u64::from(out_size)).max(1) + 2
-            } else {
-                let gaussian_margin = self
-                    .interpolation
-                    .as_ref()
-                    .filter(|f| f.is_gaussian_tf())
-                    .map_or(0.0, |_| 4.0 * f64::from(in_size) * f64::from(f32::EPSILON));
-                let radius = support / shrink;
-                let gaussian_rounding = self
-                    .interpolation
-                    .as_ref()
-                    .filter(|f| f.is_gaussian_tf())
-                    .map_or(0.0, |_| 16.0 * radius * f64::from(f32::EPSILON));
-                libm::ceil(2.0 * radius + 4.0 + gaussian_margin + gaussian_rounding) as u64
-            };
-            let out_size = u64::from(out_size);
+            let in_size = in_size as u64;
+            let out_size = out_size as u64;
+            // max_taps ≈ 2 * window * ceil(in_size / out_size) + 2 (downscale)
+            //          ≈ 2 * window + 2                            (upscale, taps fixed)
+            let downscale = in_size.div_ceil(out_size).max(1);
+            let scale_for_window = MAX_FILTER_WINDOW.saturating_mul(2);
+            let max_taps_estimate = scale_for_window
+                .checked_mul(downscale)
+                .and_then(|v| v.checked_add(2))
+                .ok_or("weight table size overflows u64")?;
             let elements = out_size
                 .checked_mul(max_taps_estimate)
                 .ok_or("weight table size overflows u64")?;
@@ -573,23 +596,6 @@ impl ResizeConfig {
         {
             return Err("total output buffer size overflows usize on this target");
         }
-        if let Some(custom) = &self.interpolation {
-            let mut details = custom.clone();
-            if let Some(blur) = self.kernel_width_scale {
-                details = details.with_blur(blur);
-            }
-            match self.lobe_ratio {
-                LobeRatio::Natural => {}
-                LobeRatio::Exact(r) => details = details.with_lobe_ratio(r),
-                LobeRatio::SharpenPercent(p) => details = details.with_sharpen_percent(p),
-            }
-            if !details.valid()
-                || !crate::weights::validate_custom_axis(self.in_width, self.out_width, &details)
-                || !crate::weights::validate_custom_axis(self.in_height, self.out_height, &details)
-            {
-                return Err("custom interpolation cannot produce finite normalized weight rows");
-            }
-        }
         Ok(())
     }
 
@@ -732,6 +738,18 @@ impl ResizeConfig {
         self.output.transfer
     }
 
+    /// The filter used for both axes: `up_filter` (when set) for a net
+    /// upscale by area, otherwise `filter`.
+    pub(crate) fn resolved_filter(&self) -> Filter {
+        let in_area = self.in_width as u64 * self.in_height as u64;
+        let out_area = self.out_width as u64 * self.out_height as u64;
+        if out_area > in_area {
+            self.up_filter.unwrap_or(self.filter)
+        } else {
+            self.filter
+        }
+    }
+
     /// Number of channels per pixel (from input descriptor).
     #[inline]
     pub fn channels(&self) -> usize {
@@ -775,7 +793,6 @@ pub struct ResizeConfigBuilder {
     out_width: u32,
     out_height: u32,
     filter: crate::filter::Filter,
-    interpolation: Option<crate::filter::InterpolationDetails>,
     up_filter: Option<crate::filter::Filter>,
     input: PixelDescriptor,
     output: Option<PixelDescriptor>,
@@ -783,6 +800,10 @@ pub struct ResizeConfigBuilder {
     post_blur_sigma: f32,
     kernel_width_scale: Option<f64>,
     lobe_ratio: LobeRatio,
+    antialias: bool,
+    sample_mapping: SampleMapping,
+    boundary: BoundaryMode,
+    arithmetic: Arithmetic,
     linear: bool,
     in_stride: usize,
     out_stride: usize,
@@ -799,7 +820,6 @@ impl ResizeConfigBuilder {
             out_width,
             out_height,
             filter: crate::filter::Filter::default(),
-            interpolation: None,
             up_filter: None,
             input: PixelDescriptor::RGBA8_SRGB,
             output: None,
@@ -807,6 +827,10 @@ impl ResizeConfigBuilder {
             post_blur_sigma: 0.0,
             kernel_width_scale: None,
             lobe_ratio: LobeRatio::Natural,
+            antialias: true,
+            sample_mapping: SampleMapping::HalfPixel,
+            boundary: BoundaryMode::Truncate,
+            arithmetic: Arithmetic::Auto,
             linear: true,
             in_stride: 0,
             out_stride: 0,
@@ -816,29 +840,41 @@ impl ResizeConfigBuilder {
         }
     }
 
-    /// Use custom kernel, support scaling and sample-position conventions.
-    /// This overrides both filter presets, including a later `up_filter()`.
-    /// A subsequent `filter()` clears it. Custom floating interpolation uses an
-    /// f32 row cache; named presets retain the f16 cache. Thus equivalent kernels
-    /// (CatmullRom versus cubic_bc(0, 0.5)) can produce different output bits.
-    pub fn interpolation(mut self, details: crate::filter::InterpolationDetails) -> Self {
-        self.interpolation = Some(details);
-        self
-    }
-
     /// Set the resampling filter.
     pub fn filter(mut self, filter: crate::filter::Filter) -> Self {
         self.filter = filter;
-        self.interpolation = None;
         self
     }
 
     /// Set a separate filter for upscaling. By default, the main `filter`
-    /// is used for both up and down operations. A custom `interpolation()`
-    /// overrides this setting regardless of call order; `filter()` clears that
-    /// custom override and makes this preset effective again.
+    /// is used for both up and down operations.
     pub fn up_filter(mut self, filter: crate::filter::Filter) -> Self {
         self.up_filter = Some(filter);
+        self
+    }
+
+    /// Widen the kernel support on downscale (default `true`). See
+    /// [`ResizeConfig::antialias`].
+    pub fn antialias(mut self, enabled: bool) -> Self {
+        self.antialias = enabled;
+        self
+    }
+
+    /// Set the output-to-input sample position mapping.
+    pub fn sample_mapping(mut self, mapping: SampleMapping) -> Self {
+        self.sample_mapping = mapping;
+        self
+    }
+
+    /// Set the handling of kernel taps outside the input.
+    pub fn boundary(mut self, mode: BoundaryMode) -> Self {
+        self.boundary = mode;
+        self
+    }
+
+    /// Set the numeric representation of the resampling passes.
+    pub fn arithmetic(mut self, arithmetic: Arithmetic) -> Self {
+        self.arithmetic = arithmetic;
         self
     }
 
@@ -1084,7 +1120,6 @@ impl ResizeConfigBuilder {
         let output = self.output.unwrap_or(self.input);
         ResizeConfig {
             filter: self.filter,
-            interpolation: self.interpolation,
             up_filter: self.up_filter,
             in_width: self.in_width,
             in_height: self.in_height,
@@ -1096,6 +1131,10 @@ impl ResizeConfigBuilder {
             post_blur_sigma: self.post_blur_sigma,
             kernel_width_scale: self.kernel_width_scale,
             lobe_ratio: self.lobe_ratio,
+            antialias: self.antialias,
+            sample_mapping: self.sample_mapping,
+            boundary: self.boundary,
+            arithmetic: self.arithmetic,
             linear: self.linear,
             in_stride: self.in_stride,
             out_stride: self.out_stride,

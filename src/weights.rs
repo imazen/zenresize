@@ -13,7 +13,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::{vec, vec::Vec};
 
-use crate::filter::InterpolationDetails;
+use crate::filter::{BoundaryMode, InterpolationDetails, SampleMapping};
 
 /// Threshold below which weights are considered zero.
 /// Matches imageflow for cross-platform consistency.
@@ -125,6 +125,7 @@ impl F32WeightTable {
             let (left, tap_count) = compute_pixel_weights(
                 out_pixel,
                 in_size,
+                out_size,
                 scale,
                 downscale_factor,
                 effective_window,
@@ -308,6 +309,7 @@ impl I16WeightTable {
             let (left, tap_count) = compute_pixel_weights(
                 out_pixel,
                 in_size,
+                out_size,
                 scale,
                 downscale_factor,
                 effective_window,
@@ -473,109 +475,99 @@ impl I16WeightTable {
 /// Compute normalized f64 weights into a pre-allocated buffer.
 ///
 /// Returns (left_pixel_index, tap_count).
+#[allow(clippy::too_many_arguments)]
 fn compute_pixel_weights(
     out_pixel: u32,
     in_size: u32,
+    out_size: u32,
     scale: f64,
     downscale_factor: f64,
     effective_window: f64,
     filter: &InterpolationDetails,
     weights_out: &mut Vec<f64>,
 ) -> (i32, usize) {
-    // Map output pixel center to input space
-    let out_size = libm::round(scale * in_size as f64) as u32;
-    let mut center = match filter.mapping() {
-        crate::filter::SampleMapping::HalfPixel => (out_pixel as f64 + 0.5) / scale - 0.5,
-        crate::filter::SampleMapping::AlignCorners => {
-            if out_size <= 1 {
-                0.0
-            } else {
-                out_pixel as f64 * (in_size - 1) as f64 / (out_size - 1) as f64
-            }
-        }
-        crate::filter::SampleMapping::Asymmetric => out_pixel as f64 / scale,
-        crate::filter::SampleMapping::AsymmetricFloat32 => {
-            f64::from(out_pixel as f32 * (in_size as f32 / out_size as f32))
-        }
-        crate::filter::SampleMapping::AsymmetricFloat64 => out_pixel as f64 * (1.0 / scale),
-    };
+    let mapping = filter.mapping();
     if filter.is_nearest() {
-        let index = match filter.mapping() {
-            crate::filter::SampleMapping::Asymmetric => {
-                (out_pixel as u64 * in_size as u64 / out_size as u64) as u32
-            }
-            crate::filter::SampleMapping::AsymmetricFloat32 => {
-                libm::floorf(out_pixel as f32 * (in_size as f32 / out_size as f32)) as u32
-            }
-            crate::filter::SampleMapping::AsymmetricFloat64 => {
-                libm::floor(out_pixel as f64 * (1.0 / scale)) as u32
-            }
-            crate::filter::SampleMapping::HalfPixel => {
-                ((2 * out_pixel as u64 + 1) * in_size as u64 / (2 * out_size as u64)) as u32
-            }
-            crate::filter::SampleMapping::AlignCorners => libm::floor(center + 0.5).max(0.0) as u32,
-        }
-        .min(in_size - 1);
         weights_out.push(1.0);
-        return (index as i32, 1);
+        return (
+            nearest_index(mapping, out_pixel, in_size, out_size) as i32,
+            1,
+        );
     }
 
-    let tf_gaussian =
-        filter.is_gaussian_tf() && filter.mapping() == crate::filter::SampleMapping::HalfPixel;
-    let tf_input_scale = 1.0f32 / (out_size as f32 / in_size as f32);
-    let tf_shrink = if downscale_factor < 1.0 {
-        1.0 / tf_input_scale
+    // HalfPixelFloat32 positions and tap distances use f32 arithmetic.
+    let f32_scale = 1.0f32 / (out_size as f32 / in_size as f32);
+    let f32_sample = (out_pixel as f32 + 0.5) * f32_scale;
+    let f32_shrink = if downscale_factor < 1.0 {
+        1.0 / f32_scale
     } else {
         1.0
     };
-    if tf_gaussian {
-        center = f64::from((out_pixel as f32 + 0.5) * tf_input_scale) - 0.5;
-    }
-    let effective_window = if tf_gaussian {
-        filter.window / f64::from(tf_shrink)
-    } else {
-        effective_window
-    };
-    let distance = |index: i64| {
-        if tf_gaussian {
-            f64::from(tf_shrink * (index as f32 + 0.5 - (out_pixel as f32 + 0.5) * tf_input_scale))
-        } else {
-            downscale_factor * (index as f64 - center)
+
+    // Map the output pixel to its source-space centre.
+    let (center, effective_window, edge_margin) = match mapping {
+        SampleMapping::HalfPixel => (
+            (out_pixel as f64 + 0.5) / scale - 0.5,
+            effective_window,
+            0.0001,
+        ),
+        SampleMapping::HalfPixelFloat32 => {
+            let center = f64::from(f32_sample) - 0.5;
+            // f32 distances can admit a tap up to a few ulps beyond the window.
+            let margin = 0.0001 + 2.0 * center.abs() * f64::from(f32::EPSILON);
+            (center, filter.window / f64::from(f32_shrink), margin)
+        }
+        SampleMapping::AlignCorners => {
+            let center = if out_size <= 1 {
+                0.0
+            } else {
+                out_pixel as f64 * (in_size - 1) as f64 / (out_size - 1) as f64
+            };
+            (center, effective_window, 0.0001)
+        }
+        SampleMapping::Asymmetric => (out_pixel as f64 / scale, effective_window, 0.0001),
+        SampleMapping::AsymmetricFloat32 => (
+            f64::from(out_pixel as f32 * (in_size as f32 / out_size as f32)),
+            effective_window,
+            0.0001,
+        ),
+        SampleMapping::AsymmetricFloat64 => {
+            (out_pixel as f64 * (1.0 / scale), effective_window, 0.0001)
         }
     };
-    let edge_margin = if tf_gaussian {
-        0.0001 + 2.0 * center.abs() * f64::from(f32::EPSILON)
-    } else {
-        0.0001
+    let distance = |in_pixel: i64| match mapping {
+        SampleMapping::HalfPixelFloat32 => {
+            f64::from(f32_shrink * (in_pixel as f32 + 0.5 - f32_sample))
+        }
+        _ => downscale_factor * (in_pixel as f64 - center),
     };
 
     // Find input pixel range in filter window
     let left_edge = f64_ceil(center - effective_window - edge_margin) as i64;
     let right_edge = f64_floor(center + effective_window + edge_margin) as i64;
 
-    if filter.boundary() == crate::filter::BoundaryMode::Clamp {
+    if filter.boundary() == BoundaryMode::Clamp {
+        // Fold every outside tap onto the nearest edge sample.
         let left = left_edge.clamp(0, in_size as i64 - 1);
         let right = right_edge.clamp(0, in_size as i64 - 1);
         weights_out.resize((right - left + 1) as usize, 0.0);
-        for index in left_edge..=right_edge {
-            let weight = filter.filter(distance(index));
-            let slot = (index.clamp(left, right) - left) as usize;
-            weights_out[slot] += weight;
+        for in_pixel in left_edge..=right_edge {
+            let slot = (in_pixel.clamp(left, right) - left) as usize;
+            weights_out[slot] += filter.filter(distance(in_pixel));
         }
         let total: f64 = weights_out.iter().sum();
         if total > 0.0 {
-            for weight in weights_out.iter_mut() {
-                *weight /= total;
+            for w in weights_out.iter_mut() {
+                *w /= total;
             }
         }
         return (left as i32, weights_out.len());
     }
 
-    // Clamp to valid range BEFORE calculating weights
+    // Clamp to valid range BEFORE calculating weights. Signed, so an empty
+    // range at the left edge cannot wrap.
     let left_pixel = left_edge.max(0);
     let right_pixel = right_edge.min(in_size as i64 - 1);
-    // Keep the empty-range test signed. In particular, -1 must never become
-    // u32::MAX when a caller constructs a subpixel support window directly.
     if right_pixel < left_pixel {
         return (left_pixel as i32, 0);
     }
@@ -583,8 +575,7 @@ fn compute_pixel_weights(
     let mut total_weight = 0.0f64;
 
     for in_pixel in left_pixel..=right_pixel {
-        let x = distance(in_pixel);
-        let mut w = filter.filter(x);
+        let mut w = filter.filter(distance(in_pixel));
 
         if w.abs() <= WEIGHT_THRESHOLD {
             w = 0.0;
@@ -617,54 +608,31 @@ fn compute_pixel_weights(
     (trimmed_left as i32, weights_out.len())
 }
 
-// Validate the actual sampled rows, not just the descriptor's scalar fields.
-// Called only for custom descriptors after the allocation/work bound passes.
-pub(crate) fn validate_custom_axis(
-    in_size: u32,
-    out_size: u32,
-    filter: &InterpolationDetails,
-) -> bool {
-    let scale = f64::from(out_size) / f64::from(in_size);
-    let shrink = filter.support_scale(scale);
-    let mut weights = Vec::new();
-    for pixel in 0..out_size {
-        weights.clear();
-        compute_pixel_weights(
-            pixel,
-            in_size,
-            scale,
-            shrink,
-            filter.window / shrink,
-            filter,
-            &mut weights,
-        );
-        let sum: f64 = weights.iter().sum();
-        if let Some(ratio) = filter.lobe_ratio_goal {
-            let positive: f64 = weights.iter().filter(|&&w| w >= 0.0).sum();
-            let negative: f64 = weights.iter().filter(|&&w| w < 0.0).sum();
-            if negative < 0.0 {
-                let target_positive = 1.0 / (1.0 - f64::from(ratio));
-                let target_negative = -f64::from(ratio) * target_positive;
-                for weight in &mut weights {
-                    *weight *= if *weight < 0.0 {
-                        target_negative / negative
-                    } else {
-                        target_positive / positive
-                    };
-                }
-            }
+/// Input sample chosen by [`crate::Filter::Nearest`] (see [`SampleMapping`]).
+fn nearest_index(mapping: SampleMapping, out_pixel: u32, in_size: u32, out_size: u32) -> u32 {
+    let (i, n, m) = (
+        u64::from(out_pixel),
+        u64::from(in_size),
+        u64::from(out_size),
+    );
+    let index = match mapping {
+        SampleMapping::HalfPixel => (2 * i + 1) * n / (2 * m),
+        SampleMapping::HalfPixelFloat32 => {
+            libm::floorf((out_pixel as f32 + 0.5) * (1.0f32 / (out_size as f32 / in_size as f32)))
+                as u64
         }
-        if weights.is_empty()
-            || !sum.is_finite()
-            || (sum - 1.0).abs() > 1e-8
-            || weights
-                .iter()
-                .any(|&w| !w.is_finite() || w.abs() > 32767.0 / 16384.0)
-        {
-            return false;
+        // Round half up: floor(i(n-1)/(m-1) + 1/2).
+        SampleMapping::AlignCorners if m > 1 => (2 * i * (n - 1) + (m - 1)) / (2 * (m - 1)),
+        SampleMapping::AlignCorners => 0,
+        SampleMapping::Asymmetric => i * n / m,
+        SampleMapping::AsymmetricFloat32 => {
+            libm::floorf(out_pixel as f32 * (in_size as f32 / out_size as f32)) as u64
         }
-    }
-    true
+        SampleMapping::AsymmetricFloat64 => {
+            libm::floor(out_pixel as f64 * (1.0 / (out_size as f64 / in_size as f64))) as u64
+        }
+    };
+    index.min(n - 1) as u32
 }
 
 // no_std math helpers
@@ -692,32 +660,34 @@ fn f64_floor(x: f64) -> f64 {
     libm::floor(x)
 }
 
-/// Preserve f64 coefficients until quantization for the independently specified
-/// 22-bit two-pass path. No sum correction is applied after quantization.
-pub(crate) fn fixed22_weights(
-    input: u32,
-    output: u32,
+/// Per-output `(left, coefficients)` rows quantized to 22 fractional bits,
+/// rounded half away from zero, without correcting the quantized sum.
+pub(crate) fn fixed22_rows(
+    in_size: u32,
+    out_size: u32,
     filter: &InterpolationDetails,
 ) -> Vec<(usize, Vec<i32>)> {
-    let scale = output as f64 / input as f64;
-    let shrink = filter.support_scale(scale);
-    (0..output)
-        .map(|i| {
-            let mut values = Vec::new();
+    let scale = out_size as f64 / in_size as f64;
+    let downscale_factor = filter.support_scale(scale);
+    let mut weights = Vec::new();
+    (0..out_size)
+        .map(|out_pixel| {
+            weights.clear();
             let (left, _) = compute_pixel_weights(
-                i,
-                input,
+                out_pixel,
+                in_size,
+                out_size,
                 scale,
-                shrink,
-                filter.window / shrink,
+                downscale_factor,
+                filter.window / downscale_factor,
                 filter,
-                &mut values,
+                &mut weights,
             );
-            let weights = values
-                .into_iter()
-                .map(|x| libm::round(x * 4194304.0) as i32)
+            let fixed = weights
+                .iter()
+                .map(|&w| libm::round(w * (1 << 22) as f64) as i32)
                 .collect();
-            (left as usize, weights)
+            (left as usize, fixed)
         })
         .collect()
 }
@@ -797,6 +767,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn clamp_support_beyond_signed_input_edge_keeps_complete_kernel() {
+        let details = InterpolationDetails::create(Filter::CatmullRom).with_conventions(
+            false,
+            SampleMapping::AlignCorners,
+            BoundaryMode::Clamp,
+        );
+        let table = F32WeightTable::new(i32::MAX as u32, 2, &details);
+        assert_eq!(table.weights(0).iter().sum::<f32>(), 1.0);
+        assert_eq!(table.weights(1).iter().sum::<f32>(), 1.0);
+        assert_eq!(
+            table.left[1] as usize + table.tap_count(1),
+            i32::MAX as usize
+        );
+    }
+
     /// Verify no individual i16 weight deviates from its f64 source by more than 1 LSB.
     #[test]
     fn i16_weights_max_deviation_from_f64() {
@@ -816,6 +802,7 @@ mod tests {
                 let (_left, _tap_count) = compute_pixel_weights(
                     out_pixel,
                     in_size,
+                    out_size,
                     scale,
                     downscale_factor,
                     effective_window,
@@ -1251,7 +1238,11 @@ mod tests {
         let mut max_dev_filter = Filter::Robidoux;
         let mut max_dev_scaling = (0u32, 0u32);
 
-        for &filter_enum in Filter::all() {
+        // imageflow defines the first 31 presets; later ones have no reference.
+        let imageflow_filters = Filter::all()
+            .iter()
+            .filter(|&&f| f <= Filter::LegacyIDCTFilter);
+        for &filter_enum in imageflow_filters {
             let details = InterpolationDetails::create(filter_enum);
 
             for i in (0..scalings.len()).step_by(2) {

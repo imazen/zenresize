@@ -40,6 +40,7 @@ pub mod composite;
 #[doc(hidden)]
 pub mod filter;
 pub mod fit;
+mod fixed22;
 pub(crate) mod pixel;
 pub mod plane;
 pub(crate) mod resize;
@@ -62,14 +63,11 @@ pub use zenpixels::{
 };
 
 // Re-exports: minimal public API
-mod pillow;
-pub use pillow::PillowCubicResizer;
-
-#[doc(inline)]
-pub use filter::{BoundaryMode, Filter, InterpolationDetails, SampleMapping};
+pub use filter::{BoundaryMode, Filter, SampleMapping};
 pub use fit::{FitMode, fit_cover_source_crop, fit_dims};
 pub use pixel::{
-    ConfigError, Element, LobeRatio, Padding, ResizeConfig, ResizeConfigBuilder, SourceRegion,
+    Arithmetic, ConfigError, Element, LobeRatio, Padding, ResizeConfig, ResizeConfigBuilder,
+    SourceRegion,
 };
 pub use plane::PlaneResizer;
 pub use resize::Resizer;

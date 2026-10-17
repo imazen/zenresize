@@ -931,6 +931,22 @@ pub use imgref_impl::{resize_3ch, resize_4ch, resize_gray8};
 // H-first streaming resize (experimental)
 // =============================================================================
 
+/// The H-first helpers' kernel: `config.filter` with the sampling conventions.
+/// Blur and lobe modifiers are not applied here; only `Arithmetic::Auto` is
+/// implemented.
+fn hfirst_filter(config: &ResizeConfig) -> Result<InterpolationDetails, &'static str> {
+    if config.arithmetic != crate::pixel::Arithmetic::Auto {
+        return Err("H-first helpers support only Arithmetic::Auto");
+    }
+    Ok(
+        InterpolationDetails::create(config.filter).with_conventions(
+            config.antialias,
+            config.sample_mapping,
+            config.boundary,
+        ),
+    )
+}
+
 /// H-first streaming resize for sRGB u8 4ch.
 ///
 /// Unlike `StreamingResize` (V-first), this applies the H-filter to each input
@@ -959,10 +975,7 @@ pub fn resize_hfirst_streaming(
     config.validate()?;
     assert_eq!(config.channels(), 4, "H-first streaming only supports 4ch");
 
-    let filter = config
-        .interpolation
-        .clone()
-        .unwrap_or_else(|| InterpolationDetails::create(config.filter));
+    let filter = hfirst_filter(config)?;
     let v_weights = I16WeightTable::new(config.in_height, config.out_height, &filter);
     let h_weights = I16WeightTable::new(config.in_width, config.out_width, &filter);
 
@@ -1224,10 +1237,7 @@ pub fn resize_hfirst_streaming_f32(
 ) -> Result<Vec<u8>, &'static str> {
     config.validate()?;
 
-    let filter = config
-        .interpolation
-        .clone()
-        .unwrap_or_else(|| InterpolationDetails::create(config.filter));
+    let filter = hfirst_filter(config)?;
     let h_weights = F32WeightTable::new(config.in_width, config.out_width, &filter);
     let v_weights = F32WeightTable::new(config.in_height, config.out_height, &filter);
 

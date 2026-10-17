@@ -16,7 +16,7 @@ use core::f64::consts::PI;
 
 /// Named interpolation filter presets.
 ///
-/// These match imageflow's filter names exactly for compatibility.
+/// The first 31 match imageflow's filter names exactly for compatibility.
 #[non_exhaustive]
 #[repr(u8)]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Default)]
@@ -84,6 +84,16 @@ pub enum Filter {
     NCubicSharp = 30,
     /// Legacy IDCT filter
     LegacyIDCTFilter = 31,
+    /// Point sampling: each output copies one input sample, chosen by the
+    /// configured [`SampleMapping`]. Support never widens on downscale.
+    Nearest = 32,
+    /// Gaussian with sigma 0.5, truncated at radius 1.5 (in kernel units).
+    /// This is the kernel of TensorFlow's `gaussian` resize method.
+    Gaussian = 33,
+    /// Keys cubic convolution with a = −0.75 (B = 0, C = 0.75), the bicubic
+    /// kernel of OpenCV `INTER_CUBIC` and PyTorch `bicubic`.
+    /// [`CatmullRom`](Self::CatmullRom) is the a = −0.5 member.
+    CubicA075 = 34,
 }
 
 impl Filter {
@@ -122,6 +132,9 @@ impl Filter {
             NCubic,
             NCubicSharp,
             LegacyIDCTFilter,
+            Nearest,
+            Gaussian,
+            CubicA075,
         ]
     }
 
@@ -159,47 +172,61 @@ impl Filter {
             Filter::NCubic => "n_cubic",
             Filter::NCubicSharp => "n_cubic_sharp",
             Filter::LegacyIDCTFilter => "legacy_idct",
+            Filter::Nearest => "nearest",
+            Filter::Gaussian => "gaussian",
+            Filter::CubicA075 => "cubic_a075",
         }
     }
 }
 
-/// Position of an output sample in the input pixel coordinate system.
+/// Where output sample `i` lands in input coordinates, and in what arithmetic.
+///
+/// `in` and `out` are the axis lengths. Weighted filters centre their kernel
+/// on the mapped position; [`Filter::Nearest`] takes the input sample that
+/// contains it. The `Float32`/`Float64` variants spell out the floating-point
+/// operations because rounding decides which sample is chosen at exact
+/// integer boundaries and which taps fall inside a hard kernel cutoff.
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum SampleMapping {
-    /// `(i + 0.5) * input/output - 0.5` (the existing default).
+    /// `(i + 0.5)·in/out − 0.5` (default). Nearest takes
+    /// `floor((i + 0.5)·in/out)` in exact integer arithmetic.
     #[default]
     HalfPixel,
-    /// `i * (input - 1)/(output - 1)`; a single output sample maps to zero.
+    /// As `HalfPixel`, evaluated in f32 with `s = 1 / (out/in)`: the sample
+    /// is `(i + 0.5)·s` and tap `j` lies `k·(j + 0.5 − sample)` from it, where
+    /// `k` is `1/s` when antialiasing widens the support and 1 otherwise.
+    /// TensorFlow's resize kernels use this arithmetic.
+    HalfPixelFloat32,
+    /// `i·(in − 1)/(out − 1)`; a single output sample maps to 0. Nearest
+    /// rounds to the closest sample. Weighted filters require antialiasing
+    /// to be off.
     AlignCorners,
-    /// `i * input/output`; nearest sampling takes the floor (torch/OpenCV).
+    /// `i·in/out`. Nearest takes `floor(i·in/out)` in exact integer arithmetic.
     Asymmetric,
-    /// Legacy torch CPU nearest: floor of the f32 product `i * (input/output)`.
-    /// Float rounding can select the preceding sample at an integer boundary.
+    /// `i·in/out` as the f32 product `i · (in/out)`. Nearest takes its floor
+    /// (PyTorch `nearest`).
     AsymmetricFloat32,
-    /// OpenCV nearest: floor of the f64 product `i * (1 / (output/input))`.
+    /// `i·in/out` as the f64 product `i · (1 / (out/in))`. Nearest takes its
+    /// floor (OpenCV `INTER_NEAREST`).
     AsymmetricFloat64,
 }
 
-/// Treatment of kernel taps outside the input image.
+/// Treatment of kernel taps that fall outside the input.
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum BoundaryMode {
-    /// Discard outside taps and normalize the surviving weights (default).
+    /// Drop outside taps and renormalize the remaining weights (default).
     #[default]
     Truncate,
-    /// Accumulate outside taps into the closest edge sample.
+    /// Add each outside tap's weight to the nearest edge sample, as if the
+    /// edge pixels repeated indefinitely.
     Clamp,
 }
 
 /// Interpolation filter details and configuration.
 ///
 /// Contains the filter function and parameters needed to compute weights.
-/// Custom descriptors are validated by [`crate::ResizeConfig::validate`]:
-/// support must be at least 0.5, scalar parameters must be finite, blur must
-/// be positive, and sampled rows must have finite normalized weights that fit
-/// the integer coefficient representation. Antialiased weighted AlignCorners
-/// sampling is refused. Curve blur changes coefficient values, not support.
 #[derive(Clone, Debug)]
 pub struct InterpolationDetails {
     /// Filter support window (half-width in input pixels)
@@ -222,11 +249,12 @@ pub struct InterpolationDetails {
     pub q4: f64,
     /// The filter function to use
     filter_fn: FilterFn,
+    /// Widen support by `in/out` on downscale.
     antialias: bool,
     mapping: SampleMapping,
     boundary: BoundaryMode,
+    /// Point sampling: one tap of weight 1, never widened.
     nearest: bool,
-    gaussian_tf: bool,
     /// Desired negative-lobe ratio (`None` = use filter's natural ratio).
     ///
     /// Controls the balance between positive and negative weights:
@@ -280,59 +308,26 @@ impl Default for InterpolationDetails {
             mapping: SampleMapping::HalfPixel,
             boundary: BoundaryMode::Truncate,
             nearest: false,
-            gaussian_tf: false,
             lobe_ratio_goal: None,
         }
     }
 }
 
 impl InterpolationDetails {
-    /// Mitchell–Netravali cubic with support radius two.
-    /// Keys cubic uses `b = 0` and `c = -a`: 0.5 for Catmull–Rom,
-    /// 0.75 for torch/OpenCV non-antialiased cubic.
-    pub fn cubic_bc(b: f64, c: f64) -> Self {
-        Self::bicubic(2.0, 1.0, b, c)
-    }
-
-    /// TensorFlow Gaussian resize kernel: sigma 0.5, support radius 1.5.
-    /// The radius and sigma are measured with source-impulse probes of the
-    /// public `tf.image.resize` API; see benchmarks/conventions_2026-10-15.
-    pub fn gaussian_tf() -> Self {
-        Self {
-            window: 1.5,
-            filter_fn: filter_gaussian_tf,
-            gaussian_tf: true,
-            ..Self::default()
-        }
-    }
-
-    /// Select exactly one source sample, without antialias support widening.
-    pub fn nearest() -> Self {
-        Self {
-            nearest: true,
-            antialias: false,
-            ..Self::create(Filter::Box)
-        }
-    }
-
-    /// Widen the support on downscale when true (default); keep it fixed otherwise.
-    pub fn with_antialias(mut self, enabled: bool) -> Self {
-        self.antialias = enabled;
-        self
-    }
-
-    /// Select the output-to-input coordinate mapping.
-    pub fn with_sample_mapping(mut self, mapping: SampleMapping) -> Self {
+    /// Apply sampling conventions from the resize configuration.
+    pub(crate) fn with_conventions(
+        mut self,
+        antialias: bool,
+        mapping: SampleMapping,
+        boundary: BoundaryMode,
+    ) -> Self {
+        self.antialias = antialias;
         self.mapping = mapping;
+        self.boundary = boundary;
         self
     }
 
-    /// Select boundary tap handling.
-    pub fn with_boundary_mode(mut self, mode: BoundaryMode) -> Self {
-        self.boundary = mode;
-        self
-    }
-
+    /// Kernel support multiplier for a resize of ratio `out/in`.
     pub(crate) fn support_scale(&self, scale: f64) -> f64 {
         if self.antialias && !self.nearest {
             scale.min(1.0)
@@ -346,26 +341,8 @@ impl InterpolationDetails {
     pub(crate) fn boundary(&self) -> BoundaryMode {
         self.boundary
     }
-    pub(crate) fn is_gaussian_tf(&self) -> bool {
-        self.gaussian_tf
-    }
     pub(crate) fn is_nearest(&self) -> bool {
         self.nearest
-    }
-    pub(crate) fn valid(&self) -> bool {
-        !(self.mapping == SampleMapping::AlignCorners && self.antialias && !self.nearest)
-            && self.window.is_finite()
-            && self.window >= 0.5
-            && self.blur.is_finite()
-            && self.blur > 0.0
-            && [
-                self.p1, self.p2, self.p3, self.q1, self.q2, self.q3, self.q4,
-            ]
-            .iter()
-            .all(|x| x.is_finite())
-            && self
-                .lobe_ratio_goal
-                .is_none_or(|x| x.is_finite() && (0.0..1.0).contains(&x))
     }
 
     /// Create interpolation details for a named filter.
@@ -490,6 +467,18 @@ impl InterpolationDetails {
                 Self::bicubic(2.0, 1.0, 0.2620145123990142, 0.3689927438004929)
             }
             Filter::Hermite => Self::bicubic(1.0, 1.0, 0.0, 0.0),
+            Filter::Nearest => Self {
+                window: 0.5,
+                filter_fn: filter_box,
+                nearest: true,
+                ..Default::default()
+            },
+            Filter::Gaussian => Self {
+                window: 1.5,
+                filter_fn: filter_gaussian,
+                ..Default::default()
+            },
+            Filter::CubicA075 => Self::bicubic(2.0, 1.0, 0.0, 0.75),
         }
     }
 
@@ -610,7 +599,8 @@ impl InterpolationDetails {
 // Filter Functions
 // =============================================================================
 
-fn filter_gaussian_tf(details: &InterpolationDetails, x: f64) -> f64 {
+/// Gaussian, sigma 0.5, hard cutoff at |t| = 1.5.
+fn filter_gaussian(details: &InterpolationDetails, x: f64) -> f64 {
     let t = f64_abs(x) / details.blur;
     if t < 1.5 {
         libm::exp(-2.0 * t * t)

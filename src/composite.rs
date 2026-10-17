@@ -25,6 +25,9 @@ pub enum CompositeError {
     /// the pipeline would skip unpremultiply, so the composite formula
     /// would be applied to already-premultiplied data interpreted as straight.
     PremultipliedInput,
+    /// [`Arithmetic::Fixed22`](crate::Arithmetic::Fixed22) has no compositing
+    /// stage; use `Auto` or `F32`.
+    UnsupportedArithmetic,
 }
 
 impl core::fmt::Display for CompositeError {
@@ -34,6 +37,10 @@ impl core::fmt::Display for CompositeError {
                 f,
                 "compositing with RgbaPremul input is not supported \
                  (premultiply + composite = mathematically incorrect)"
+            ),
+            Self::UnsupportedArithmetic => write!(
+                f,
+                "compositing requires Arithmetic::Auto or Arithmetic::F32"
             ),
         }
     }
