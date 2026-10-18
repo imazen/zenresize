@@ -41,19 +41,29 @@ resize-bench-prepare old new corpus imazen26 zenbench out:
 resize-bench-confirm run *args:
     run="$1"; shift; tools/resize-bench/run.sh confirm --run "$run" "$@"
 
-# Coz causal profile of benches/profile_coz.rs (Linux; needs `coz` on PATH or
-# COZ_BIN, and jq). CARGO_PROFILE_RELEASE_DEBUG=1 gives the build line tables; the
-# executable is the path in Cargo's JSON artifact message, never a deps/ glob.
-# PROFILE must be a new path: an existing file is refused, never overwritten.
-# Example: just coz-run ~/tmp/zenresize-coz-$(date -u +%Y%m%dT%H%M%SZ).jsonl 1000
-[positional-arguments]
-coz-run profile rounds="1000":
+# Build benches/profile_coz.rs for coz and print the executable's path (Linux;
+# needs jq). CARGO_PROFILE_RELEASE_DEBUG=1 gives the build line tables; the path
+# is the one in Cargo's JSON artifact message, never a deps/ glob.
+coz-build:
     #!/usr/bin/env bash
     set -euo pipefail
-    profile=$1 rounds=$2
-    if [ -e "$profile" ]; then echo "error: $profile exists; coz-run only writes a new profile" >&2; exit 2; fi
-    command -v jq >/dev/null || { echo "error: coz-run needs jq to read Cargo's artifact messages" >&2; exit 2; }
+    command -v jq >/dev/null || { echo "error: coz-build needs jq to read Cargo's artifact messages" >&2; exit 2; }
     bin=$(CARGO_PROFILE_RELEASE_DEBUG=1 cargo build --release --locked --bench profile_coz --message-format=json-render-diagnostics | jq -r 'select(.reason == "compiler-artifact" and .target.name == "profile_coz" and .executable != null) | .executable')
     if [ -z "$bin" ] || [ "$(printf '%s\n' "$bin" | wc -l)" -ne 1 ] || [ ! -x "$bin" ]; then echo "error: Cargo reported no single profile_coz executable: '$bin'" >&2; exit 2; fi
-    echo "coz-run: $bin sha256=$(sha256sum "$bin" | cut -d' ' -f1) rounds=$rounds -> $profile" >&2
-    "${COZ_BIN:-coz}" run --source-scope '%/zenresize/src/%' --output "$profile" --- "$bin" "$rounds"
+    printf '%s\n' "$bin"
+
+# Coz causal profile of benches/profile_coz.rs (Linux; needs `coz` on PATH or
+# COZ_BIN). Builds through coz-build. PROFILE must be a new path: an existing
+# file is refused, never overwritten. MODE is all (default) or rgb3 (the
+# 3-channel f32 workload only); the pixel content is synthetic.
+# Example: just coz-run ~/tmp/zenresize-coz-$(date -u +%Y%m%dT%H%M%SZ).jsonl 1000 rgb3
+[positional-arguments]
+coz-run profile rounds="1000" mode="all":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    profile=$1 rounds=$2 mode=$3
+    if [ -e "$profile" ]; then echo "error: $profile exists; coz-run only writes a new profile" >&2; exit 2; fi
+    case "$mode" in all | rgb3) ;; *) echo "error: mode must be all or rgb3" >&2; exit 2 ;; esac
+    bin=$("{{just_executable()}}" --justfile "{{justfile()}}" coz-build)
+    echo "coz-run: $bin sha256=$(sha256sum "$bin" | cut -d' ' -f1) rounds=$rounds mode=$mode -> $profile" >&2
+    "${COZ_BIN:-coz}" run --source-scope '%/zenresize/src/%' --output "$profile" --- "$bin" "$rounds" "$mode"

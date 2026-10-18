@@ -6,7 +6,13 @@
 //! to no-ops outside `coz run`, so the binary also works standalone as a
 //! timing smoke test.
 //!
-//! Usage: `just coz-run <new-profile.jsonl> [rounds]` (justfile). The recipe
+//! Arguments: `[rounds] [mode]`. Mode `all` (the default) runs the four
+//! workloads above each round; `rgb3` runs only the RGB8-linear streaming
+//! resize, the one workload that reaches the 3-channel f32 horizontal filter.
+//! Pixel content is synthetic (`make_row`: one generated row repeated), not a
+//! photograph; real photographs are measured by tools/resize-bench.
+//!
+//! Usage: `just coz-run <new-profile.jsonl> [rounds] [mode]` (justfile). The recipe
 //! builds this bench with `CARGO_PROFILE_RELEASE_DEBUG=1` for line tables, takes
 //! the executable path from Cargo's JSON artifact message, and runs it under
 //! `coz run --source-scope '%/zenresize/src/%'`.
@@ -87,6 +93,14 @@ fn main() {
         .nth(1)
         .and_then(|a| a.parse().ok())
         .unwrap_or(3);
+    let rgb3_only = match std::env::args().nth(2).as_deref() {
+        None | Some("all") => false,
+        Some("rgb3") => true,
+        Some(other) => {
+            eprintln!("profile_coz: unknown mode {other:?}; use all or rgb3");
+            std::process::exit(2);
+        }
+    };
 
     // I16Srgb: 4ch sRGB, identity transfer, 5x downscale (tap guard < 50).
     let cfg_srgb = ResizeConfig::builder(4000, 3000, 800, 600)
@@ -123,6 +137,17 @@ fn main() {
         .take(2000 * 1500 * 4)
         .collect();
 
+    if rgb3_only {
+        eprintln!(
+            "profile_coz: {rounds} rounds x (f32 rgb8-linear streaming only), synthetic rows"
+        );
+        for round in 0..rounds {
+            run_streaming(&cfg_f32, &row2k3, 1500, 750);
+            eprintln!("  round {round} done");
+        }
+        eprintln!("done.");
+        return;
+    }
     eprintln!("profile_coz: {rounds} rounds x (i16srgb + i16linear + f32 streaming + fullframe)");
     for round in 0..rounds {
         run_streaming(&cfg_srgb, &row4k, 3000, 600);

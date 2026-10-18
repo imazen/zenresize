@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Shared fail-closed staging helpers for zenresize's generated dev tools
-# (tools/hfilter-parity, tools/resize-bench). Sourced by their run.sh, never
-# executed directly. Requires bash, git, cargo, rustc, tar, sha256sum, realpath.
+# (tools/hfilter-parity, tools/resize-bench, tools/coz-profile). Sourced by their
+# scripts, never executed directly. Requires bash, git, cargo, rustc, tar, sha256sum, realpath.
 #
 # A run builds in a fresh caller-chosen directory outside the repository:
 #   <run>/src/<side>/   git-archive export of a revision (old = baseline, new = candidate)
@@ -196,7 +196,7 @@ PY
 # Record which source files the compiler actually read for the build in
 # <target-dir>/<profile> (rustc dep-info written during this run), hash each one,
 # and classify it by root. Relative dep-info paths (workspace members) resolve
-# against <workspace-dir>. Fails on a source outside the allowed roots, on any
+# against <workspace-dir>. Writes identity/compiled-sources${ZR_COMPILED_TAG}.tsv. Fails on a source outside the allowed roots, on any
 # registry copy of a crate in <staged-crates> (csv), on a staged root that
 # contributed nothing, and on a staged file whose bytes differ from its export
 # manifest (identity/<side>.files.sha256).
@@ -205,10 +205,10 @@ zr_record_compiled_sources() {
 	local target=$1 profile=$2 ws=$3 staged=$4
 	shift 4
 	python3 -I - "$target/$profile/deps" "$ZR_RUN/identity/run.tsv" "$ZR_RUN" "${CARGO_HOME:-$HOME/.cargo}" \
-		"$staged" "$ws" "$@" >"$ZR_RUN/identity/compiled-sources.check.txt" 2>&1 <<'PY' ||
+		"$staged" "$ws" "${ZR_COMPILED_TAG:-}" "$@" >"$ZR_RUN/identity/compiled-sources${ZR_COMPILED_TAG:-}.check.txt" 2>&1 <<'PY' ||
 import glob, hashlib, os, sys
-deps, stamp, run, cargo_home, staged, ws = sys.argv[1:7]
-sides = dict(a.split("=", 1) for a in sys.argv[7:])
+deps, stamp, run, cargo_home, staged, ws, tag = sys.argv[1:8]
+sides = dict(a.split("=", 1) for a in sys.argv[8:])
 since = os.path.getmtime(stamp)
 registry = os.path.realpath(os.path.join(cargo_home, "registry", "src"))
 target = os.path.realpath(os.path.dirname(deps.rstrip("/")))
@@ -265,15 +265,15 @@ for p in sorted(files):
 for side, n in used.items():
     if n == 0:
         bad.append(f"staged root {side} ({roots[side]}) contributed no compiled source")
-open(os.path.join(run, "identity", "compiled-sources.tsv"), "w").write("\n".join(rows) + "\n")
+open(os.path.join(run, "identity", f"compiled-sources{tag}.tsv"), "w").write("\n".join(rows) + "\n")
 for line in bad:
     print("FAIL: " + line)
 print("compiled sources: " + ", ".join(f"{s}={n}" for s, n in used.items()) +
       f", registry={sum(r.startswith('registry:') for r in rows)}, total={len(rows)}")
 sys.exit(1 if bad else 0)
 PY
-		zr_die "compiled-source identity check failed (see $ZR_RUN/identity/compiled-sources.check.txt)"
-	cat "$ZR_RUN/identity/compiled-sources.check.txt" >&2
+		zr_die "compiled-source identity check failed (see $ZR_RUN/identity/compiled-sources${ZR_COMPILED_TAG:-}.check.txt)"
+	cat "$ZR_RUN/identity/compiled-sources${ZR_COMPILED_TAG:-}.check.txt" >&2
 }
 
 # Two path packages of one name need distinct versions to share a lockfile.
