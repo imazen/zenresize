@@ -6,9 +6,10 @@
 //! to no-ops outside `coz run`, so the binary also works standalone as a
 //! timing smoke test.
 //!
-//! Usage:
-//!   CARGO_PROFILE_RELEASE_DEBUG=1 cargo build --release --bench profile_coz
-//!   coz run --output ~/tmp/profile.jsonl --- ./target/release/deps/profile_coz-<hash> [rounds]
+//! Usage: `just coz-run <new-profile.jsonl> [rounds]` (justfile). The recipe
+//! builds this bench with `CARGO_PROFILE_RELEASE_DEBUG=1` for line tables, takes
+//! the executable path from Cargo's JSON artifact message, and runs it under
+//! `coz run --source-scope '%/zenresize/src/%'`.
 //!
 //! `coz` is a Linux-only dev-dependency (it does not build on Windows). On
 //! other targets the counters compile to nothing and the same resize loop
