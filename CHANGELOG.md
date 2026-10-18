@@ -16,6 +16,7 @@
   panicked on adversarial inputs; they now validate and surface errors.
 
 ### Added
+- Development tooling only; the library is unchanged. `benches/profile_coz.rs` is a coz causal-profiling harness whose `coz` dev-dependency is Linux-only (313ccae6), run with `just coz-run <new-profile.jsonl> [rounds]`. The recipe builds with line tables and takes the executable from Cargo's JSON artifact message, never a `deps/` glob (9a756794). `tools/hfilter-parity` is an old-vs-new differential of the RGB f32 H-filter at kernel level and through whole resizes, under every dispatch tier (c2408cef). `tools/resize-bench` is a native zenbench Confirm comparison of whole public resizes, with frozen inputs (including a native 12 MP photo), parity before and after timing, and declared acceptance rules (6df76f84). Validation record: `benchmarks/hfilter_parity_2026-10-18.md`.
 - Split README: `README.md` (GitHub, full badges + benchmarks) and a generated
   `README.crates.md` (crates.io, CI badge only) via `readme = "README.crates.md"`;
   `benchmarks/README.md` documents the fair-comparison methodology and pinned-commit
