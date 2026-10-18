@@ -15,14 +15,23 @@ quiet host.
 ## Frozen plan
 
 Defined in `src/plan.rs` and `src/inputs.rs`, under workload id
-`zenresize-rgb-hfilter-whole-resize-v2`.
+`zenresize-rgb-hfilter-whole-resize-v3`.
 
-**Sampling**
+**Sampling** (predeclared before any timing of this workload):
 
-- 5 fresh processes, 30 fixed rounds per group, margin 1 %, family confidence
-  0.95.
-- Supervisor deadline 7200 s for all five processes. Per group: 120 s of
-  benchmark time and a 600 s wall limit. These are budgets, not predictions.
+- 15 fresh processes, run one after another, 100 fixed rounds per group, margin
+  1 %, family confidence 0.95. There is no pilot stage, no data-dependent
+  stopping and no role change after data.
+- Inference (zenbench `inference.rs`): per process, the mean per-iteration time
+  of each arm; across processes, a paired log-ratio t interval (14 degrees of
+  freedom) with a Bonferroni family of 50. Groups are baseline-only, so the
+  analyses are exactly `old → new` and `old → old-aa` in each of the 25 groups.
+- Safety caps, not runtime predictions (the runtime of this plan is
+  unmeasured): a supervisor deadline of 86400 s for all fifteen processes and a
+  3600 s wall limit per group. The 120 s per-group benchmark-time budget cannot
+  shorten the fixed rounds (Confirm sets `min_rounds = max_rounds`, and
+  `max_time` is checked only after `min_rounds`). The wall limit can; then the
+  evaluator rejects the run.
 
 **Timed call.** Each callback is one whole public call:
 
@@ -69,7 +78,7 @@ accepted only if all of the following hold:
 
 - zenbench reports no confirmation issues;
 - the resolved plan equals the frozen plan, with mode Confirm;
-- all 5 replicates hold every group and arm with 30 completed fixed rounds;
+- all 15 replicates hold every group and arm with 100 completed fixed rounds;
 - every `old → old-aa` is Equivalent within ±1 %;
 - every control's `old → new` is Equivalent within ±1 %;
 - every target's `old → new` is an Improvement (the whole interval below −1 %);
@@ -138,9 +147,9 @@ builds in a separate workspace.
 
 1. decodes and crops the inputs, verifying the frozen source and crop sha256
    values;
-2. runs a dry run whose resolved plan (Confirm, 5 × 30, margin, confidence,
-   groups, arms, per-group rounds and time budgets) is checked against the
-   frozen plan;
+2. runs a dry run whose resolved plan (Confirm, 15 × 100, margin, confidence,
+   workload id, groups, arms, per-group rounds and time budgets) is checked
+   against the frozen plan;
 3. runs a selftest that drives the real executable through controlled
    failures: plan overrides on the CLI and in the environment, unrestricted
    placement, group filtering, a missing or temp artifact directory, and

@@ -3,7 +3,7 @@
 //! plan.rs that changes what is measured, requires a new WORKLOAD_ID.
 
 /// Identifies inputs, case inventory and sampling plan. Bump on any change.
-pub(crate) const WORKLOAD_ID: &str = "zenresize-rgb-hfilter-whole-resize-v2";
+pub(crate) const WORKLOAD_ID: &str = "zenresize-rgb-hfilter-whole-resize-v3";
 
 /// The dataset checkout a `corpus_path` is resolved against.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -9,7 +9,7 @@
 #          [--cpu-policy auto|performance|efficiency] [--dry-run]
 #
 # prepare: stage, check, build, prepare inputs, dry-run and selftest. Never times anything.
-# confirm: verify a prepared run, then run the retained executable (five fresh
+# confirm: verify a prepared run, then run the retained executable (fifteen fresh
 #          processes) into a fresh attempt directory. Its exit code is the decision.
 set -euo pipefail
 
@@ -60,22 +60,23 @@ def need(cond, msg):
     if not cond:
         problems.append(msg)
 need(p["mode"] == "confirm", f"mode {p['mode']}")
-need(p["processes"] == frozen["processes"] == 5, "processes")
-need(p["rounds"] == frozen["rounds"] == 30, "rounds")
+need(p["processes"] == frozen["processes"] == 15, "processes")
+need(p["rounds"] == frozen["rounds"] == 100, "rounds")
 need(p["margin_pct"] == frozen["margin_pct"] == 1.0, "margin")
 need(p["confidence"] == frozen["confidence"] == 0.95, "confidence")
-need(p["workload_id"] == ident["workload_id"], "workload id")
+need(p["workload_id"] == ident["workload_id"] == "zenresize-rgb-hfilter-whole-resize-v3", "workload id")
 need(p["scope"] is None, "scope")
-need(p["timeout"]["secs"] == frozen["timeout_secs"] and p["timeout"]["nanos"] == 0, "timeout")
+need(p["timeout"]["secs"] == frozen["timeout_secs"] == 86400 and p["timeout"]["nanos"] == 0, "timeout")
+need(frozen["group_max_wall_secs"] == 3600 and frozen["group_max_time_secs"] == 120, "group budgets")
 need(dry["binary_sha256"] == binary_sha == ident["binary_sha256"], "binary sha256")
 need(os.path.realpath(dry["data_directory"]) == os.path.realpath(os.path.join(artifacts, "zenbench-data")), "data dir")
 want = [g["id"] for g in ident["groups"]]
 got = [g["name"] for g in dry["groups"]]
-need(sorted(got) == sorted(want) and len(got) == len(set(got)), f"groups {got} != {want}")
+need(sorted(got) == sorted(want) and len(got) == len(set(got)) == 25, f"groups {got} != {want}")
 for g in dry["groups"]:
     c = g["config"]
     need(g["benchmarks"] == frozen["arms"], f"{g['name']} arms {g['benchmarks']}")
-    need(c["max_rounds"] == 30 and c["min_rounds"] == 30 and c["auto_rounds"] is False, f"{g['name']} rounds {c}")
+    need(c["max_rounds"] == 100 and c["min_rounds"] == 100 and c["auto_rounds"] is False, f"{g['name']} rounds {c}")
     need(c["baseline_only"] is True, f"{g['name']} baseline_only")
     need(c["max_time"]["secs"] == frozen["group_max_time_secs"], f"{g['name']} max_time")
     need(c["max_wall_time"]["secs"] == frozen["group_max_wall_secs"], f"{g['name']} max_wall_time")
@@ -83,8 +84,11 @@ need(rec["all_equal"] is True and len(rec["parity"]) == len(want), "dry-run pari
 if problems:
     print("dry-run plan check FAILED:\n  " + "\n  ".join(problems), file=sys.stderr)
     sys.exit(1)
-print(f"dry-run plan check OK: confirm, 5 processes x 30 fixed rounds, margin 1, confidence 0.95, "
-      f"{len(got)} groups x {len(frozen['arms'])} arms, workload {p['workload_id']}")
+# baseline_only: each group's analyses are old->new and old->old-aa, so the
+# Bonferroni family is 2 per group.
+print(f"dry-run plan check OK: confirm, 15 processes x 100 fixed rounds, margin 1, confidence 0.95, "
+      f"{len(got)} groups x {len(frozen['arms'])} arms, family {2 * len(got)} (baseline-only), "
+      f"timeout {frozen['timeout_secs']} s, group wall {frozen['group_max_wall_secs']} s, workload {p['workload_id']}")
 PY
 }
 
@@ -312,9 +316,9 @@ selftest() {
 	# whose plan differs must not pass it.
 	local child_env=(env ZENBENCH_DATA_DIR="$st/missing/zenbench-data" ZENBENCH_SUBPROCESS=1
 		ZENBENCH_RESULT_PATH="$st/missing/child-result.json.gz" ZENBENCH_LAUNCHER_PIDS=1
-		ZENBENCH_MODE=confirm ZENBENCH_PROCESSES=5 ZENBENCH_ROUNDS=30 ZENBENCH_MARGIN=1
-		ZENBENCH_CONFIDENCE=0.95 ZENBENCH_TIMEOUT=7200
-		ZENBENCH_WORKLOAD_ID=zenresize-rgb-hfilter-whole-resize-v2
+		ZENBENCH_MODE=confirm ZENBENCH_PROCESSES=15 ZENBENCH_ROUNDS=100 ZENBENCH_MARGIN=1
+		ZENBENCH_CONFIDENCE=0.95 ZENBENCH_TIMEOUT=86400
+		ZENBENCH_WORKLOAD_ID=zenresize-rgb-hfilter-whole-resize-v3
 		ZENBENCH_COORDINATION_DIR="$st" ZENBENCH_COORDINATION_LEASE=1)
 	expect 3 untouched child-env-accepted "${child_env[@]}" "$bin" --artifacts="$st/missing"
 	expect 2 untouched child-env-wrong-rounds "${child_env[@]}" ZENBENCH_ROUNDS=3 "$bin" --artifacts="$st/missing"

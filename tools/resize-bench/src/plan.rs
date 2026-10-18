@@ -4,19 +4,27 @@
 //! `inputs::WORKLOAD_ID`.
 
 /// zenbench native Confirm plan. Fresh processes, fixed rounds, no adaptation.
-pub(crate) const PROCESSES: usize = 5;
-pub(crate) const ROUNDS: usize = 30;
+/// 15 x 100 is the sampling design root predeclared before any timing of this
+/// workload (no pilot, no data-dependent stopping or role change).
+pub(crate) const PROCESSES: usize = 15;
+pub(crate) const ROUNDS: usize = 100;
 pub(crate) const MARGIN_PCT: f64 = 1.0;
 pub(crate) const CONFIDENCE: f64 = 0.95;
-/// Supervisor deadline for all five child processes together (a budget, not a
-/// runtime prediction). Each child runs every group: 30 rounds x 3 arms.
-pub(crate) const TIMEOUT_SECS: u64 = 7200;
-/// Per-group benchmark-time budget. In Confirm, zenbench forces
-/// min_rounds = max_rounds, so this cannot cut the 30 fixed rounds short.
+/// Supervisor deadline for all fifteen child processes together, which zenbench
+/// runs one after another. A safety cap only: the runtime of this plan has not
+/// been measured. Each child runs every group: 100 rounds x 3 arms. Exceeding it
+/// leaves the experiment incomplete, which the evaluator rejects.
+pub(crate) const TIMEOUT_SECS: u64 = 86400;
+/// Per-group benchmark-time budget. It cannot cut the fixed rounds short: in
+/// Confirm zenbench sets min_rounds = max_rounds (zenbench 98c25fe8
+/// src/engine.rs:138) and checks max_time only once round >= min_rounds
+/// (src/engine.rs:666).
 pub(crate) const GROUP_MAX_TIME_SECS: u64 = 120;
-/// Per-group hard wall-clock limit (zenbench default is 120 s); sized so 30
-/// rounds of the largest whole resize cannot hit it.
-pub(crate) const GROUP_MAX_WALL_SECS: u64 = 600;
+/// Per-group hard wall-clock limit, checked before every round regardless of
+/// min_rounds (zenbench 98c25fe8 src/engine.rs:660), so it can end a group
+/// early; the evaluator then rejects the run (fewer than ROUNDS completed). A
+/// safety cap, not a runtime prediction: the per-group runtime is unmeasured.
+pub(crate) const GROUP_MAX_WALL_SECS: u64 = 3600;
 
 /// Every group has exactly these arms. `old` is the comparison baseline;
 /// `old-aa` runs the identical baseline function again as the A/A control.

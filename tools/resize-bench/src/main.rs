@@ -1,6 +1,6 @@
 //! Native zenbench Confirm comparison of whole public zenresize resizes:
 //! baseline (`old`), candidate (`new`) and an A/A arm (`old-aa`) in one
-//! executable, five fresh processes, 30 fixed rounds, margin 1 %, family
+//! executable, fifteen fresh processes, 100 fixed rounds, margin 1 %, family
 //! confidence 0.95, all frozen in `plan.rs`. See README.md.
 //!
 //! Exit codes: 0 = every declared acceptance rule passed; 1 = confirmed
