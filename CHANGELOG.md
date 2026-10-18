@@ -16,6 +16,13 @@
   panicked on adversarial inputs; they now validate and surface errors.
 
 ### Added
+- Development tooling only, for a native Confirm of the RGB f32 H-filter candidate; the library is unchanged. `tools/resize-bench` now:
+  - runs a predeclared 15 processes × 100 fixed rounds plan (workload v3; margin 1 %, confidence 0.95, baseline-only so the family is 50), with 86400 s and 3600 s per-group safety caps (833efc28);
+  - builds its harness from zenbench `98c25fe8`, staged from a verified git archive, and checks that the lock differs from the crates.io 0.1.11 resolution only in zenbench's source and checksum, and that every compiled source matches its staged export (e687ad27);
+  - records archmage's X64V3/V4/V4x availability in every process record, kept apart from the source-inferred filter tier (781876c9);
+  - `confirm --scope-cpus/--pin` runs in a system cpuset scope with zenbench's measured-thread pin, under an external `/proc` placement receipt that fails the attempt if the observed masks contradict the request (8049d1af).
+
+  `benches/profile_coz.rs` gains an `rgb3` mode (synthetic rows, 3-channel f32 workload only), the justfile a `coz-build` recipe, and `tools/coz-profile/stage.sh` builds source-exact baseline/post arms that share one harness and differ only in `src/` (3aa3ac3b).
 - Development tooling only; the library is unchanged. `benches/profile_coz.rs` is a coz causal-profiling harness whose `coz` dev-dependency is Linux-only (313ccae6), run with `just coz-run <new-profile.jsonl> [rounds]`. The recipe builds with line tables and takes the executable from Cargo's JSON artifact message, never a `deps/` glob (9a756794). `tools/hfilter-parity` is an old-vs-new differential of the RGB f32 H-filter at kernel level and through whole resizes, under every dispatch tier (c2408cef). `tools/resize-bench` is a native zenbench Confirm comparison of whole public resizes, with frozen inputs (including a native 12 MP photo), parity before and after timing, and declared acceptance rules (6df76f84). Validation record: `benchmarks/hfilter_parity_2026-10-18.md`.
 - Split README: `README.md` (GitHub, full badges + benchmarks) and a generated
   `README.crates.md` (crates.io, CI badge only) via `readme = "README.crates.md"`;
