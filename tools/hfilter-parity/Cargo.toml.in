@@ -1,0 +1,32 @@
+# Manifest for the generated hfilter-parity workspace. run.sh copies this file
+# verbatim to <run>/ws/Cargo.toml; it is never built in place and is not part of
+# the zenresize package (tools/ is outside the published `include` list).
+[package]
+name = "zenresize-hfilter-parity"
+version = "0.0.0"
+edition = "2024"
+publish = false
+autobins = false
+
+[workspace]
+
+[dependencies]
+# Baseline and candidate: verified git-archive exports staged by run.sh, with
+# only their [package] version suffixed so both fit one lockfile.
+zr_old = { package = "zenresize", path = "../src/old" }
+zr_new = { package = "zenresize", path = "../src/new" }
+# Declared test hook, mirrored in run.sh's graph-reference consumer:
+# testable_dispatch lets every tier, scalar fallback included, be forced on.
+archmage = { version = "0.9.26", features = ["std", "macros", "testable_dispatch"] }
+
+[features]
+avx512 = ["zr_old/avx512", "zr_new/avx512"]
+pretty-safe = ["zr_old/pretty-safe", "zr_new/pretty-safe"]
+
+[[bin]]
+name = "kernel_diff"
+path = "../tool/tools/hfilter-parity/src/bin/kernel_diff.rs"
+
+[[bin]]
+name = "e2e_diff"
+path = "../tool/tools/hfilter-parity/src/bin/e2e_diff.rs"

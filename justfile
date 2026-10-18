@@ -19,3 +19,10 @@ api-doc-check:
 arm-kernel-tiers-macos:
     mkdir -p "$HOME/tmp"
     CARGO_BUILD_JOBS=4 RAYON_NUM_THREADS=4 OMP_NUM_THREADS=4 TMPDIR="$HOME/tmp" nice -n 19 cargo bench --bench kernel_tiers -- --cpu-policy=unrestricted --format=llm > "$HOME/tmp/zenresize-kernel-tiers.log" 2>&1
+
+# Old-vs-new differential of the RGB f32 H-filter (kernel + whole resizes, every
+# dispatch tier) from verified git-archive builds. See tools/hfilter-parity/README.md.
+# Example: just hfilter-parity e595ef8f HEAD ~/tmp/hfp-run1 none quick
+[positional-arguments]
+hfilter-parity old new out features scope:
+    tools/hfilter-parity/run.sh --old "$1" --new "$2" --out "$3" --features "$4" --scope "$5"
