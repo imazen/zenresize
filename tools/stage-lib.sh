@@ -307,11 +307,79 @@ EOF
 	# The tool side is queried with the tool's own --features (ZR_TOOL_FEATURES),
 	# exactly as it is built.
 	zr_normal_tree "$ZR_WS" "$alias_version" "$ZR_RUN/identity/graph-$side.tool" "$suffix" "${ZR_TOOL_FEATURES:-}"
-	diff -u "$ZR_RUN/identity/graph-$side.reference" "$ZR_RUN/identity/graph-$side.tool" \
-		>"$ZR_RUN/identity/graph-$side.diff" ||
-		zr_die "the $side zenresize dependency graph in the tool workspace differs from a production consumer's (see $ZR_RUN/identity/graph-$side.diff)"
-	printf 'graph-%s\tidentical\tlines=%s\tsha256=%s\n' "$side" "$(wc -l <"$ZR_RUN/identity/graph-$side.tool")" \
+	local status=identical
+	if ! diff -u "$ZR_RUN/identity/graph-$side.reference" "$ZR_RUN/identity/graph-$side.tool" \
+		>"$ZR_RUN/identity/graph-$side.diff"; then
+		zr_check_inert_feature_additions "$side" ||
+			zr_die "the $side zenresize dependency graph in the tool workspace differs from a production consumer's (see $ZR_RUN/identity/graph-$side.diff and graph-$side.inert-check.txt)"
+		status=identical-except-inert-feature-additions
+	fi
+	printf 'graph-%s\t%s\tlines=%s\tsha256=%s\n' "$side" "$status" "$(wc -l <"$ZR_RUN/identity/graph-$side.tool")" \
 		"$(zr_sha256 "$ZR_RUN/identity/graph-$side.tool")" >>"$ZR_RUN/identity/graphs.tsv"
+}
+
+# A tool-side graph may differ from the production consumer's only by features
+# that change nothing: same packages, versions and shape; the tool side only
+# adds features; each added feature implies only features the production graph
+# already enables (per the package's own feature table); and the package source
+# (vendored from the lock by `cargo vendor`, not read from Cargo's registry
+# directory) never tests `feature = "<added>"`. Anything else fails.
+zr_check_inert_feature_additions() {
+	local side=$1 id="$ZR_RUN/identity"
+	if [ ! -d "$ZR_RUN/vendor" ]; then
+		(cd "$ZR_WS" && zr_run_logged vendor cargo vendor --locked --versioned-dirs "$ZR_RUN/vendor") || return 1
+	fi
+	(cd "$ZR_WS" && cargo metadata --locked --format-version 1) >"$id/metadata-ws.json" || return 1
+	python3 -I - "$id/graph-$side.reference" "$id/graph-$side.tool" "$id/metadata-ws.json" "$ZR_RUN/vendor" \
+		>"$id/graph-$side.inert-check.txt" 2>&1 <<'PY'
+import json, os, re, sys
+ref_path, tool_path, meta_path, vendor = sys.argv[1:5]
+ref = open(ref_path).read().splitlines()
+tool = open(tool_path).read().splitlines()
+pkgs = {(p["name"], p["version"]): p for p in json.load(open(meta_path))["packages"]}
+line = re.compile(r"^(\d+)(\S+) v(\S+) \[(.*)\]$")
+def fail(msg):
+    print("NOT INERT: " + msg)
+    sys.exit(1)
+if len(ref) != len(tool):
+    fail(f"graph shapes differ ({len(ref)} vs {len(tool)} lines)")
+for a, b in zip(ref, tool):
+    ma, mb = line.match(a), line.match(b)
+    if not ma or not mb:
+        fail(f"unparsable line {a!r} / {b!r}")
+    if ma.group(1, 2, 3) != mb.group(1, 2, 3):
+        fail(f"package or position differs: {a!r} / {b!r}")
+    fa = set(filter(None, ma.group(4).split(",")))
+    fb = set(filter(None, mb.group(4).split(",")))
+    if fa == fb:
+        continue
+    if not fa <= fb:
+        fail(f"{a!r}: tool side lacks features {sorted(fa - fb)}")
+    name, version = mb.group(2), mb.group(3)
+    pkg = pkgs.get((name, version))
+    if pkg is None:
+        fail(f"{name} {version} not in cargo metadata")
+    src = os.path.join(vendor, f"{name}-{version}")
+    if not os.path.isdir(src):
+        fail(f"vendored source {src} missing")
+    for feat in sorted(fb - fa):
+        implied = pkg["features"].get(feat)
+        if implied is None:
+            fail(f"{name} {version}: {feat} is not a declared feature")
+        for entry in implied:
+            if entry.startswith("dep:") or "/" in entry or entry not in fa:
+                fail(f"{name} {version}: feature {feat} implies {entry!r}, not already enabled in production")
+        pattern = re.compile(r'feature\s*=\s*"' + re.escape(feat) + '"')
+        for root, _, files in os.walk(src):
+            for fn in files:
+                if fn.endswith(".rs"):
+                    path = os.path.join(root, fn)
+                    if pattern.search(open(path, encoding="utf-8", errors="replace").read()):
+                        fail(f"{name} {version}: {path} tests feature {feat!r}")
+        print(f"inert: {name} v{version} +{feat} = {implied}; already enabled in production: {sorted(fa)}; "
+              f"no source tests feature {feat!r} ({src})")
+print("all differences are inert feature additions")
+PY
 }
 
 # Copy built binaries out of Cargo's replaceable target directory into

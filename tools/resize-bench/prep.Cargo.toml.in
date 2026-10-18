@@ -1,0 +1,20 @@
+# Manifest for the generated resize-bench input-preparation workspace (a
+# separate workspace, so its PNG decoder never joins the benchmark's dependency
+# graph). run.sh copies this file verbatim to <run>/ws-prep/Cargo.toml.
+[package]
+name = "zenresize-resize-bench-prep"
+version = "0.0.0"
+edition = "2024"
+publish = false
+autobins = false
+
+[workspace]
+
+[dependencies]
+png = "0.18.1"
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+
+[[bin]]
+name = "resize-bench-prep"
+path = "../tool/tools/resize-bench/src/prep.rs"

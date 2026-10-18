@@ -26,3 +26,16 @@ arm-kernel-tiers-macos:
 [positional-arguments]
 hfilter-parity old new out features scope:
     tools/hfilter-parity/run.sh --old "$1" --new "$2" --out "$3" --features "$4" --scope "$5"
+
+# Native zenbench Confirm comparison of whole public resizes (old / new / old A/A).
+# prepare never times anything; run confirm only on a quiet host. The frozen plan
+# reads one input from an imazen-26 variant/png-v3 checkout. See tools/resize-bench/README.md.
+# Example: just resize-bench-prepare e595ef8f HEAD ~/work/codec-corpus ~/work/zen/imazen-26-png-v3 ~/tmp/rb-run1
+[positional-arguments]
+resize-bench-prepare old new corpus imazen26 out:
+    tools/resize-bench/run.sh prepare --old "$1" --new "$2" --corpus "$3" --imazen26 "$4" --out "$5"
+
+# Extra arguments pass through: --cpu-set IDS, --cpu-policy auto|performance|efficiency, --dry-run.
+[positional-arguments]
+resize-bench-confirm run *args:
+    run="$1"; shift; tools/resize-bench/run.sh confirm --run "$run" "$@"
