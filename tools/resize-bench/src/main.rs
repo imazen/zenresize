@@ -91,12 +91,16 @@ fn parse_cli() -> Cli {
 }
 
 /// Top-level runs may carry only placement/coordination and the data dir; a
-/// child must carry exactly the frozen plan its parent passes down.
+/// child must carry exactly the frozen plan its parent passes down. Placement
+/// includes `ZENBENCH_PIN`, zenbench's measured-thread pin, which children
+/// inherit. Diagnostics such as `ZENBENCH_GATE_TRACE` are refused: no process of
+/// this workload, timed or not, runs with tracing on.
 fn check_env(child: bool) {
     let mut allowed: Vec<&str> = vec![
         "ZENBENCH_DATA_DIR",
         "ZENBENCH_CPU_POLICY",
         "ZENBENCH_CPU_SET",
+        "ZENBENCH_PIN",
         "ZENBENCH_COORDINATION_DIR",
     ];
     if child {

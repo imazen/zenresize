@@ -5,8 +5,8 @@
 #
 # usage: tools/resize-bench/run.sh prepare --old REV --new REV --corpus CODEC_CORPUS_DIR \
 #          [--imazen26 IMAZEN26_PNG_V3_DIR] --zenbench ZENBENCH_REPO --out NEW_RUN_DIR
-#        tools/resize-bench/run.sh confirm --run PREPARED_RUN_DIR [--cpu-set IDS] \
-#          [--cpu-policy auto|performance|efficiency] [--dry-run]
+#        tools/resize-bench/run.sh confirm --run PREPARED_RUN_DIR [--cpu-set IDS | --scope-cpus IDS [--pin IDS]
+#          [--scope-mem SIZE]] [--cpu-policy auto|performance|efficiency] [--dry-run]
 #
 # prepare: stage, check, build, prepare inputs, dry-run and selftest. Never times anything.
 # confirm: verify a prepared run, then run the retained executable (fifteen fresh
@@ -235,7 +235,7 @@ PY
 	selftest "$bin" "$artifacts"
 	printf 'prepare_status\tPASS\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$ZR_RUN/identity/run.tsv"
 	echo "resize-bench prepared (no timing): $ZR_RUN"
-	echo "confirm on a quiet host with: tools/resize-bench/run.sh confirm --run $ZR_RUN [--cpu-set IDS]"
+	echo "confirm on a quiet host with: $ZR_RUN/tool/tools/resize-bench/run.sh confirm --run $ZR_RUN --scope-cpus IDS --pin IDS [--dry-run]"
 }
 
 # Controlled failures through the real executable's main routing. Each case
@@ -297,6 +297,7 @@ selftest() {
 	expect 2 untouched env-data-dir-missing env -u ZENBENCH_DATA_DIR "$bin" "$A" --dry-run
 	expect 2 untouched env-data-dir-elsewhere env ZENBENCH_DATA_DIR="$st/elsewhere" "$bin" "$A" --dry-run
 	expect 2 untouched artifacts-via-tmp env ZENBENCH_DATA_DIR="$data" "$bin" --artifacts="$st/link-to-tmp" --dry-run
+	expect 2 untouched env-gate-trace env ZENBENCH_DATA_DIR="$data" ZENBENCH_GATE_TRACE=1 "$bin" "$A" --dry-run
 
 	# Corrupt and missing inputs in a copy of the artifacts: refused (exit 3)
 	# before any parity or timing, and the real artifacts stay untouched.
@@ -331,6 +332,10 @@ selftest() {
 		ZENBENCH_WORKLOAD_ID=zenresize-rgb-hfilter-whole-resize-v3
 		ZENBENCH_COORDINATION_DIR="$st" ZENBENCH_COORDINATION_LEASE=1)
 	expect 3 untouched child-env-accepted "${child_env[@]}" "$bin" --artifacts="$st/missing"
+	expect 3 untouched child-env-pin-accepted "${child_env[@]}" ZENBENCH_PIN=2 "$bin" --artifacts="$st/missing"
+	expect 2 untouched child-env-gate-trace "${child_env[@]}" ZENBENCH_GATE_TRACE=1 "$bin" --artifacts="$st/missing"
+	expect 3 untouched top-level-pin-accepted env ZENBENCH_DATA_DIR="$st/missing/zenbench-data" ZENBENCH_PIN=2 \
+		"$bin" --artifacts="$st/missing" --dry-run
 	expect 2 untouched child-env-wrong-rounds "${child_env[@]}" ZENBENCH_ROUNDS=3 "$bin" --artifacts="$st/missing"
 	[ ! -e "$st/missing/child-result.json.gz" ] ||
 		{ echo "FAIL child routing produced a result packet" | tee -a "$st/results.tsv"; fails=$((fails + 1)); }
@@ -340,16 +345,19 @@ selftest() {
 }
 
 confirm() {
-	local run="" dry_run=0 passthrough=()
+	local run="" dry_run=0 passthrough=() scope_cpus="" pin="" scope_mem=6G cpu_set=""
 	while [ $# -gt 0 ]; do
 		case "$1" in
 		--run) run=${2:?}; shift 2 ;;
-		--cpu-set) passthrough+=("--cpu-set=${2:?}"); shift 2 ;;
+		--cpu-set) cpu_set=${2:?}; shift 2 ;;
 		--cpu-policy)
 			case "${2:-}" in auto | performance | efficiency) ;; *) zr_die "--cpu-policy must be auto, performance or efficiency" ;; esac
 			passthrough+=("--cpu-policy=$2")
 			shift 2
 			;;
+		--scope-cpus) scope_cpus=${2:?}; shift 2 ;;
+		--pin) pin=${2:?}; shift 2 ;;
+		--scope-mem) scope_mem=${2:?}; shift 2 ;;
 		--dry-run) dry_run=1; shift ;;
 		*) echo "error: unknown argument '$1'" >&2; usage ;;
 		esac
@@ -362,11 +370,60 @@ confirm() {
 	want=$(awk -F'\t' '$1 == "resize-bench" {print $2}' "$ZR_RUN/identity/binaries.tsv")
 	got=$(zr_sha256 "$bin")
 	[ -n "$want" ] && [ "$want" = "$got" ] || zr_die "retained binary sha256 $got does not match the prepared $want"
+	local forward=() v
 	if env | grep -q '^ZENBENCH_'; then
-		local v
 		for v in $(env | grep '^ZENBENCH_' | cut -d= -f1); do
-			case "$v" in ZENBENCH_CPU_POLICY | ZENBENCH_CPU_SET | ZENBENCH_COORDINATION_DIR) ;; *) zr_die "$v is set; the plan is frozen" ;; esac
+			case "$v" in
+			ZENBENCH_CPU_POLICY | ZENBENCH_CPU_SET | ZENBENCH_COORDINATION_DIR) forward+=("$v=${!v}") ;;
+			*) zr_die "$v is set; the plan is frozen (placement is given with --scope-cpus/--pin)" ;;
+			esac
 		done
+	fi
+	# Placement. --scope-cpus runs the executable in a transient *system* scope
+	# (sudo -n systemd-run --scope): user scopes do not get the cpuset controller
+	# on these hosts, so AllowedCPUs there would be silently ignored. The
+	# executable itself runs as the invoking user. --pin is zenbench's measured-
+	# thread pin (ZENBENCH_PIN) and must leave a scope CPU for its sampler.
+	local launch=(env) observer_cpu="" placement_args=()
+	if [ -n "$scope_cpus" ]; then
+		[ -z "$cpu_set" ] || zr_die "--cpu-set is implied by --scope-cpus; give only --scope-cpus"
+		zr_require_cmds sudo systemd-run taskset python3
+		placement_args=(--scope "$scope_cpus")
+		python3 -I - "$scope_cpus" "$pin" <<'PY' || zr_die "invalid --scope-cpus/--pin"
+import sys
+def cpus(s):
+    out = set()
+    for part in s.split(","):
+        a, _, b = part.partition("-")
+        out.update(range(int(a), int(b or a) + 1))
+    return out
+scope = cpus(sys.argv[1])
+online = cpus(open("/sys/devices/system/cpu/online").read().strip())
+if not scope <= online:
+    sys.exit(f"scope {sorted(scope)} is not within the online CPUs {sorted(online)}")
+if not online - scope:
+    sys.exit("the scope leaves no CPU for the external placement observer")
+if sys.argv[2]:
+    pin = cpus(sys.argv[2])
+    if not pin < scope:
+        sys.exit(f"pin {sorted(pin)} must be a proper subset of the scope {sorted(scope)}, leaving a CPU for the sampler")
+PY
+		observer_cpu=$(python3 -I -c 'import sys
+def cpus(s):
+    out = set()
+    for part in s.split(","):
+        a, _, b = part.partition("-")
+        out.update(range(int(a), int(b or a) + 1))
+    return out
+print(min(cpus(open("/sys/devices/system/cpu/online").read().strip()) - cpus(sys.argv[1])))' "$scope_cpus")
+		sudo -n true 2>/dev/null || zr_die "--scope-cpus needs passwordless sudo for a system scope"
+		launch=(sudo -n systemd-run --scope --quiet -p "AllowedCPUs=$scope_cpus" -p "MemoryMax=$scope_mem"
+			-p MemorySwapMax=0 -- sudo -n -u "$(id -un)" env)
+		passthrough+=("--cpu-set=$scope_cpus")
+		[ -z "$pin" ] || { forward+=("ZENBENCH_PIN=$pin"); placement_args+=(--pin "$pin"); }
+	else
+		[ -z "$pin" ] || zr_die "--pin needs --scope-cpus"
+		[ -z "$cpu_set" ] || passthrough+=("--cpu-set=$cpu_set")
 	fi
 	local artifacts="$ZR_RUN/artifacts" attempt
 	attempt="$ZR_RUN/attempts/$(date -u +%Y%m%dT%H%M%SZ)-$$"
@@ -375,16 +432,42 @@ confirm() {
 	check_resources "$ZR_RUN" 2048 4096 >"$attempt/resources.tsv"
 	local args=(--artifacts="$artifacts" "${passthrough[@]}")
 	[ "$dry_run" -eq 0 ] || args+=(--dry-run)
-	printf '%s\n' "$bin" "${args[@]}" >"$attempt/command.txt"
+	local envs=(ZENBENCH_DATA_DIR="$artifacts/zenbench-data" TMPDIR="${TMPDIR:-$HOME/tmp}" "${forward[@]}")
+	printf '%s\n' "${launch[@]}" "${envs[@]}" "$bin" "${args[@]}" >"$attempt/command.txt"
 	echo "binary_sha256 $got" >"$attempt/binary.txt"
-	local rc=0
-	(cd "$ZR_RUN" && env ZENBENCH_DATA_DIR="$artifacts/zenbench-data" "$bin" "${args[@]}" \
-		>"$attempt/stdout.txt" 2>"$attempt/stderr.txt") || rc=$?
+	local rc=0 bench_pid watcher_pid="" wrc=0
+	(cd "$ZR_RUN" && exec "${launch[@]}" "${envs[@]}" "$bin" "${args[@]}" \
+		>"$attempt/stdout.txt" 2>"$attempt/stderr.txt") &
+	bench_pid=$!
+	if [ -n "$scope_cpus" ]; then
+		taskset -c "$observer_cpu" nice -n 19 python3 -I "$script_dir/proc-receipt.py" watch --root-pid "$bench_pid" \
+			--exe "$bin" --out "$attempt/proc-receipt.jsonl" >"$attempt/proc-receipt-watch.log" 2>&1 &
+		watcher_pid=$!
+	fi
+	wait "$bench_pid" || rc=$?
+	[ -z "$watcher_pid" ] || wait "$watcher_pid" || wrc=$?
 	echo "$rc" >"$attempt/exit_code"
+	local newest
+	newest=$(find "$artifacts/records" -name "$([ "$dry_run" -eq 1 ] && echo dryrun || echo parent)-before-*.json" -newer "$attempt/command.txt" 2>/dev/null | LC_ALL=C sort | tail -n 1)
+	[ -z "$newest" ] || cpu_dispatch_readback "$newest" | tee "$attempt/cpu-dispatch.txt"
+	if [ -n "$scope_cpus" ]; then
+		local children=0 prc=0
+		[ "$dry_run" -eq 1 ] || children=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["plan"]["processes"])' \
+			"$ZR_RUN/identity/dryrun-plan.json")
+		[ "$wrc" -eq 0 ] || echo "error: placement watcher exited $wrc (see $attempt/proc-receipt-watch.log)" >&2
+		python3 -I "$script_dir/proc-receipt.py" check --receipt "$attempt/proc-receipt.jsonl" "${placement_args[@]}" \
+			--children "$children" --placement-stderr "$attempt/stderr.txt" --require-cgroup-cpuset \
+			| tee "$attempt/placement-check.txt" || prc=$?
+		if [ "$wrc" -ne 0 ] || [ "$prc" -ne 0 ]; then
+			echo "FAIL: the placement receipt does not show the requested placement; this attempt does not count" |
+				tee -a "$attempt/placement-check.txt"
+			[ "$rc" -ne 0 ] || rc=2
+		fi
+	fi
 	if [ "$dry_run" -eq 1 ]; then
 		echo "resize-bench dry run exit code $rc (no benchmark callback was timed; this is not a decision; see $attempt)"
 	else
-		echo "resize-bench exit code $rc (0 = every declared rule passed; see $attempt and $artifacts/acceptance)"
+		echo "resize-bench exit code $rc (0 = every declared rule passed and, with --scope-cpus, the placement receipt passed; see $attempt and $artifacts/acceptance)"
 	fi
 	exit "$rc"
 }

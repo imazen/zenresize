@@ -124,8 +124,9 @@ production graph already resolves, so the feature union does not change;
 tools/resize-bench/run.sh prepare --old e595ef8f --new <candidate> \
   --corpus <codec-corpus checkout> --imazen26 <imazen-26 png-v3 checkout> \
   --zenbench <zenbench repository> --out <fresh run dir>
-# On a quiet host, from the same run directory:
-tools/resize-bench/run.sh confirm --run <run dir> [--cpu-set IDS] [--cpu-policy performance]
+# On a quiet host, with the run directory's own frozen copy of the tool:
+<run dir>/tool/tools/resize-bench/run.sh confirm --run <run dir> \
+  --scope-cpus 2,3 --pin 2 [--scope-mem 6G] [--dry-run]
 ```
 
 **`prepare`** checks everything `tools/hfilter-parity` checks:
@@ -171,6 +172,35 @@ builds in a separate workspace.
 then runs the executable with the run's artifact directory. It never reuses an
 attempt directory.
 
+**Placement.** `--scope-cpus IDS` runs the executable in a transient *system*
+scope, `sudo -n systemd-run --scope -p AllowedCPUs=IDS -p MemoryMax=6G
+-p MemorySwapMax=0 -- sudo -u $USER env …`, with `--cpu-set=IDS`. A user scope
+is not used, because user managers on these hosts are not delegated the cpuset
+controller, so `AllowedCPUs` there is silently ignored. `--pin IDS` sets
+zenbench's measured-thread pin `ZENBENCH_PIN`, and it must be a proper subset of
+the scope, leaving a CPU for zenbench's resource sampler. Nothing in this
+workload runs with `ZENBENCH_GATE_TRACE`: the executable refuses it.
+
+**Placement receipt.** With `--scope-cpus`, `proc-receipt.py watch` runs
+outside the scope (on the lowest online CPU outside it, at nice 19) and records
+from `/proc` every state change of the benchmark processes:
+- each process, identified by its executable;
+- its threads, by PID, TID and kernel comm, with each one's `Cpus_allowed_list`;
+- its cgroup and `cpuset.cpus.effective`.
+
+It reads nothing from inside the processes. `proc-receipt.py check` then
+requires all of the following:
+- one top-level process, plus the planned number of children (none in a dry run);
+- every thread mask inside the scope;
+- the cgroup cpuset equal to the scope;
+- zenbench's placement line showing a verified single-class placement on a real
+  boundary, with `cpu_effective_set` equal to the scope;
+- in a timed run, a `resource-sample` thread in every child, with no mask that
+  overlaps the pin.
+
+If the receipt fails, the attempt exits 2 even when the executable exited 0
+(`attempts/<…>/placement-check.txt`).
+
 ## Artifacts (`<run>/`)
 
 | path | contents |
@@ -181,7 +211,7 @@ attempt directory.
 | `artifacts/records/{dryrun,parent,child}-{before,after}-*.json` | per-process identity and parity records |
 | `artifacts/zenbench-data/` | zenbench's raw packets (all processes and rounds) |
 | `artifacts/acceptance/` | the evaluator's decision |
-| `attempts/<utc>-<pid>/` | each `confirm` invocation: command, resources, stdout, stderr, exit code |
+| `attempts/<utc>-<pid>/` | each `confirm` invocation: command, resources, stdout, stderr, exit code, `cpu-dispatch.txt`, and with `--scope-cpus` `proc-receipt.jsonl` and `placement-check.txt` |
 | `selftest/results.tsv` | the selftest's cases |
 
 Run directories hold binaries and raw data: keep them out of Git and back them
