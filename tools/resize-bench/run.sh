@@ -4,7 +4,7 @@
 # See README.md.
 #
 # usage: tools/resize-bench/run.sh prepare --old REV --new REV --corpus CODEC_CORPUS_DIR \
-#          [--imazen26 IMAZEN26_PNG_V3_DIR] --out NEW_RUN_DIR
+#          [--imazen26 IMAZEN26_PNG_V3_DIR] --zenbench ZENBENCH_REPO --out NEW_RUN_DIR
 #        tools/resize-bench/run.sh confirm --run PREPARED_RUN_DIR [--cpu-set IDS] \
 #          [--cpu-policy auto|performance|efficiency] [--dry-run]
 #
@@ -16,6 +16,13 @@ set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=../stage-lib.sh
 source "$script_dir/../stage-lib.sh"
+
+# The benchmark harness: this reviewed zenbench revision, staged from a verified
+# git archive of the --zenbench repository as a path dependency (Cargo.toml.in).
+# Its version field is unchanged from the crates.io release it replaces, and the
+# lock may differ from that release's resolution only in zenbench's provenance.
+ZR_ZENBENCH_COMMIT=98c25fe8332e61d7d9ffe8571e36d5b034eaad9d
+ZR_ZENBENCH_VERSION=0.1.11
 
 usage() {
 	sed -n '6,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
@@ -81,11 +88,21 @@ print(f"dry-run plan check OK: confirm, 5 processes x 30 fixed rounds, margin 1,
 PY
 }
 
+# The benchmark manifest with the staged zenbench path dependency replaced by
+# the crates.io release of the same version: exactly one line may change.
+registry_manifest() {
+	local manifest=$1 line
+	line="zenbench = { path = \"../src/zenbench\", version = \"=$ZR_ZENBENCH_VERSION\", default-features = false, features = [\"precise-timing\"] }"
+	[ "$(grep -cxF -- "$line" "$manifest")" -eq 1 ] || zr_die "$manifest does not declare the staged zenbench exactly once"
+	awk -v line="$line" -v repl="zenbench = { version = \"=$ZR_ZENBENCH_VERSION\", default-features = false, features = [\"precise-timing\"] }" \
+		'$0 == line {print repl; next} {print}' "$manifest"
+}
+
 cmd=${1:-}
 [ $# -gt 0 ] && shift || usage
 
 prepare() {
-	local old_rev="" new_rev="" out="" corpus="" imazen26="" target_dir=""
+	local old_rev="" new_rev="" out="" corpus="" imazen26="" zenbench="" target_dir=""
 	while [ $# -gt 0 ]; do
 		case "$1" in
 		--old) old_rev=${2:?}; shift 2 ;;
@@ -93,10 +110,15 @@ prepare() {
 		--out) out=${2:?}; shift 2 ;;
 		--corpus) corpus=${2:?}; shift 2 ;;
 		--imazen26) imazen26=${2:?}; shift 2 ;;
+		--zenbench) zenbench=${2:?}; shift 2 ;;
 			*) echo "error: unknown argument '$1'" >&2; usage ;;
 		esac
 	done
-	[ -n "$old_rev" ] && [ -n "$new_rev" ] && [ -n "$out" ] && [ -n "$corpus" ] || usage
+	[ -n "$old_rev" ] && [ -n "$new_rev" ] && [ -n "$out" ] && [ -n "$corpus" ] && [ -n "$zenbench" ] || usage
+	[ -d "$zenbench" ] || zr_die "zenbench repository $zenbench does not exist"
+	zenbench=$(realpath -- "$zenbench")
+	git -C "$zenbench" cat-file -e "$ZR_ZENBENCH_COMMIT^{commit}" 2>/dev/null ||
+		zr_die "zenbench repository $zenbench does not contain the frozen harness commit $ZR_ZENBENCH_COMMIT"
 	[ -d "$corpus" ] || zr_die "corpus dir $corpus does not exist"
 	corpus=$(realpath -- "$corpus")
 	local imazen26_arg=()
@@ -126,6 +148,7 @@ prepare() {
 		if [ -n "$imazen26" ]; then
 			printf 'imazen26\t%s\tcommit=%s\n' "$imazen26" "$(git -C "$imazen26" rev-parse HEAD 2>/dev/null || echo not-a-git-checkout)"
 		fi
+		printf 'zenbench\t%s\tcommit=%s\tversion=%s\n' "$zenbench" "$ZR_ZENBENCH_COMMIT" "$ZR_ZENBENCH_VERSION"
 		printf 'target_dir\t%s\n' "$target_dir"
 		printf 'started_utc\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 		printf 'host\t%s\t%s\n' "$(uname -srm)" "$(hostname)"
@@ -135,6 +158,13 @@ prepare() {
 	zr_export_tree "$old_commit" "$ZR_RUN/src/old" old
 	zr_export_tree "$new_commit" "$ZR_RUN/src/new" new
 	zr_export_tree "$tool_commit" "$ZR_RUN/tool" tool tools/resize-bench tools/stage-lib.sh
+	zr_export_tree_from "$zenbench" "$ZR_ZENBENCH_COMMIT" "$ZR_RUN/src/zenbench" zenbench
+	python3 -I - "$ZR_RUN/src/zenbench/Cargo.toml" "$ZR_ZENBENCH_VERSION" <<'PY' || zr_die "staged zenbench package identity check failed"
+import sys, tomllib
+pkg = tomllib.load(open(sys.argv[1], "rb"))["package"]
+if (pkg["name"], pkg["version"]) != ("zenbench", sys.argv[2]):
+    sys.exit(f"staged package is {pkg['name']} {pkg['version']}, expected zenbench {sys.argv[2]}")
+PY
 	local old_version new_version
 	old_version=$(zr_alias_version "$ZR_RUN/src/old" old old)
 	new_version=$(zr_alias_version "$ZR_RUN/src/new" new new)
@@ -144,6 +174,14 @@ prepare() {
 	cp -- "$ZR_RUN/tool/tools/resize-bench/Cargo.toml.in" "$ZR_WS/Cargo.toml"
 	zr_record_toolchain "$ZR_WS"
 	zr_seed_and_resolve_lock "$new_commit" "$ZR_WS"
+	# Reference resolution with the crates.io release the staged copy replaces:
+	# the two locks may differ only in zenbench's source and checksum.
+	local zbref="$ZR_RUN/ws-zenbench-registry"
+	mkdir -- "$zbref"
+	registry_manifest "$ZR_WS/Cargo.toml" >"$zbref/Cargo.toml"
+	zr_seed_and_resolve_lock "$new_commit" "$zbref" zenbench-registry-Cargo.lock
+	zr_check_lock_only_provenance Cargo.lock "$ZR_RUN/identity/zenbench-registry-Cargo.lock.resolved" \
+		"$ZR_RUN/identity/Cargo.lock.resolved" zenbench
 	ZR_TOOL_FEATURES=""
 	zr_check_normal_graph old "$old_version" old "" ""
 	zr_check_normal_graph new "$new_version" new "" ""
@@ -161,6 +199,8 @@ prepare() {
 	(cd "$ws_prep" && zr_run_logged build-prep \
 		env CARGO_TARGET_DIR="$target_dir" cargo build --locked --release --bin resize-bench-prep)
 	zr_retain_binaries "$target_dir" release resize-bench resize-bench-prep
+	zr_record_compiled_sources "$target_dir" release "$ZR_WS" zenresize,zenbench \
+		old="$ZR_RUN/src/old" new="$ZR_RUN/src/new" zenbench="$ZR_RUN/src/zenbench" tool="$ZR_RUN/tool"
 	local bin="$ZR_RUN/bin/resize-bench" binary_sha
 	binary_sha=$(zr_sha256 "$bin")
 

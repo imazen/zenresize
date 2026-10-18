@@ -17,7 +17,12 @@ autobins = false
 # features only, exactly as a production consumer builds them.
 zr_old = { package = "zenresize", path = "../src/old" }
 zr_new = { package = "zenresize", path = "../src/new" }
-zenbench = { version = "=0.1.11", default-features = false, features = ["precise-timing"] }
+# The harness: zenbench at run.sh's ZR_ZENBENCH_COMMIT, staged by run.sh from a
+# verified git archive. Its version field equals the crates.io release it
+# replaces; prepare proves the lock differs from that release's resolution only
+# in zenbench's source and checksum. One executable holds every arm, so every
+# arm runs this same harness.
+zenbench = { path = "../src/zenbench", version = "=0.1.11", default-features = false, features = ["precise-timing"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 

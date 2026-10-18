@@ -30,10 +30,11 @@ hfilter-parity old new out features scope:
 # Native zenbench Confirm comparison of whole public resizes (old / new / old A/A).
 # prepare never times anything; run confirm only on a quiet host. The frozen plan
 # reads one input from an imazen-26 variant/png-v3 checkout. See tools/resize-bench/README.md.
-# Example: just resize-bench-prepare e595ef8f HEAD ~/work/codec-corpus ~/work/zen/imazen-26-png-v3 ~/tmp/rb-run1
+# The harness is the zenbench revision frozen in run.sh, archived from the zenbench repository.
+# Example: just resize-bench-prepare e595ef8f HEAD ~/work/codec-corpus ~/work/zen/imazen-26-png-v3 ~/work/zen/zenbench ~/tmp/rb-run1
 [positional-arguments]
-resize-bench-prepare old new corpus imazen26 out:
-    tools/resize-bench/run.sh prepare --old "$1" --new "$2" --corpus "$3" --imazen26 "$4" --out "$5"
+resize-bench-prepare old new corpus imazen26 zenbench out:
+    tools/resize-bench/run.sh prepare --old "$1" --new "$2" --corpus "$3" --imazen26 "$4" --zenbench "$5" --out "$6"
 
 # Extra arguments pass through: --cpu-set IDS, --cpu-policy auto|performance|efficiency, --dry-run.
 [positional-arguments]

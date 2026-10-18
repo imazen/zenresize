@@ -1,7 +1,9 @@
 # resize-bench
 
-A native [zenbench](https://lib.rs/crates/zenbench) 0.1.11 Confirm comparison
-of whole public zenresize resizes. One executable links a baseline build
+A native [zenbench](https://lib.rs/crates/zenbench) Confirm comparison of
+whole public zenresize resizes. The harness is zenbench at the reviewed commit
+`98c25fe8` (`ZR_ZENBENCH_COMMIT` in `run.sh`; version field 0.1.11), staged
+from a verified `git archive` like the two zenresize builds. One executable links a baseline build
 (`old`) and a candidate build (`new`) of zenresize, each from a verified
 `git archive` export with production dependencies, features and build
 settings. Every group times three arms, interleaved: `old`, `new`, and
@@ -100,7 +102,7 @@ with values equal to the frozen plan.
 # Stage, check, build, prepare inputs, dry-run, selftest. No timing.
 tools/resize-bench/run.sh prepare --old e595ef8f --new <candidate> \
   --corpus <codec-corpus checkout> --imazen26 <imazen-26 png-v3 checkout> \
-  --out <fresh run dir>
+  --zenbench <zenbench repository> --out <fresh run dir>
 # On a quiet host, from the same run directory:
 tools/resize-bench/run.sh confirm --run <run dir> [--cpu-set IDS] [--cpu-policy performance]
 ```
@@ -114,6 +116,19 @@ tools/resize-bench/run.sh confirm --run <run dir> [--cpu-set IDS] [--cpu-policy 
 - no rustflags or profile overrides are present;
 - the normal dependency graph of both zenresize copies equals a production
   consumer's exactly.
+
+For the harness, `prepare` also:
+
+- exports zenbench `ZR_ZENBENCH_COMMIT` from the `--zenbench` repository, with
+  every file verified against its blob, and checks its package name and version;
+- resolves the same workspace a second time with the crates.io zenbench of that
+  version, and requires the two locks to differ only in zenbench's `source` and
+  `checksum` lines (`identity/Cargo.lock.provenance-check.txt`);
+- after the build, reads rustc's dep-info for every compiled source file and
+  hashes it (`identity/compiled-sources.tsv`). Every zenresize, zenbench and
+  tool source must come from its staged export and match the export manifest
+  byte for byte, every other source must come from the Cargo registry, and no
+  registry copy of zenresize or zenbench may be compiled.
 
 On top of that, in the benchmark workspace, resolution may not change any
 package in zenresize's production graph. PNG decoding for input preparation
@@ -139,7 +154,7 @@ attempt directory.
 
 | path | contents |
 |---|---|
-| `identity/` | as in hfilter-parity, plus `dryrun-plan.json`, `dryrun-check.txt`, `prep-Cargo.lock.*`, `*.packages.added-classified` |
+| `identity/` | as in hfilter-parity, plus `dryrun-plan.json`, `dryrun-check.txt`, `prep-Cargo.lock.*`, `*.packages.added-classified`, `zenbench.*` (harness export), `zenbench-registry-Cargo.lock.*` and `Cargo.lock.provenance-check.txt` (lock provenance), `compiled-sources.{tsv,check.txt}` |
 | `artifacts/cas/sha256/` | content-addressed, write-once objects: encoded source PNGs, raw crops, derived inputs, every distinct old/new output and f32 twin, each stored once and byte-verified when seen again |
 | `artifacts/inputs/manifest-*.json` | input manifests |
 | `artifacts/records/{dryrun,parent,child}-{before,after}-*.json` | per-process identity and parity records |

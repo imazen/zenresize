@@ -125,6 +125,157 @@ zr_export_tree() {
 		"$(zr_sha256 "$ZR_RUN/identity/$name.files.sha256")" >>"$ZR_RUN/identity/sources.tsv"
 }
 
+# zr_export_tree from another repository (a dependency staged by revision).
+# Usage: zr_export_tree_from <repo> <commit> <dest> <identity-name> [pathspec...]
+zr_export_tree_from() {
+	local ZR_REPO
+	ZR_REPO=$(realpath -- "$1")
+	shift
+	zr_export_tree "$@"
+}
+
+# Prove that replacing a registry dependency with a staged path copy of the same
+# version changed nothing but that package's provenance: <path-lock> must equal
+# <registry-lock> except that <crate>'s own [[package]] entry loses exactly its
+# `source` and `checksum` lines (and references to it lose only a registry
+# qualifier). Every other package, version, dependency list and checksum must be
+# byte-identical. Writes identity/<name>.provenance-check.txt.
+# Usage: zr_check_lock_only_provenance <name> <registry-lock> <path-lock> <crate>
+zr_check_lock_only_provenance() {
+	local name=$1 reg=$2 path=$3 crate=$4
+	python3 -I - "$reg" "$path" "$crate" >"$ZR_RUN/identity/$name.provenance-check.txt" 2>&1 <<'PY' ||
+import re, sys
+reg_path, path_path, crate = sys.argv[1:4]
+def blocks(p):
+    text = open(p).read()
+    head, *parts = re.split(r"(?m)^\[\[package\]\]\n", text)
+    out = {}
+    for part in parts:
+        m = re.search(r'(?m)^name = "([^"]+)"\nversion = "([^"]+)"', part)
+        if not m:
+            sys.exit(f"FAIL: unparsable [[package]] block in {p}")
+        key = (m.group(1), m.group(2))
+        if key in out:
+            sys.exit(f"FAIL: duplicate package {key} in {p}")
+        out[key] = part
+    return head, out
+rh, reg = blocks(reg_path)
+ph, path = blocks(path_path)
+if rh != ph:
+    sys.exit("FAIL: lockfile headers differ")
+if set(reg) != set(path):
+    sys.exit(f"FAIL: package sets differ: registry-only {sorted(set(reg) - set(path))}, path-only {sorted(set(path) - set(reg))}")
+qualifier = re.compile(r'^ "' + re.escape(crate) + r' ([^ ]+) \(registry\+[^)]*\)",$', re.M)
+targets = [k for k in reg if k[0] == crate]
+if len(targets) != 1:
+    sys.exit(f"FAIL: expected exactly one {crate} package, found {targets}")
+for key in sorted(reg):
+    a, b = reg[key], path[key]
+    if key in targets:
+        drop = re.compile(r'(?m)^(source|checksum) = "[^"]*"\n')
+        removed = drop.findall(a)
+        if sorted(removed) != ["checksum", "source"]:
+            sys.exit(f"FAIL: registry {key} entry lacks exactly one source and one checksum line: {removed}")
+        if drop.findall(b):
+            sys.exit(f"FAIL: path {key} entry still has a source or checksum line")
+        if drop.sub("", a) != b:
+            sys.exit(f"FAIL: {key} differs beyond source/checksum")
+        print(f"ok: {key[0]} {key[1]}: only source and checksum removed")
+        continue
+    if a != b:
+        if qualifier.sub(lambda m: f' "{crate} {m.group(1)}",', a) == b or qualifier.sub(f' "{crate}",', a) == b:
+            print(f"ok: {key[0]} {key[1]}: only the {crate} reference lost its registry qualifier")
+            continue
+        sys.exit(f"FAIL: {key[0]} {key[1]} entry differs")
+print(f"lock provenance check PASS: {len(reg)} packages; only {crate}'s source/checksum changed")
+PY
+		zr_die "$name: the staged path dependency changed more than $crate's provenance (see $ZR_RUN/identity/$name.provenance-check.txt)"
+	cat "$ZR_RUN/identity/$name.provenance-check.txt" >&2
+}
+
+# Record which source files the compiler actually read for the build in
+# <target-dir>/<profile> (rustc dep-info written during this run), hash each one,
+# and classify it by root. Relative dep-info paths (workspace members) resolve
+# against <workspace-dir>. Fails on a source outside the allowed roots, on any
+# registry copy of a crate in <staged-crates> (csv), on a staged root that
+# contributed nothing, and on a staged file whose bytes differ from its export
+# manifest (identity/<side>.files.sha256).
+# Usage: zr_record_compiled_sources <target-dir> <profile> <workspace-dir> <staged-crates-csv> <side=dir>...
+zr_record_compiled_sources() {
+	local target=$1 profile=$2 ws=$3 staged=$4
+	shift 4
+	python3 -I - "$target/$profile/deps" "$ZR_RUN/identity/run.tsv" "$ZR_RUN" "${CARGO_HOME:-$HOME/.cargo}" \
+		"$staged" "$ws" "$@" >"$ZR_RUN/identity/compiled-sources.check.txt" 2>&1 <<'PY' ||
+import glob, hashlib, os, sys
+deps, stamp, run, cargo_home, staged, ws = sys.argv[1:7]
+sides = dict(a.split("=", 1) for a in sys.argv[7:])
+since = os.path.getmtime(stamp)
+registry = os.path.realpath(os.path.join(cargo_home, "registry", "src"))
+target = os.path.realpath(os.path.dirname(deps.rstrip("/")))
+files = set()
+for d in glob.glob(os.path.join(deps, "*.d")):
+    if os.path.getmtime(d) < since:
+        continue
+    for line in open(d, encoding="utf-8", errors="replace"):
+        line = line.rstrip("\n")
+        if ":" not in line or line.startswith("#"):
+            continue
+        head, _, tail = line.partition(": ")
+        for p in [head] + tail.split():
+            if p.endswith(":"):
+                p = p[:-1]
+            if not p:
+                continue
+            p = os.path.realpath(p if os.path.isabs(p) else os.path.join(ws, p))
+            if not p.startswith(target + os.sep) and os.path.isfile(p):
+                files.add(p)
+if not files:
+    sys.exit("FAIL: no dep-info written during this run")
+roots = {side: os.path.realpath(path) for side, path in sides.items()}
+manifests = {}
+for side in roots:
+    m = os.path.join(run, "identity", f"{side}.files.sha256")
+    manifests[side] = {}
+    for line in open(m):
+        h, rel = line.rstrip("\n").split("  ", 1)
+        manifests[side][os.path.normpath(rel)] = h
+rows, used, bad = [], {s: 0 for s in roots}, []
+staged_names = set(filter(None, staged.split(",")))
+for p in sorted(files):
+    h = hashlib.sha256(open(p, "rb").read()).hexdigest()
+    cls = None
+    for side, root in roots.items():
+        if p.startswith(root + os.sep):
+            cls = side
+            rel = os.path.relpath(p, root)
+            want = manifests[side].get(rel)
+            if want != h:
+                bad.append(f"{p}: sha256 {h} != export manifest {want}")
+            used[side] += 1
+            break
+    if cls is None and p.startswith(registry + os.sep):
+        crate_dir = os.path.relpath(p, registry).split(os.sep)[1]
+        cls = "registry:" + crate_dir
+        if crate_dir.rsplit("-", 1)[0] in staged_names:
+            bad.append(f"{p}: registry copy of staged crate {crate_dir}")
+    if cls is None:
+        bad.append(f"{p}: outside the staged roots and the Cargo registry")
+        cls = "UNEXPECTED"
+    rows.append(f"{cls}\t{h}\t{p}")
+for side, n in used.items():
+    if n == 0:
+        bad.append(f"staged root {side} ({roots[side]}) contributed no compiled source")
+open(os.path.join(run, "identity", "compiled-sources.tsv"), "w").write("\n".join(rows) + "\n")
+for line in bad:
+    print("FAIL: " + line)
+print("compiled sources: " + ", ".join(f"{s}={n}" for s, n in used.items()) +
+      f", registry={sum(r.startswith('registry:') for r in rows)}, total={len(rows)}")
+sys.exit(1 if bad else 0)
+PY
+		zr_die "compiled-source identity check failed (see $ZR_RUN/identity/compiled-sources.check.txt)"
+	cat "$ZR_RUN/identity/compiled-sources.check.txt" >&2
+}
+
 # Two path packages of one name need distinct versions to share a lockfile.
 # Change only the [package] version line and prove nothing else moved.
 zr_alias_version() {
