@@ -92,6 +92,15 @@ print(f"dry-run plan check OK: confirm, 15 processes x 100 fixed rounds, margin 
 PY
 }
 
+# One line from a process record's CPU dispatch readback: what archmage detects
+# (readback) versus the filter tier inferred from source.
+cpu_dispatch_readback() {
+	python3 -I -c 'import json, sys
+d = json.load(open(sys.argv[1]))["identity"]["cpu_dispatch"]
+print("cpu dispatch: arch=%s available_readback=%s filter_h_row_f32_tier_inferred=%s (%s)" % (
+    d["arch"], json.dumps(d["available_readback"], sort_keys=True), d["filter_h_row_f32_tier_inferred"], d["tier_basis"]))' "$1"
+}
+
 # The benchmark manifest with the staged zenbench path dependency replaced by
 # the crates.io release of the same version: exactly one line may change.
 registry_manifest() {
@@ -221,6 +230,7 @@ PY
 	record=$(find "$artifacts/records" -name 'dryrun-before-*.json' | head -n 1)
 	[ -n "$record" ] || zr_die "dry run wrote no parity record"
 	check_dry_run "$ZR_RUN/identity/dryrun-plan.json" "$record" "$artifacts" "$binary_sha" | tee "$ZR_RUN/identity/dryrun-check.txt"
+	cpu_dispatch_readback "$record" | tee "$ZR_RUN/identity/cpu-dispatch.txt"
 
 	selftest "$bin" "$artifacts"
 	printf 'prepare_status\tPASS\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$ZR_RUN/identity/run.tsv"

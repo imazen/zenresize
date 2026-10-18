@@ -354,6 +354,40 @@ fn parity(cas: &Cas, groups: &[Group]) -> (Vec<Value>, bool) {
     (rows, all)
 }
 
+/// What this process's CPU offers, read through archmage's runtime detection,
+/// kept apart from the tier `filter_h_row_f32` dispatches to. That tier is
+/// inferred from source, not observed: its `incant!` uses the default tiers
+/// `[v4 (gated on zenresize's avx512 feature), v3, neon, wasm128, scalar]`, and
+/// both zenresize builds use default features, so on x86_64 only the v3 and
+/// scalar arms are compiled and v3 is taken exactly when X64V3Token is
+/// available.
+fn cpu_dispatch() -> Value {
+    #[cfg(target_arch = "x86_64")]
+    {
+        use archmage::SimdToken;
+        let v3 = archmage::X64V3Token::summon().is_some();
+        json!({
+            "arch": "x86_64",
+            "available_readback": {
+                "x64v3": v3,
+                "x64v4": archmage::X64V4Token::summon().is_some(),
+                "x64v4x": archmage::X64V4xToken::summon().is_some(),
+            },
+            "filter_h_row_f32_tier_inferred": if v3 { "v3" } else { "scalar" },
+            "tier_basis": "inferred from incant! source and the compiled arms (v3, scalar); not observed at runtime",
+        })
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        json!({
+            "arch": std::env::consts::ARCH,
+            "available_readback": null,
+            "filter_h_row_f32_tier_inferred": null,
+            "tier_basis": "no x86_64 readback on this architecture",
+        })
+    }
+}
+
 fn binary_sha256() -> String {
     let exe = std::env::current_exe().unwrap_or_else(|e| fail(2, &format!("current_exe: {e}")));
     sha256_hex(&cas::read_all(&exe).unwrap_or_else(|e| fail(2, &e)))
@@ -434,6 +468,7 @@ fn main() {
     let identity = json!({
         "workload_id": WORKLOAD_ID, "binary_sha256": binary, "pid": std::process::id(),
         "args": cli.args, "zenbench_env": zenbench_env(), "mem_available_kib": mem_kib,
+        "cpu_dispatch": cpu_dispatch(),
         "plan": {"processes": plan::PROCESSES, "rounds": plan::ROUNDS, "margin_pct": plan::MARGIN_PCT,
             "confidence": plan::CONFIDENCE, "timeout_secs": plan::TIMEOUT_SECS,
             "group_max_time_secs": plan::GROUP_MAX_TIME_SECS, "group_max_wall_secs": plan::GROUP_MAX_WALL_SECS,

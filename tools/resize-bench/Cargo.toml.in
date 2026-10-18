@@ -23,6 +23,10 @@ zr_new = { package = "zenresize", path = "../src/new" }
 # in zenbench's source and checksum. One executable holds every arm, so every
 # arm runs this same harness.
 zenbench = { path = "../src/zenbench", version = "=0.1.11", default-features = false, features = ["precise-timing"] }
+# Only for the CPU dispatch readback (main.rs `cpu_dispatch`): the version and
+# the one feature (`std`) zenresize's production graph already resolves, so the
+# feature union is unchanged; prepare's graph check proves it.
+archmage = { version = "=0.9.26", default-features = false, features = ["std"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 

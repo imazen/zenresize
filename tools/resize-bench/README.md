@@ -105,6 +105,18 @@ placement variables, `ZENBENCH_COORDINATION_DIR` and the required
 exactly the variables zenbench's supervisor and admission lease set for it,
 with values equal to the frozen plan.
 
+**CPU dispatch readback.** Every process record (`artifacts/records/*.json`,
+`identity.cpu_dispatch`) carries what archmage's runtime detection reports on
+that CPU (`available_readback`: X64V3, X64V4, X64V4x) and, separately, the tier
+`filter_h_row_f32` takes, which is *inferred*, not observed. Its `incant!` uses
+the default tiers, `v4` is gated on zenresize's `avx512` feature, and both
+builds use default features, so on x86_64 only the `v3` and `scalar` arms are
+compiled and `v3` runs exactly when X64V3 is available. The readback uses a
+tool-only `archmage` dependency at the version and feature (`std`) the
+production graph already resolves, so the feature union does not change;
+`prepare`'s graph check proves it. `prepare` prints the dry run's readback to
+`identity/cpu-dispatch.txt`.
+
 ## Run
 
 ```sh
