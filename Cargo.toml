@@ -25,10 +25,10 @@ pretty-safe = []
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("avx512", "bench-simd-competitors", "pretty-safe"))'] }
 
 [dependencies]
-archmage = { version = "0.9.26", default-features = false, features = ["macros"] }
+archmage = { version = ">=0.9.26, <=0.9.31-beta.1", default-features = false, features = ["macros"] }
 # 0.9.25 adds the F16Convert trait (hardware f16<->f32 slice converters:
 # F16C on x86-64-v3, NEON-fp16 on aarch64, branchless software elsewhere).
-magetypes = { version = "0.9.26", default-features = false }
+magetypes = { version = ">=0.9.26, <=0.9.31-beta.1", default-features = false }
 linear-srgb = { version = "0.6.11", default-features = false, features = ["transfer"] }
 safe_unaligned_simd = "0.2.5"
 zenpixels = { version = ">=0.2.10, <0.4.0", default-features = false }
@@ -61,7 +61,7 @@ zenbench = { version = "0.1.2", features = ["criterion-compat"] }
 # `testable_dispatch` lets benches/tier_isolation.rs disable the baseline SIMD
 # token (NEON on aarch64) so the scalar arm is real rather than a second
 # measurement of the SIMD path.
-archmage = { version = "0.9.26", features = ["std", "macros", "testable_dispatch"] }
+archmage = { version = ">=0.9.26, <=0.9.31-beta.1", features = ["std", "macros", "testable_dispatch"] }
 resize = "0.8"
 palette = "0.7"
 

@@ -67,3 +67,9 @@ coz-run profile rounds="1000" mode="all":
     bin=$("{{just_executable()}}" --justfile "{{justfile()}}" coz-build)
     echo "coz-run: $bin sha256=$(sha256sum "$bin" | cut -d' ' -f1) rounds=$rounds mode=$mode -> $profile" >&2
     "${COZ_BIN:-coz}" run --source-scope '%/zenresize/src/%' --output "$profile" --- "$bin" "$rounds" "$mode"
+
+# Validate stable compatibility while tool builds select the current SIMD beta.
+beta-cohort-check:
+    cargo fmt --check
+    cargo clippy --locked --lib -- -D warnings
+    cargo test --locked --lib
