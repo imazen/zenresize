@@ -34,8 +34,6 @@ jobs:
             os: ubuntu-24.04-arm
           - name: macOS arm64
             os: macos-latest
-          - name: macOS x64
-            os: macos-26-intel
           - name: Windows x64
             os: windows-latest
           - name: Windows arm64
@@ -43,7 +41,7 @@ jobs:
             # colorutils-rs dev-dep crashes LLVM on aarch64-windows (erydanos codegen bug)
             strip-colorutils: true
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Strip local paths
         shell: bash
         run: sed -i.bak 's|, path = "../zenblend"||g' Cargo.toml && rm -f Cargo.lock
@@ -73,7 +71,7 @@ jobs:
     name: Test (Linux i686)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Strip local paths
         shell: bash
         run: sed -i.bak 's|, path = "../zenblend"||g' Cargo.toml && rm -f Cargo.lock
@@ -91,7 +89,7 @@ jobs:
     name: WASM test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Strip local paths
         shell: bash
         run: sed -i.bak 's|, path = "../zenblend"||g' Cargo.toml && rm -f Cargo.lock
@@ -110,7 +108,7 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Strip local paths
         shell: bash
         run: sed -i.bak 's|, path = "../zenblend"||g' Cargo.toml && rm -f Cargo.lock
@@ -125,7 +123,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Strip local paths
         shell: bash
         run: sed -i.bak 's|, path = "../zenblend"||g' Cargo.toml && rm -f Cargo.lock
@@ -139,7 +137,7 @@ jobs:
     name: MSRV
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Strip local paths
         shell: bash
         run: sed -i.bak 's|, path = "../zenblend"||g' Cargo.toml && rm -f Cargo.lock
@@ -153,7 +151,7 @@ jobs:
     name: Coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Strip local paths
         shell: bash
         run: sed -i.bak 's|, path = "../zenblend"||g' Cargo.toml && rm -f Cargo.lock
@@ -163,7 +161,7 @@ jobs:
       - name: Generate coverage
         run: cargo llvm-cov --lcov --output-path lcov.info
       - name: Upload coverage
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: lcov.info
           fail_ci_if_error: false
