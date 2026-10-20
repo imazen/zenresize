@@ -18,8 +18,6 @@
 //! Standard TFs permanently cache runtime LUTs via `OnceLock` (with the `std` feature).
 //! For `Srgb`, the u8↔i12 tables are compile-time constants — no runtime allocation.
 
-#[cfg(not(feature = "std"))]
-use alloc::{vec, vec::Vec};
 #[cfg(feature = "std")]
 use core::cell::RefCell;
 

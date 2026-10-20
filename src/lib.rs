@@ -52,6 +52,7 @@ pub(crate) mod working;
 
 #[doc(hidden)]
 pub mod fastmath;
+mod math;
 mod proven;
 #[doc(hidden)]
 pub mod simd;

@@ -9,6 +9,8 @@
 //! bit-identical output across a brute-force sweep (`tests/vs_zenlayout.rs`)
 //! so callers that migrate from zenlayout don't see pixel-level differences.
 
+use crate::math::f64_round;
+
 /// How to fit an input size into a target bounding box.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -186,7 +188,7 @@ fn proportional(
     } else if delta_b <= snap_amount {
         snap_b
     } else {
-        float.round() as u32
+        f64_round(float) as u32
     };
 
     if v == 0 { 1 } else { v }
@@ -198,7 +200,7 @@ fn rounding_loss_width(ratio_w: u32, ratio_h: u32, target_width: u32) -> f64 {
     let ratio = ratio_w as f64 / ratio_h as f64;
     let target_x_to_self_x = target_width as f64 / ratio_w as f64;
     let recreate_y = ratio_h as f64 * target_x_to_self_x;
-    let rounded_y = recreate_y.round();
+    let rounded_y = f64_round(recreate_y);
     let recreate_x_from_rounded_y = rounded_y * ratio;
     (target_width as f64 - recreate_x_from_rounded_y).abs()
 }
@@ -209,7 +211,7 @@ fn rounding_loss_height(ratio_w: u32, ratio_h: u32, target_height: u32) -> f64 {
     let ratio = ratio_w as f64 / ratio_h as f64;
     let target_y_to_self_y = target_height as f64 / ratio_h as f64;
     let recreate_x = ratio_w as f64 * target_y_to_self_y;
-    let rounded_x = recreate_x.round();
+    let rounded_x = f64_round(recreate_x);
     let recreate_y_from_rounded_x = rounded_x / ratio;
     (target_height as f64 - recreate_y_from_rounded_x).abs()
 }

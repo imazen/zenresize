@@ -9,6 +9,7 @@ use alloc::vec;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
+use crate::math::{f32_ceil, f64_exp};
 use crate::simd;
 use crate::weights::F32WeightTable;
 
@@ -23,7 +24,7 @@ pub(crate) fn gaussian_weight_table(size: u32, sigma: f32) -> F32WeightTable {
     assert!(size > 0, "size must be positive");
     assert!(sigma > 0.0, "sigma must be positive");
 
-    let radius = ((sigma * 3.0).ceil() as usize).min(MAX_RADIUS);
+    let radius = (f32_ceil(sigma * 3.0) as usize).min(MAX_RADIUS);
     let max_taps = 2 * radius + 1;
     let n = size as usize;
 
@@ -47,7 +48,7 @@ pub(crate) fn gaussian_weight_table(size: u32, sigma: f32) -> F32WeightTable {
         for t in 0..taps {
             let input_pixel = clamped_first + t;
             let d = input_pixel as f64 - pixel as f64;
-            let w = (-d * d * inv_2sigma2).exp();
+            let w = f64_exp(-d * d * inv_2sigma2);
             weights_flat[offset + t] = w as f32;
             sum += w;
         }

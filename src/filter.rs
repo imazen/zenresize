@@ -14,6 +14,8 @@
 
 use core::f64::consts::PI;
 
+use crate::math::{f64_cos, f64_sin, f64_sqrt};
+
 /// Named interpolation filter presets.
 ///
 /// These match imageflow's filter names exactly for compatibility.
@@ -612,42 +614,6 @@ fn bessj1(x: f64) -> f64 {
 #[inline]
 fn f64_abs(x: f64) -> f64 {
     if x < 0.0 { -x } else { x }
-}
-
-#[cfg(feature = "std")]
-#[inline]
-fn f64_sin(x: f64) -> f64 {
-    x.sin()
-}
-
-#[cfg(not(feature = "std"))]
-#[inline]
-fn f64_sin(x: f64) -> f64 {
-    libm::sin(x)
-}
-
-#[cfg(feature = "std")]
-#[inline]
-fn f64_cos(x: f64) -> f64 {
-    x.cos()
-}
-
-#[cfg(not(feature = "std"))]
-#[inline]
-fn f64_cos(x: f64) -> f64 {
-    libm::cos(x)
-}
-
-#[cfg(feature = "std")]
-#[inline]
-fn f64_sqrt(x: f64) -> f64 {
-    x.sqrt()
-}
-
-#[cfg(not(feature = "std"))]
-#[inline]
-fn f64_sqrt(x: f64) -> f64 {
-    libm::sqrt(x)
 }
 
 #[cfg(test)]
