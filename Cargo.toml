@@ -156,6 +156,12 @@ harness = false
 name = "mask_e2e"
 harness = false
 
+# TEMPORARY (issue #19): zenblend's no_std fix (imazen/zenblend PR #8) is not
+# released yet. Before merging: publish zenblend 0.1.4, raise the requirement
+# above to "0.1.4", and delete this section.
+[patch.crates-io]
+zenblend = { git = "https://github.com/imazen/zenblend", branch = "fix-no-std" }
+
 [package.metadata.superwork.ci]
 strategy = "strip_path"
 

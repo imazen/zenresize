@@ -14,6 +14,7 @@
 use alloc::{vec, vec::Vec};
 
 use crate::filter::InterpolationDetails;
+use crate::math::{f64_ceil, f64_floor, f64_round};
 
 /// Threshold below which weights are considered zero.
 /// Matches imageflow for cross-platform consistency.
@@ -317,7 +318,7 @@ impl I16WeightTable {
             scaled.clear();
             scaled.extend(temp_weights.iter().map(|&w| w * scale_factor));
             fixed.clear();
-            fixed.extend(scaled.iter().map(|&s| s.round() as i16));
+            fixed.extend(scaled.iter().map(|&s| f64_round(s) as i16));
 
             let sum: i32 = fixed.iter().map(|&w| w as i32).sum();
             let error = (1 << I16_PRECISION) - sum;
@@ -330,8 +331,8 @@ impl I16WeightTable {
                     // Need to add +1 to some weights. Prioritize those that were
                     // rounded down the most (largest positive residual).
                     indices.sort_by(|&a, &b| {
-                        let ra = scaled[a] - scaled[a].round();
-                        let rb = scaled[b] - scaled[b].round();
+                        let ra = scaled[a] - f64_round(scaled[a]);
+                        let rb = scaled[b] - f64_round(scaled[b]);
                         rb.partial_cmp(&ra).unwrap_or(core::cmp::Ordering::Equal)
                     });
                     for &i in indices.iter().take(error as usize) {
@@ -341,8 +342,8 @@ impl I16WeightTable {
                     // Need to subtract 1 from some weights. Prioritize those that
                     // were rounded up the most (largest negative residual).
                     indices.sort_by(|&a, &b| {
-                        let ra = scaled[a] - scaled[a].round();
-                        let rb = scaled[b] - scaled[b].round();
+                        let ra = scaled[a] - f64_round(scaled[a]);
+                        let rb = scaled[b] - f64_round(scaled[b]);
                         ra.partial_cmp(&rb).unwrap_or(core::cmp::Ordering::Equal)
                     });
                     for &i in indices.iter().take((-error) as usize) {
@@ -521,31 +522,6 @@ fn compute_pixel_weights(
     }
 
     (trimmed_left as i32, weights_out.len())
-}
-
-// no_std math helpers
-#[cfg(feature = "std")]
-#[inline]
-fn f64_ceil(x: f64) -> f64 {
-    x.ceil()
-}
-
-#[cfg(not(feature = "std"))]
-#[inline]
-fn f64_ceil(x: f64) -> f64 {
-    libm::ceil(x)
-}
-
-#[cfg(feature = "std")]
-#[inline]
-fn f64_floor(x: f64) -> f64 {
-    x.floor()
-}
-
-#[cfg(not(feature = "std"))]
-#[inline]
-fn f64_floor(x: f64) -> f64 {
-    libm::floor(x)
 }
 
 #[cfg(test)]

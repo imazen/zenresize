@@ -41,6 +41,7 @@ use alloc::{boxed::Box, vec, vec::Vec};
 use crate::color;
 use crate::composite::{self, Background, CompositeError, NoBackground};
 use crate::filter::InterpolationDetails;
+use crate::math::f64_ceil;
 use crate::pixel::{ConfigError, ResizeConfig};
 use crate::simd;
 use crate::transfer::{Bt709, Hlg, Pq, Srgb, TransferCurve};
@@ -58,7 +59,7 @@ fn estimate_max_taps(in_size: u32, out_size: u32, filter: &InterpolationDetails)
     // filter.window already incorporates blur
     let effective_window = filter.window / downscale_factor;
     // +2 margin for rounding and edge trimming variation
-    (2.0 * effective_window).ceil() as usize + 2
+    f64_ceil(2.0 * effective_window) as usize + 2
 }
 
 /// Create an `InterpolationDetails` from a filter enum, applying all config modifiers

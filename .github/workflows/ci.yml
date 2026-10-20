@@ -104,6 +104,29 @@ jobs:
         env:
           RUSTFLAGS: "-C target-feature=+simd128"
 
+  no-std:
+    name: no_std build (bare metal)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Strip local paths
+        shell: bash
+        run: sed -i.bak 's|, path = "../zenblend"||g' Cargo.toml && rm -f Cargo.lock
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf, riscv32imac-unknown-none-elf, aarch64-unknown-none
+      - uses: Swatinem/rust-cache@v2
+      # `cargo test --no-default-features` on a hosted target links std
+      # whenever any dependency enables it, so it never caught issue #19.
+      # These targets have no std at all. x86_64-unknown-none is left out:
+      # linear-srgb hits an LLVM error on that soft-float target.
+      - name: Build thumbv7em-none-eabihf
+        run: cargo build --no-default-features --target thumbv7em-none-eabihf
+      - name: Build riscv32imac-unknown-none-elf
+        run: cargo build --no-default-features --target riscv32imac-unknown-none-elf
+      - name: Build aarch64-unknown-none
+        run: cargo build --no-default-features --target aarch64-unknown-none
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

@@ -19,7 +19,7 @@
 //!   The most flexible path.
 
 #[cfg(not(feature = "std"))]
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 
 use crate::filter::InterpolationDetails;
 use crate::pixel::Element;
