@@ -187,6 +187,27 @@ zenbench::main!(|suite| {
                     });
                 });
             }
+
+            {
+                // Every pixel is partial: the worst case for a per-pixel
+                // mask multiply, where rounded corners only touch the arcs.
+                let config = config.clone();
+                let input = input.clone();
+                group.bench("gradient_mask", move |b| {
+                    let c = config.clone();
+                    let i = input.clone();
+                    b.iter(|| {
+                        let mask = zenresize::LinearGradientMask::new(
+                            c.out_width,
+                            c.out_height,
+                            (0.0, 0.0),
+                            (c.out_width as f32, c.out_height as f32),
+                        );
+                        let mut r = zenresize::StreamingResize::new(&c).with_mask(mask);
+                        black_box(run(&mut r, &c, &i));
+                    });
+                });
+            }
         });
     }
 });

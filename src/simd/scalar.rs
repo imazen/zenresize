@@ -940,6 +940,49 @@ pub(crate) fn hlg_from_linear_row_scalar(
     tf_row_inplace_scalar(row, channels, has_alpha, crate::fastmath::hlg_from_linear);
 }
 
+/// Scale each 4-channel i16 pixel by its mask value in 16.16 fixed point:
+/// `v' = (v * mq + 32768) >> 16`, with `mq = clamp(m, 0, 1) * 65536` rounded
+/// half to even and NaN counting as 0. Shared by every tier so all produce identical bits;
+/// written as fixed-size blocks so LLVM vectorizes it under each tier's
+/// target features (`streaming::apply_mask_i16`, issue #3).
+#[inline(always)]
+pub(crate) fn mask_i16_row_body(px: &mut [i16], mask: &[f32]) {
+    debug_assert_eq!(px.len(), mask.len() * 4);
+    const BLOCK: usize = 16;
+    #[inline(always)]
+    #[allow(clippy::manual_clamp)] // clamp() passes NaN through; this maps it to 0
+    fn quantize(m: f32) -> i32 {
+        // max/min (not clamp) so NaN becomes 0.0. The result is in
+        // [0, 65536], below 2^23, so adding 2^23 leaves the rounded integer
+        // in the mantissa bits: a bitcast that vectorizes, where `as i32`
+        // compiles to a scalar convert with saturation fixups per lane.
+        const MAGIC: f32 = 8_388_608.0; // 2^23
+        ((m.max(0.0).min(1.0) * 65536.0 + MAGIC).to_bits() - MAGIC.to_bits()) as i32
+    }
+    let (px_blocks, px_tail) = px.as_chunks_mut::<{ BLOCK * 4 }>();
+    let (mask_blocks, mask_tail) = mask.as_chunks::<BLOCK>();
+    for (p, m) in px_blocks.iter_mut().zip(mask_blocks) {
+        let mut q = [0i32; BLOCK * 4];
+        for (qq, &mv) in q.as_chunks_mut::<4>().0.iter_mut().zip(m) {
+            *qq = [quantize(mv); 4];
+        }
+        for (v, &qv) in p.iter_mut().zip(&q) {
+            *v = ((*v as i32 * qv + 32768) >> 16) as i16;
+        }
+    }
+    for (p, &mv) in px_tail.as_chunks_mut::<4>().0.iter_mut().zip(mask_tail) {
+        let qv = quantize(mv);
+        for v in p {
+            *v = ((*v as i32 * qv + 32768) >> 16) as i16;
+        }
+    }
+}
+
+/// Scalar tier of [`mask_i16_row_body`].
+pub(crate) fn mask_i16_row_scalar(_token: ScalarToken, px: &mut [i16], mask: &[f32]) {
+    mask_i16_row_body(px, mask)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

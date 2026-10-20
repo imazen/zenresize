@@ -724,3 +724,8 @@ mod fused_u8_premul_gate {
         assert_eq!(checked, 40);
     }
 }
+
+#[archmage::arcane]
+pub(crate) fn mask_i16_row_neon(_token: NeonToken, px: &mut [i16], mask: &[f32]) {
+    super::scalar::mask_i16_row_body(px, mask)
+}

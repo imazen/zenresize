@@ -115,62 +115,46 @@ No new dependencies. Pure math with MaskFill hints for uniform-row optimization.
 
 **Phase 4:** `StreamingResize::with_mask()` builder. Pipeline: resize → mask
 → composite → unpremultiply. Mask before composite so rounded corners + white
-background → JPEG gets white corners (not transparent-over-black). Forces f32
-path when mask present. Re-exports MaskSource, MaskFill, RoundedRectMask,
-LinearGradientMask, RadialGradientMask from zenblend.
-Issue #3 asks for an i16 mask path to avoid that f32 fallback. **Measured over a
-9-point 64²→4K ladder on both architectures, 2026-08-29 — and they disagree in
-SIGN, so #3 is a target-aware design decision, not a yes/no.**
+background → JPEG gets white corners (not transparent-over-black). Re-exports
+MaskSource, MaskFill, RoundedRectMask, LinearGradientMask, RadialGradientMask
+from zenblend.
 
-- **aarch64 (M4 Pro, two runs, `benchmarks/mask_e2e_ladder_aarch64_2026-08-29.meta`):
-  don't build it.** i16 wins only at ≤128×128 and by ≤4% (≤2.2 µs — that is the
-  whole f32 fallback, so it bounds the possible win); 256²–1440×1080 is a wash
-  (every CI straddles zero); at 4K the f32 path is 15-16% faster downscaling and
-  28-30% faster upscaling, so moving masked resizes onto I16Srgb would cost
-  +12.7 ms on a masked 4K→1080p.
-- **x86-64 (CI `macos-26-intel`, i7-8700B, AVX2 confirmed executing,
-  `benchmarks/mask_e2e_ladder_x86_2026-08-29.meta`): it pays, a lot.** The f32
-  fallback costs +5% to +22% at nearly every size and **+44% on a masked
-  1080p→4K upscale** (56.7 → 81.9 ms). Only 1024²'s CI crosses zero.
+**Masked path selection is target-aware (issue #3).** `MASK_KEEPS_I16_SRGB` in
+`src/streaming.rs` is `cfg!(target_arch = "x86_64")`: there a mask keeps
+I16Srgb and `apply_mask_i16` scales the V-filter output (premultiplied i16,
+before the u8 clamp) in 16.16 fixed point. Elsewhere, and always for
+I16Linear, `with_mask` switches to f32. The policy comes from the 2026-08-29
+ladders, which disagree in sign:
 
-So an unconditional i16 mask path wins 5-45% on x86 and regresses aarch64 masked
-4K by 15-30%; skipping it leaves 5-45% on the floor for every x86 deployment.
-Either way it also costs precision (u8-premultiplied double rounding vs f32's
-single rounding). Pick a target-aware policy — don't build it unconditionally,
-and don't drop it because of the aarch64 number alone.
+- **x86-64** (`benchmarks/mask_e2e_ladder_x86_2026-08-29.meta`, i7-8700B): the
+  f32 fallback cost +5% to +22% at nearly every size and +44% on a masked
+  1080p→4K upscale.
+- **aarch64** (`benchmarks/mask_e2e_ladder_aarch64_2026-08-29.meta`, M4 Pro):
+  i16 wins ≤4% at ≤128², 256²–1440×1080 is a wash, and f32 is 15-30% faster
+  at 4K. The earlier 3-point run's 800×600 i16 win did not reproduce.
 
-The earlier 3-point run (`mask_e2e_aarch64_2026-08-27.meta`) reported 800×600 as
-the one i16-favouring size (+8%); **that does not reproduce** — it is a wash in
-both ladder runs (CV 25-26% on the contended one). Its two large anchors do
-reproduce. Still open: x86, where the "~2× faster" i16 figure below comes from
-and where the answer may invert. Rosetta cannot answer it (SSE4.2 only, no
-AVX2/FMA — the V3 kernels compile but never execute), so
-`.github/workflows/bench-mask.yml` runs the same ladder on `ubuntu-latest` /
-`macos-26-intel` on `workflow_dispatch`, with an `ubuntu-24.04-arm` control leg
-that must reproduce the sign of the M4 Pro result before the x64 numbers are
-trusted. Run it, don't guess — `gh workflow run "Bench (mask ladder)"`. Its
-output lives only in that run's step summary and `mask-ladder-*` artifacts, so
-whoever runs it must commit the numbers as
-`benchmarks/mask_e2e_ladder_x86_<YYYY-MM-DD>.{meta,log}` (header per
-`benchmarks/README.md`) or they are lost when the run is garbage-collected.
+- **x86-64, Zen 4** (`benchmarks/mask_e2e_ladder_x86_r7900x_2026-10-20.meta`,
+  r7900x, after the change): f32 fallback +20% to +73% over no mask; i16 mask
+  path −5% to +12% (rounded corners) and +4% to +59% (full-row gradient).
+  Faster at every size for both shapes.
 
-**If x86 says build it**, the implementation shape (verified against
-`src/streaming.rs` on 2026-08-29): apply the mask to the *premultiplied* u8 row
-in `produce_next_i16_srgb`, at the two points immediately before
-`simd::unpremultiply_u8_row` — the direct row (~line 2560, output row `out_y`)
-and the paired row (~line 2590, output row **`out_y + 1`**, not `out_y`; the
-paired arm is a different output row and needs its own mask row). Use a 16.16
-fixed-point multiply, `(v * mq + 32768) >> 16` with `mq = round(m * 65536)`,
-mirroring `zenblend::apply_mask_spans`' span validation locally —
-`spans_cover_row` is private in zenblend and that repo must not be touched.
-I16Linear keeps the f32 fallback (i12, no alpha — nothing to modulate).
-Precision tests can reach an f32 reference on the identical config by calling
-the private `switch_to_f32_path()` from `streaming.rs`'s `mod tests`. Note this
-costs precision: u8-premultiplied double rounding vs the f32 path's single
-rounding. The existing `mask_forces_f32_path` test pins today's behaviour and
-would have to be updated; `mask_only_corner_pixels_transparent` and
-`mask_plus_background_white_corners` are the correctness gates the new path must
-keep passing (all three are identity-scale 20×20, so add a downscaling case).
+The multiply is `simd::mask_i16_row`, one `#[inline(always)]` body in
+`simd/scalar.rs` wrapped per tier. Its quantize uses a 2^23 bitcast, not
+`as i32`: the saturating cast compiled to a scalar convert with NaN fixups per
+pixel and made the gradient arm +105% at 1080p→4K, worse than f32.
+
+`.github/workflows/bench-mask.yml` reruns the ladder on CI x64/arm runners;
+commit its numbers as `benchmarks/mask_e2e_ladder_<arch>_<date>.{meta,log}` or
+they are lost. Before widening the policy to another target, measure there.
+
+Correctness gates for the i16 mask path: `mask_i16_alpha_exact` (opaque input,
+so every alpha must equal `(255·mq + 32768) >> 16` for that pixel's own mask
+value; catches the paired row, which is output row `out_y + 1`, using the
+wrong mask row) and `mask_i16_matches_f32` (premultiplied i16-vs-f32 gap ≤
+unmasked gap + 1, via the private `switch_to_f32_path()`). The latter needs
+zenblend `6719a262`: with zenblend 0.1.3, the f32 path's `apply_mask_spans`
+multiplies by unwritten mask pixels for odd rounded-corner extents on x86-64,
+and the gap is 255.
 
 **Phase 5:** `zenpipe::sources::MaskTransformSource` for standalone no-resize masking.
 Requires RGBAF32_LINEAR_PREMUL upstream.
