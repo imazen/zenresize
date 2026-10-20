@@ -20,6 +20,7 @@
   panicked on adversarial inputs; they now validate and surface errors.
 
 ### Added
+- **`zenresize::halo`: NoHalo and LoHalo samplers (#17).** New public API: `HaloSampler`, `resize_halo`, `resize_halo_into` (premultiplied f32 RGBA, `ImgRef`/`ImgRefMut` with stride) and `resize_halo_srgba8`. Written from the published math (Racette 2012, Robidoux et al. 2009), not translated from GEGL's LGPL source. NoHalo enforces all eight Bézier control-point bounds on LBB's cross derivative, where the thesis lists four; with four, output left the local range by up to 3.4e-5. Full-frame only, because the samplers are not separable. `examples/halo_oracle.rs` and `just halo-oracle` diff against GEGL: within 1 level on three CID22 photos up, down 3× and mixed; LoHalo at ≥8× down differs by up to 6 levels where GEGL switches to mipmaps.
 - Development tooling only, for a native Confirm of the RGB f32 H-filter candidate; the library is unchanged. `tools/resize-bench` now:
   - runs a predeclared 15 processes × 100 fixed rounds plan (workload v3; margin 1 %, confidence 0.95, baseline-only so the family is 50), with 86400 s and 3600 s per-group safety caps (833efc28);
   - builds its harness from zenbench `98c25fe8`, staged from a verified git archive, and checks that the lock differs from the crates.io 0.1.11 resolution only in zenbench's source and checksum, and that every compiled source matches its staged export (e687ad27);
