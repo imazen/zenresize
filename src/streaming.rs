@@ -2160,7 +2160,8 @@ impl<B: Background> StreamingResize<B> {
     /// Pull the next output row as premultiplied linear f32 — **before** compositing
     /// and unpremultiply. This is the building block for external two-stream compositing.
     ///
-    /// Returns `None` if more input rows are needed. Does NOT apply the owned
+    /// Returns `None` if more input rows are needed. Applies the
+    /// [`with_mask`](Self::with_mask) mask, if any, but NOT the owned
     /// background or unpremultiply — the caller handles both.
     ///
     /// Requires the f32 path (panics on i16 paths). The f32 path is selected
@@ -2198,6 +2199,7 @@ impl<B: Background> StreamingResize<B> {
             return None;
         }
         self.produce_next_f32_raw();
+        self.apply_mask_f32();
         let row_len = self.config.out_width as usize * self.channels;
         Some(&self.temp_output_f32[..row_len])
     }
@@ -2210,6 +2212,8 @@ impl<B: Background> StreamingResize<B> {
     ///
     /// `bg_premul_linear` must have at least `out_width * channels` elements.
     /// The compositing uses Porter-Duff source-over in premultiplied linear space.
+    /// The [`with_mask`](Self::with_mask) mask, if any, is applied to the
+    /// foreground first.
     ///
     /// Requires the f32 path.
     pub fn next_output_row_over(&mut self, bg_premul_linear: &[f32]) -> Option<&[u8]> {
@@ -2223,6 +2227,7 @@ impl<B: Background> StreamingResize<B> {
             return None;
         }
         self.produce_next_f32_raw();
+        self.apply_mask_f32();
         let row_len = self.config.out_width as usize * self.channels;
 
         // Composite fg over bg
@@ -2477,6 +2482,23 @@ impl<B: Background> StreamingResize<B> {
         }
     }
 
+    /// Apply the output mask (if any) to the row `produce_next_f32_raw` just
+    /// produced in `temp_output_f32`: before composite, before unpremultiply.
+    /// Uses span hints to skip the opaque centre and zero transparent edges,
+    /// only running the per-pixel multiply on partial spans.
+    fn apply_mask_f32(&mut self) {
+        if let Some(ref mask) = self.mask {
+            let out_y = self.output_rows_produced - 1; // raw already incremented
+            let out_row_len = self.config.out_width as usize * self.channels;
+            zenblend::apply_mask_spans(
+                &mut self.temp_output_f32[..out_row_len],
+                &mut self.mask_buf,
+                mask.as_ref(),
+                out_y,
+            );
+        }
+    }
+
     /// Produce one f32 output row through composite, but skip unpremultiply.
     /// Used by callers that fuse unpremultiply with encoding.
     fn produce_next_f32_composited(&mut self) {
@@ -2485,17 +2507,7 @@ impl<B: Background> StreamingResize<B> {
         let out_y = self.output_rows_produced - 1; // raw already incremented
         let out_row_len = self.config.out_width as usize * self.channels;
 
-        // mask: shape output transparency (before composite, before unpremul)
-        // Uses span hints to skip opaque center and zero transparent edges,
-        // only running per-pixel multiply on the partial corner arcs.
-        if let Some(ref mask) = self.mask {
-            zenblend::apply_mask_spans(
-                &mut self.temp_output_f32[..out_row_len],
-                &mut self.mask_buf,
-                mask.as_ref(),
-                out_y,
-            );
-        }
+        self.apply_mask_f32();
 
         // composite: blend over background (operates on temp_output_f32)
         composite::composite_dispatch(
@@ -4711,6 +4723,71 @@ mod tests {
         let mask = zenblend::mask::RoundedRectMask::uniform(20, 20, 5.0);
         let resizer = StreamingResize::new(&config).with_mask(mask);
         assert_eq!(resizer.working_format(), WorkingFormat::F32);
+    }
+
+    #[test]
+    fn mask_applies_to_premul_linear_and_over_outputs() {
+        // Issue #21: both caller-composite APIs used to skip the mask.
+        let config = ResizeConfig::builder(20, 20, 13, 17)
+            .format(PixelDescriptor::RGBA8_SRGB)
+            .linear()
+            .build();
+        let mask = || zenblend::mask::RoundedRectMask::uniform(13, 17, 5.0);
+        let mut row = vec![0u8; 20 * 4];
+        for (i, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            *px = [(i * 12) as u8, 200, (255 - i * 9) as u8, 255];
+        }
+
+        // Reference: the regular u8 output, which has always applied the mask.
+        let mut r = StreamingResize::new(&config).with_mask(mask());
+        let reference = push_drain_collect_u8(&mut r, &row, 20);
+        assert!(reference[0][3] < 10, "reference corner must be masked");
+
+        // next_output_row_over with a fully transparent background is the
+        // same operation: SrcOver onto zero is the identity.
+        let zeros = vec![0.0f32; 13 * 4];
+        let mut r = StreamingResize::new(&config).with_mask(mask());
+        let mut over = Vec::new();
+        for _ in 0..20 {
+            r.push_row(&row).unwrap();
+            while let Some(o) = r.next_output_row_over(&zeros) {
+                over.push(o.to_vec());
+            }
+        }
+        r.finish();
+        while let Some(o) = r.next_output_row_over(&zeros) {
+            over.push(o.to_vec());
+        }
+        assert_eq!(over, reference);
+
+        // Premultiplied rows carry the same alpha as the unpremultiplied
+        // f32 output (unpremultiply leaves alpha alone).
+        let collect_alpha = |premul: bool| -> Vec<f32> {
+            let mut r = StreamingResize::new(&config).with_mask(mask());
+            let mut alpha = Vec::new();
+            let take = |r: &mut StreamingResize, alpha: &mut Vec<f32>| loop {
+                let out = if premul {
+                    r.next_output_row_premul_linear_f32()
+                } else {
+                    r.next_output_row_f32()
+                };
+                match out {
+                    Some(o) => alpha.extend(o.as_chunks::<4>().0.iter().map(|p| p[3])),
+                    None => break,
+                }
+            };
+            for _ in 0..20 {
+                r.push_row(&row).unwrap();
+                take(&mut r, &mut alpha);
+            }
+            r.finish();
+            take(&mut r, &mut alpha);
+            alpha
+        };
+        let premul_alpha = collect_alpha(true);
+        assert_eq!(premul_alpha.len(), 13 * 17);
+        assert!(premul_alpha[0] < 0.05, "corner alpha {}", premul_alpha[0]);
+        assert_eq!(premul_alpha, collect_alpha(false));
     }
 
     #[test]
