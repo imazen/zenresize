@@ -9,72 +9,93 @@
 
 ## summary
 #
-#   pub modules                                 4
+#   pub modules                                 5
 #   pub types (struct/enum/trait/alias)         5
 #   pub consts/statics                          2
-#   free functions                              2
-#   inherent methods                           46
+#   free functions                             31
+#   inherent methods                           40
 #   struct fields                              16
 #   enum variants                              62
 #   re-exports                                  8
-#   trait roster entries (type × trait)        25
+#   trait roster entries (type × trait)        26
 #   auto-trait-complete types                   4
 #
 # per-module pub lines:
-#   (root)                           47
-#   composite                         1
+#   (root)                           44
 #   fastmath                          8
-#   filter                           61
-#   fit                               1
+#   filter                           60
 #   plane                             1
-#   simd                              2
+#   simd                             32
 #   weights                          24
 
-## items (144 lines)
+## items (168 lines)
 
 #[non_exhaustive] #[repr(u8)] pub enum Filter [also: filter]
 pub const weights::I16_PRECISION: i32
 pub const weights::WEIGHT_THRESHOLD: f64
 pub fn ConfigError::assert_fields_are_eq(&self)
-pub fn OrientOutput::assert_fields_are_eq(&self)
 pub fn ResizeConfigBuilder::filter(self, filter::Filter) -> Self
 pub fn ResizeConfigBuilder::sharpen(self, f32) -> Self
 pub fn ResizeConfigBuilder::sharpen_percent(self, f32) -> Self
 pub fn ResizeConfigBuilder::up_filter(self, filter::Filter) -> Self
 pub fn SourceRegion::assert_fields_are_eq(&self)
-pub fn StreamingError::assert_fields_are_eq(&self)
-pub fn WorkingFormat::assert_fields_are_eq(&self)
-pub fn composite::CompositeError::assert_fields_are_eq(&self)
 pub fn filter::Filter::all() -> &'static [filter::Filter]
-pub fn filter::Filter::assert_fields_are_eq(&self)
-pub fn filter::Filter::clone(&self) -> filter::Filter
-pub fn filter::Filter::cmp(&self, &filter::Filter) -> core::cmp::Ordering
-pub fn filter::Filter::default() -> filter::Filter
-pub fn filter::Filter::eq(&self, &filter::Filter) -> bool
+pub fn filter::Filter::clone(&self) -> Self
+pub fn filter::Filter::cmp(&self, &Self) -> core::cmp::Ordering
+pub fn filter::Filter::default() -> Self
+pub fn filter::Filter::eq(&self, &Self) -> bool
 pub fn filter::Filter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub fn filter::Filter::hash<__H: core::hash::Hasher>(&self, &mut __H)
 pub fn filter::Filter::name(&self) -> &'static str
-pub fn filter::Filter::partial_cmp(&self, &filter::Filter) -> core::option::Option<core::cmp::Ordering>
+pub fn filter::Filter::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
 pub fn filter::InterpolationDetails::calculate_percent_negative_weight(&self) -> f64
-pub fn filter::InterpolationDetails::clone(&self) -> filter::InterpolationDetails
+pub fn filter::InterpolationDetails::clone(&self) -> Self
 pub fn filter::InterpolationDetails::create(filter::Filter) -> Self
 pub fn filter::InterpolationDetails::default() -> Self
 pub fn filter::InterpolationDetails::filter(&self, f64) -> f64
 pub fn filter::InterpolationDetails::with_blur(self, f64) -> Self
 pub fn filter::InterpolationDetails::with_lobe_ratio(self, f32) -> Self
 pub fn filter::InterpolationDetails::with_sharpen_percent(self, f32) -> Self
-pub fn fit::FitMode::assert_fields_are_eq(&self)
 pub fn plane::PlaneResizer::new(filter::Filter, u32, u32, u32, u32) -> Self
+pub fn simd::__bench_kernels::f16_to_f32_row(&[u16], &mut [f32])
+pub fn simd::__bench_kernels::f32_to_f16_row(&[f32], &mut [u16])
+pub fn simd::__bench_kernels::f32_to_u8_row(&[f32], &mut [u8])
+pub fn simd::__bench_kernels::filter_h_i16_i16(&[i16], &mut [i16], &weights::I16WeightTable, usize)
+pub fn simd::__bench_kernels::filter_h_row_f32(&[f32], &mut [f32], &weights::F32WeightTable, usize)
+pub fn simd::__bench_kernels::filter_h_row_f32_to_f16(&[f32], &mut [u16], &weights::F32WeightTable, usize)
+pub fn simd::__bench_kernels::filter_h_u8_i16(&[u8], &mut [u8], &weights::I16WeightTable, usize)
+pub fn simd::__bench_kernels::filter_h_u8_i16_4rows(&[u8], &[u8], &[u8], &[u8], &mut [u8], &mut [u8], &mut [u8], &mut [u8], &weights::I16WeightTable)
+pub fn simd::__bench_kernels::filter_h_u8_to_i16(&[u8], &mut [i16], &weights::I16WeightTable, usize)
+pub fn simd::__bench_kernels::filter_h_u8_to_i16_4rows(&[u8], &[u8], &[u8], &[u8], &mut [i16], &mut [i16], &mut [i16], &mut [i16], &weights::I16WeightTable)
+pub fn simd::__bench_kernels::filter_v_all_f16(&[u16], &mut [f32], usize, usize, usize, &weights::F32WeightTable)
+pub fn simd::__bench_kernels::filter_v_all_i16_i16(&[i16], &mut [i16], usize, usize, usize, &weights::I16WeightTable)
+pub fn simd::__bench_kernels::filter_v_row_f16(&[&[u16]], &mut [f32], &[f32])
+pub fn simd::__bench_kernels::filter_v_row_f32(&[&[f32]], &mut [f32], &[f32])
+pub fn simd::__bench_kernels::filter_v_row_i16(&[&[i16]], &mut [i16], &[i16])
+pub fn simd::__bench_kernels::filter_v_row_u8_i16(&[&[u8]], &mut [u8], &[i16])
+pub fn simd::__bench_kernels::hlg_to_linear_row(&mut [f32], usize, bool)
+pub fn simd::__bench_kernels::linear_f32_to_srgb_u8(&[f32], &mut [u8], usize, bool)
+pub fn simd::__bench_kernels::pq_to_linear_row(&mut [f32], usize, bool)
+pub fn simd::__bench_kernels::premultiply_alpha_row(&mut [f32])
+pub fn simd::__bench_kernels::premultiply_u8_row(&[u8], &mut [u8])
+pub fn simd::__bench_kernels::srgb_from_linear_row(&mut [f32], usize, bool)
+pub fn simd::__bench_kernels::srgb_to_linear_row(&mut [f32], usize, bool)
+pub fn simd::__bench_kernels::srgb_u8_to_linear_f32(&[u8], &mut [f32], usize, bool)
+pub fn simd::__bench_kernels::srgb_u8_to_linear_premultiply_f32(&[u8], &mut [f32])
+pub fn simd::__bench_kernels::u8_to_f32_premultiply_row(&[u8], &mut [f32])
+pub fn simd::__bench_kernels::u8_to_f32_row(&[u8], &mut [f32])
+pub fn simd::__bench_kernels::unpremultiply_alpha_row(&mut [f32])
+pub fn simd::__bench_kernels::unpremultiply_u8_row(&mut [u8])
 pub fn simd::filter_v_all_u8_i16(&[u8], &mut [u8], usize, usize, usize, &weights::I16WeightTable)
 pub fn simd::filter_v_all_u8_i16_tiled(&[u8], &mut [u8], usize, usize, usize, &weights::I16WeightTable, usize)
-pub fn weights::F32WeightTable::clone(&self) -> weights::F32WeightTable
+pub fn weights::F32WeightTable::clone(&self) -> Self
 pub fn weights::F32WeightTable::is_empty(&self) -> bool
 pub fn weights::F32WeightTable::len(&self) -> usize
 pub fn weights::F32WeightTable::new(u32, u32, &filter::InterpolationDetails) -> Self
 pub fn weights::F32WeightTable::tap_count(&self, usize) -> usize
 pub fn weights::F32WeightTable::weights(&self, usize) -> &[f32]
 pub fn weights::F32WeightTable::weights_padded(&self, usize) -> &[f32]
-pub fn weights::I16WeightTable::clone(&self) -> weights::I16WeightTable
+pub fn weights::I16WeightTable::clone(&self) -> Self
 pub fn weights::I16WeightTable::expanded_4ch_all(&self) -> &[i16]
 pub fn weights::I16WeightTable::is_empty(&self) -> bool
 pub fn weights::I16WeightTable::len(&self) -> usize
@@ -86,6 +107,7 @@ pub fn weights::I16WeightTable::weights_padded(&self, usize) -> &[i16]
 pub mod fastmath
 pub mod filter
 pub mod simd
+pub mod simd::__bench_kernels
 pub mod weights
 pub struct filter::InterpolationDetails
 pub struct weights::F32WeightTable
@@ -177,7 +199,7 @@ pub weights::F32WeightTable::max_taps: usize
 pub weights::I16WeightTable::left: alloc::vec::Vec<i32>
 pub weights::I16WeightTable::max_taps: usize
 
-## trait impls (15 types)
+## trait impls (16 types)
 
 Bt709: TrivialClone
 ConfigError: TrivialClone
@@ -192,6 +214,7 @@ composite::SliceBackground<'a>: TrivialClone
 filter::Filter: Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, TrivialClone
 filter::InterpolationDetails: Clone, Default
 fit::FitMode: TrivialClone
+halo::HaloSampler: TrivialClone
 weights::F32WeightTable: Clone
 weights::I16WeightTable: Clone
 

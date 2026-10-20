@@ -40,6 +40,7 @@ pub mod composite;
 #[doc(hidden)]
 pub mod filter;
 pub mod fit;
+pub mod halo;
 pub(crate) mod pixel;
 pub mod plane;
 pub(crate) mod resize;
