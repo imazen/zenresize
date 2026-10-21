@@ -237,6 +237,11 @@ pub(crate) fn unpremultiply_u8_row(row: &mut [u8]) {
     archmage::incant!(unpremultiply_u8_row(row))
 }
 
+/// Scale 4-channel i16 pixels by per-pixel mask values (16.16 fixed point).
+pub(crate) fn mask_i16_row(px: &mut [i16], mask: &[f32]) {
+    archmage::incant!(mask_i16_row(px, mask))
+}
+
 /// Convert sRGB u8 → linear f32 (LUT-based, dispatched via token).
 pub(crate) fn srgb_u8_to_linear_f32(
     input: &[u8],
@@ -524,5 +529,95 @@ pub mod __bench_kernels {
     }
     pub fn srgb_u8_to_linear_premultiply_f32(i: &[u8], o: &mut [f32]) {
         super::srgb_u8_to_linear_premultiply_f32(i, o)
+    }
+}
+
+#[cfg(test)]
+mod mask_i16_tests {
+    #[cfg(not(feature = "std"))]
+    use alloc::vec::Vec;
+    use archmage::SimdToken;
+
+    /// The documented formula, one pixel at a time.
+    fn reference(px: &mut [i16], mask: &[f32]) {
+        for (p, &m) in px.as_chunks_mut::<4>().0.iter_mut().zip(mask) {
+            let m = if m.is_nan() { 0.0 } else { m.clamp(0.0, 1.0) };
+            let q = (m * 65536.0).round_ties_even() as i32;
+            for v in p {
+                *v = ((*v as i32 * q + 32768) >> 16) as i16;
+            }
+        }
+    }
+
+    fn inputs(n: usize) -> (Vec<i16>, Vec<f32>) {
+        let mut s = 0x9e37_79b9u32;
+        let mut next = move || {
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            s
+        };
+        // Includes exact .5 ties of m * 65536 (0.5/65536, 1.5/65536).
+        let specials = [
+            f32::NAN,
+            -0.5,
+            0.0,
+            1.0,
+            1.5,
+            f32::INFINITY,
+            -0.0,
+            0.999_99,
+            0.5 / 65536.0,
+            1.5 / 65536.0,
+            f32::NEG_INFINITY,
+        ];
+        let mask = (0..n)
+            .map(|i| {
+                if i % 7 == 3 {
+                    specials[i % specials.len()]
+                } else {
+                    (next() >> 8) as f32 / (1u32 << 24) as f32
+                }
+            })
+            .collect();
+        let px = (0..n * 4)
+            .map(|i| match i % 11 {
+                0 => i16::MAX,
+                1 => i16::MIN,
+                _ => (next() as i16) >> 5,
+            })
+            .collect();
+        (px, mask)
+    }
+
+    #[test]
+    fn every_tier_matches_reference() {
+        // Lengths around the 16-pixel block, so both block and tail run.
+        for n in [0, 1, 3, 15, 16, 17, 31, 33, 100, 257] {
+            let (px, mask) = inputs(n);
+            let mut expected = px.clone();
+            reference(&mut expected, &mask);
+
+            let mut got = px.clone();
+            super::mask_i16_row(&mut got, &mask);
+            assert_eq!(got, expected, "dispatched, n={n}");
+
+            let mut got = px.clone();
+            super::mask_i16_row_scalar(archmage::ScalarToken::summon().unwrap(), &mut got, &mask);
+            assert_eq!(got, expected, "scalar, n={n}");
+
+            #[cfg(target_arch = "x86_64")]
+            if let Some(t) = archmage::X64V3Token::summon() {
+                let mut got = px.clone();
+                super::mask_i16_row_v3(t, &mut got, &mask);
+                assert_eq!(got, expected, "v3, n={n}");
+            }
+            #[cfg(target_arch = "aarch64")]
+            if let Some(t) = archmage::NeonToken::summon() {
+                let mut got = px.clone();
+                super::mask_i16_row_neon(t, &mut got, &mask);
+                assert_eq!(got, expected, "neon, n={n}");
+            }
+        }
     }
 }

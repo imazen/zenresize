@@ -46,6 +46,7 @@ use crate::simd;
 use crate::transfer::{Bt709, Hlg, Pq, Srgb, TransferCurve};
 use crate::weights::{F32WeightTable, I16WeightTable};
 use whereat::{At, ResultAtExt, at};
+use zenblend::mask::{MaskFill, MaskSource, MaskSpans, SpanKind};
 use zenpixels::{AlphaMode, ChannelType, TransferFunction};
 
 /// Estimate the maximum filter tap count for a given dimension and filter.
@@ -232,6 +233,63 @@ fn with_v_rows<T: Copy, R>(
             .collect();
         f(&rows)
     }
+}
+
+/// Whether [`StreamingResize::with_mask`] keeps the I16Srgb path instead of
+/// switching to f32 (issue #3).
+///
+/// Measured 2026-08-29 over a 64x64 to 4K ladder
+/// (`benchmarks/mask_e2e_ladder_{x86,aarch64}_2026-08-29.meta`): on x86-64
+/// the f32 fallback cost +5% to +44% at nearly every size, while on aarch64
+/// the f32 path ran 15-30% faster than I16Srgb at 4K. Other targets are
+/// unmeasured and keep the f32 fallback.
+const MASK_KEEPS_I16_SRGB: bool = cfg!(target_arch = "x86_64");
+
+/// Multiply one I16Srgb V-filter output row (4ch, before the u8 clamp and
+/// unpremultiply) by the mask for output row `y`.
+///
+/// Same operation as the f32 path's `zenblend::apply_mask_spans`: every
+/// channel of the (premultiplied) pixel is scaled by the mask value. Opaque
+/// spans are skipped and transparent spans zeroed. Partial spans use 16.16
+/// fixed point, `(v * mq + 32768) >> 16` with `mq = m * 65536` rounded half
+/// to even.
+/// Spans are not widened to a SIMD block, so only mask values the source
+/// wrote are read.
+fn apply_mask_i16(row: &mut [i16], mask_buf: &mut [f32], mask: &dyn MaskSource, y: u32) {
+    let width = mask_buf.len();
+    debug_assert_eq!(row.len(), width * 4);
+    let spans = mask.mask_spans(mask_buf, y);
+    if spans_tile_row(&spans, width) {
+        for span in spans.iter() {
+            let (start, end) = (span.start as usize, span.end as usize);
+            match span.kind {
+                SpanKind::Opaque => {}
+                SpanKind::Transparent => row[start * 4..end * 4].fill(0),
+                SpanKind::Partial => {
+                    simd::mask_i16_row(&mut row[start * 4..end * 4], &mask_buf[start..end])
+                }
+            }
+        }
+    } else {
+        // Spans that don't tile [0, width) exactly: use the whole-row fill.
+        match mask.fill_mask_row(mask_buf, y) {
+            MaskFill::AllOpaque => {}
+            MaskFill::AllTransparent => row.fill(0),
+            MaskFill::Partial => simd::mask_i16_row(row, mask_buf),
+        }
+    }
+}
+
+/// True if `spans` are contiguous, in order, and cover exactly `[0, width)`.
+fn spans_tile_row(spans: &MaskSpans, width: usize) -> bool {
+    let mut next = 0usize;
+    for span in spans.iter() {
+        if span.start as usize != next || span.end < span.start {
+            return false;
+        }
+        next = span.end as usize;
+    }
+    next == width
 }
 
 /// Internal path selection for streaming resize.
@@ -534,24 +592,38 @@ impl<B: Background> StreamingResize<B> {
 
     /// Set an output mask (rounded corners, gradients, etc).
     ///
-    /// The mask is applied after compositing and before unpremultiply,
+    /// The mask is applied before compositing and before unpremultiply,
     /// shaping the final output's transparency. In premultiplied space,
     /// all four RGBA channels are multiplied by the mask value.
     ///
-    /// Forces the f32 pipeline path — i16 paths can't handle sub-pixel
-    /// alpha modulation without precision loss.
+    /// On x86-64, a resize that would take the i16 sRGB path
+    /// ([`WorkingFormat::I16Srgb`]) keeps it and applies the mask in 16.16
+    /// fixed point. That rounds once more than the f32 path does, so the
+    /// output can differ from the f32 path by one more level. Everywhere
+    /// else, and for the i16 linear path, a mask switches to the f32 path,
+    /// which is faster there or has not been measured.
     ///
     /// Panics if rows have already been pushed.
-    pub fn with_mask(mut self, mask: impl zenblend::mask::MaskSource + Send + 'static) -> Self {
+    pub fn with_mask(self, mask: impl zenblend::mask::MaskSource + Send + 'static) -> Self {
+        self.with_mask_inner(Box::new(mask), MASK_KEEPS_I16_SRGB)
+    }
+
+    /// [`with_mask`](Self::with_mask) with the I16Srgb policy as a parameter,
+    /// so tests can run the i16 mask path on every target.
+    fn with_mask_inner(
+        mut self,
+        mask: Box<dyn zenblend::mask::MaskSource + Send>,
+        keep_i16_srgb: bool,
+    ) -> Self {
         assert_eq!(
             self.input_rows_received, 0,
             "with_mask must be called before pushing rows"
         );
         let out_width = self.config.out_width as usize;
         self.mask_buf = vec![0.0f32; out_width];
-        self.mask = Some(Box::new(mask));
-        // Mask requires f32 path for precision
-        if self.path != StreamingPath::F32 {
+        self.mask = Some(mask);
+        let keep = keep_i16_srgb && self.path == StreamingPath::I16Srgb;
+        if self.path != StreamingPath::F32 && !keep {
             self.switch_to_f32_path();
         }
         self
@@ -2549,6 +2621,14 @@ impl<B: Background> StreamingResize<B> {
                 simd::filter_v_row_i16(rows, &mut self.temp_v_output_i16[..out_row_len], weights_a);
             },
         );
+        if let Some(ref mask) = self.mask {
+            apply_mask_i16(
+                &mut self.temp_v_output_i16[..out_row_len],
+                &mut self.mask_buf,
+                mask.as_ref(),
+                out_y as u32,
+            );
+        }
 
         // Clamp i16 → u8 [0,255]
         for (&v, o) in self.temp_v_output_i16[..out_row_len]
@@ -2580,6 +2660,15 @@ impl<B: Background> StreamingResize<B> {
                     );
                 },
             );
+            // The paired row is output row out_y + 1 and needs its own mask row.
+            if let Some(ref mask) = self.mask {
+                apply_mask_i16(
+                    &mut self.temp_v_output_i16[..out_row_len],
+                    &mut self.mask_buf,
+                    mask.as_ref(),
+                    out_y as u32 + 1,
+                );
+            }
 
             for (&v, o) in self.temp_v_output_i16[..out_row_len]
                 .iter()
@@ -4701,16 +4790,209 @@ mod tests {
     }
 
     #[test]
-    fn mask_forces_f32_path() {
-        // with_mask should switch from i16 to f32 path
+    fn mask_path_selection() {
+        // Default for RGBA8_SRGB is I16Srgb.
         let config = make_config(20, 20, 20, 20);
         let resizer = StreamingResize::new(&config);
-        // Default for RGBA8_SRGB identity is I16Srgb
-        assert_ne!(resizer.working_format(), WorkingFormat::F32);
+        assert_eq!(resizer.working_format(), WorkingFormat::I16Srgb);
 
+        // with_mask keeps I16Srgb on x86-64 and switches to f32 elsewhere.
         let mask = zenblend::mask::RoundedRectMask::uniform(20, 20, 5.0);
         let resizer = StreamingResize::new(&config).with_mask(mask);
-        assert_eq!(resizer.working_format(), WorkingFormat::F32);
+        let expected = if cfg!(target_arch = "x86_64") {
+            WorkingFormat::I16Srgb
+        } else {
+            WorkingFormat::F32
+        };
+        assert_eq!(resizer.working_format(), expected);
+
+        // The policy switch itself, independent of target.
+        let mask = zenblend::mask::RoundedRectMask::uniform(20, 20, 5.0);
+        let r = StreamingResize::new(&config).with_mask_inner(Box::new(mask), true);
+        assert_eq!(r.working_format(), WorkingFormat::I16Srgb);
+        let mask = zenblend::mask::RoundedRectMask::uniform(20, 20, 5.0);
+        let r = StreamingResize::new(&config).with_mask_inner(Box::new(mask), false);
+        assert_eq!(r.working_format(), WorkingFormat::F32);
+
+        // I16Linear always falls back to f32 under a mask.
+        let config = ResizeConfig::builder(20, 20, 10, 10)
+            .format(PixelDescriptor::RGBX8_SRGB)
+            .linear()
+            .build();
+        assert_eq!(
+            StreamingResize::new(&config).working_format(),
+            WorkingFormat::I16Linear
+        );
+        let mask = zenblend::mask::RoundedRectMask::uniform(10, 10, 3.0);
+        let r = StreamingResize::new(&config).with_mask_inner(Box::new(mask), true);
+        assert_eq!(r.working_format(), WorkingFormat::F32);
+    }
+
+    /// Masks used by the i16 mask tests, sized to the output.
+    fn i16_mask_cases(w: u32, h: u32) -> Vec<(&'static str, Box<dyn MaskSource + Send>)> {
+        use zenblend::mask::{LinearGradientMask, RadialGradientMask, RoundedRectMask};
+        let (wf, hf) = (w as f32, h as f32);
+        vec![
+            ("rrect_r7", Box::new(RoundedRectMask::uniform(w, h, 7.0))),
+            ("rrect_r8", Box::new(RoundedRectMask::uniform(w, h, 8.0))),
+            ("rrect_r5.5", Box::new(RoundedRectMask::uniform(w, h, 5.5))),
+            (
+                "rrect_mixed",
+                Box::new(RoundedRectMask::new(w, h, [3.0, 9.0, 0.0, 13.0])),
+            ),
+            ("circle", Box::new(RoundedRectMask::circle(w, h))),
+            (
+                "linear_vertical",
+                Box::new(LinearGradientMask::new(w, h, (0.0, 0.0), (0.0, hf))),
+            ),
+            (
+                "linear_diagonal",
+                Box::new(LinearGradientMask::new(w, h, (0.0, 0.0), (wf, hf))),
+            ),
+            (
+                "radial",
+                Box::new(RadialGradientMask::new(
+                    w,
+                    h,
+                    (wf / 2.0, hf / 2.0),
+                    wf.min(hf) / 6.0,
+                    wf.min(hf) / 2.0,
+                )),
+            ),
+        ]
+    }
+
+    /// (in_w, in_h, out_w, out_h): identity, downscale, upscale (paired rows).
+    const I16_MASK_SIZES: [(u32, u32, u32, u32); 4] = [
+        (40, 30, 40, 30),
+        (200, 150, 97, 61),
+        (40, 30, 97, 61),
+        (61, 97, 30, 200),
+    ];
+
+    /// Opaque RGBA test image with varied colour, one row per Vec.
+    fn i16_mask_input(w: u32, h: u32) -> Vec<Vec<u8>> {
+        (0..h)
+            .map(|y| {
+                (0..w)
+                    .flat_map(|x| {
+                        [
+                            (x * 7 + y * 3) as u8,
+                            (x * 2 + y * 11) as u8,
+                            (255u32.wrapping_sub(x * 5 + y)) as u8,
+                            255,
+                        ]
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn run_rows(resizer: &mut StreamingResize, input: &[Vec<u8>]) -> Vec<Vec<u8>> {
+        let mut rows = Vec::new();
+        for row in input {
+            resizer.push_row(row).unwrap();
+            while let Some(out) = resizer.next_output_row() {
+                rows.push(out.to_vec());
+            }
+        }
+        resizer.finish();
+        while let Some(out) = resizer.next_output_row() {
+            rows.push(out.to_vec());
+        }
+        rows
+    }
+
+    #[test]
+    fn mask_i16_alpha_exact() {
+        // Opaque input: every V-filtered alpha is exactly 255, so the masked
+        // alpha must be exactly (255 * mq + 32768) >> 16 for that pixel's own
+        // mask value. A paired row masked with the wrong row's values fails.
+        for (in_w, in_h, out_w, out_h) in I16_MASK_SIZES {
+            let config = make_config(in_w, in_h, out_w, out_h);
+            let input = i16_mask_input(in_w, in_h);
+            for (name, mask) in i16_mask_cases(out_w, out_h) {
+                let reference = i16_mask_cases(out_w, out_h)
+                    .into_iter()
+                    .find(|(n, _)| *n == name)
+                    .unwrap()
+                    .1;
+                let mut r = StreamingResize::new(&config).with_mask_inner(mask, true);
+                assert_eq!(r.working_format(), WorkingFormat::I16Srgb);
+                let rows = run_rows(&mut r, &input);
+                assert_eq!(rows.len(), out_h as usize);
+                let mut m = vec![0.0f32; out_w as usize];
+                for (y, row) in rows.iter().enumerate() {
+                    m.fill(1.0);
+                    if reference.fill_mask_row(&mut m, y as u32) == MaskFill::AllTransparent {
+                        m.fill(0.0);
+                    }
+                    for (x, px) in row.as_chunks::<4>().0.iter().enumerate() {
+                        let mq = (m[x].clamp(0.0, 1.0) * 65536.0).round_ties_even() as i32;
+                        let expected = ((255 * mq + 32768) >> 16) as u8;
+                        assert_eq!(
+                            px[3], expected,
+                            "{name} {in_w}x{in_h}->{out_w}x{out_h} at ({x},{y}): mask {}",
+                            m[x]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mask_i16_matches_f32() {
+        // Premultiplied output of the i16 mask path vs the f32 mask path on
+        // the identical config. The mask adds one rounding, so the gap may
+        // exceed the unmasked i16-vs-f32 gap by at most 1 level.
+        //
+        // Needs zenblend with 6719a262: before it, the f32 path's
+        // apply_mask_spans multiplied by unwritten mask pixels on x86-64 for
+        // odd corner extents, and the rounded-rect cases differ by 255.
+        let premul = |px: &[u8; 4]| -> [i32; 4] {
+            let a = px[3] as i32;
+            [
+                (px[0] as i32 * a + 127) / 255,
+                (px[1] as i32 * a + 127) / 255,
+                (px[2] as i32 * a + 127) / 255,
+                a,
+            ]
+        };
+        let max_gap = |a: &[Vec<u8>], b: &[Vec<u8>]| -> i32 {
+            let mut gap = 0;
+            for (ra, rb) in a.iter().zip(b) {
+                for (pa, pb) in ra.as_chunks::<4>().0.iter().zip(rb.as_chunks::<4>().0) {
+                    let (qa, qb) = (premul(pa), premul(pb));
+                    for c in 0..4 {
+                        gap = gap.max((qa[c] - qb[c]).abs());
+                    }
+                }
+            }
+            gap
+        };
+        for (in_w, in_h, out_w, out_h) in I16_MASK_SIZES {
+            let config = make_config(in_w, in_h, out_w, out_h);
+            let input = i16_mask_input(in_w, in_h);
+            let unmasked_i16 = run_rows(&mut StreamingResize::new(&config), &input);
+            let mut f32_resizer = StreamingResize::new(&config);
+            f32_resizer.switch_to_f32_path();
+            let unmasked_f32 = run_rows(&mut f32_resizer, &input);
+            let base_gap = max_gap(&unmasked_i16, &unmasked_f32);
+            let masks_i16 = i16_mask_cases(out_w, out_h);
+            let masks_f32 = i16_mask_cases(out_w, out_h);
+            for ((name, mi), (_, mf)) in masks_i16.into_iter().zip(masks_f32) {
+                let mut ri = StreamingResize::new(&config).with_mask_inner(mi, true);
+                let mut rf = StreamingResize::new(&config).with_mask_inner(mf, false);
+                assert_eq!(ri.working_format(), WorkingFormat::I16Srgb);
+                assert_eq!(rf.working_format(), WorkingFormat::F32);
+                let gap = max_gap(&run_rows(&mut ri, &input), &run_rows(&mut rf, &input));
+                assert!(
+                    gap <= base_gap + 1,
+                    "{name} {in_w}x{in_h}->{out_w}x{out_h}: masked i16-vs-f32 gap {gap} > unmasked {base_gap} + 1"
+                );
+            }
+        }
     }
 
     #[test]

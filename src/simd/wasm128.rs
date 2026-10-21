@@ -1254,3 +1254,8 @@ pub(crate) fn linear_f32_to_srgb_u8_wasm128(
 ) {
     crate::color::linear_f32_to_srgb_u8_impl(input, output, channels, has_alpha);
 }
+
+#[archmage::arcane]
+pub(crate) fn mask_i16_row_wasm128(_token: Wasm128Token, px: &mut [i16], mask: &[f32]) {
+    super::scalar::mask_i16_row_body(px, mask)
+}

@@ -1,0 +1,45 @@
+# zenresize masked resize on x86-64: f32 fallback (main) vs i16 mask path (issue #3)
+
+date:    2026-10-20
+host:    r7900x, AMD Ryzen 9 7900X (Zen 4; AVX-512 present, `avx512` feature OFF, so the V3/AVX2 kernels ran)
+rustc:   rustc 1.99.1 (58cf8f9c3 2026-10-13)
+build:   bench profile, no -C target-cpu=native, runtime dispatch (incant!)
+threads: single-threaded resize
+wrapper: ~/work/claudehints/scripts/run-heavy (nice 19, ionice idle); zenbench busy gate ON (shared agent host)
+command: cargo bench --bench mask_e2e
+arms:    no_mask (I16Srgb), rounded_mask (RoundedRectMask radius out_h/8),
+         gradient_mask (diagonal LinearGradientMask: every pixel partial)
+
+runs (both use the same benches/mask_e2e.rs, with the gradient_mask arm):
+  main     zenresize 93317e51 (main) + the gradient arm; masked arms take F32.
+           log: mask_e2e_ladder_x86_r7900x_2026-10-20.main.log
+           (its "git:" line names the parent ~/work/zen repo: the jj workspace had no .git)
+  i16mask  this change (jj 208fb13a, before its final description); masked arms take I16Srgb,
+           mask applied by simd::mask_i16_row (AVX2 tier).
+           log: mask_e2e_ladder_x86_r7900x_2026-10-20.i16mask.log
+
+Only in-run ratios are compared (cost of each masked arm vs no_mask in the same run);
+absolute times drift between runs. 95% CI of (arm - no_mask)/no_mask:
+
+| scenario          | rounded main (f32) | rounded i16      | gradient main (f32) | gradient i16     |
+|-------------------|--------------------|------------------|---------------------|------------------|
+| 64x64->32x32      | +26.3% .. +38.7%   | +0.4% .. +11.9%  | +28.6% .. +30.9%    | +4.3% .. +9.4%   |
+| 128x128->64x64    | +21.0% .. +31.6%   | -0.8% .. +5.9%   | +23.6% .. +30.4%    | +5.6% .. +11.4%  |
+| 256x256->128x128  | +25.4% .. +33.1%   | +1.9% .. +2.5%   | +30.5% .. +40.4%    | +11.4% .. +12.9% |
+| 512x512->256x256  | +24.4% .. +34.7%   | +0.3% .. +3.6%   | +29.1% .. +38.9%    | +14.2% .. +15.4% |
+| 800x600->400x300  | +21.4% .. +27.9%   | -3.3% .. +3.6%   | +26.4% .. +44.5%    | +11.2% .. +17.6% |
+| 1024^2->512^2     | +19.7% .. +28.0%   | -1.6% .. +8.5%   | +27.7% .. +41.0%    | +13.8% .. +23.9% |
+| 1440x1080->720x540| +22.6% .. +37.3%   | -4.7% .. +2.4%   | +28.1% .. +53.2%    | +13.1% .. +20.9% |
+| 4K->1080p         | +40.5% .. +43.5%   | +0.8% .. +1.3%   | +47.1% .. +52.8%    | +18.0% .. +18.0% |
+| 1080p->4K up      | +50.1% .. +51.3%   | -0.1% .. +3.4%   | +70.3% .. +73.1%    | +56.1% .. +59.1% |
+
+Every zenbench group reported "only 4 rounds" (busy gate on a shared host); CIs are from those.
+
+Intermediate result (not committed as a log): with a scalar per-pixel mask multiply the
+gradient arm cost +105% at 1080p->4K, worse than f32. perf showed `as i32` compiling to a
+scalar convert with saturation fixups per pixel. The shipped kernel quantizes with a 2^23
+bitcast and multiplies in i32 lanes (vpmulld ymm).
+
+Conclusion: on this Zen 4 box the i16 mask path is faster than the f32 fallback at every size
+for both mask shapes. aarch64 is not re-measured here; it keeps the f32 fallback per
+mask_e2e_ladder_aarch64_2026-08-29.meta.

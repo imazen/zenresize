@@ -1,0 +1,124 @@
+run-heavy: mem-cap=14G (cgroup, hard) jobs=20/24 avail=17026MiB :: cargo bench --bench mask_e2e
+[1m[92m   Compiling[0m zenresize v0.3.1 (/home/lilith/work/zen/zenresize--benchmain)
+[1m[92m    Finished[0m `bench` profile [optimized] target(s) in 0.41s
+[1m[92m     Running[0m benches/mask_e2e.rs (target/release/deps/mask_e2e-1f828b28ffc7df64)
+[mask_e2e] 64x64→32x32: no_mask=I16Srgb rounded_mask=F32
+[mask_e2e] 128x128→64x64: no_mask=I16Srgb rounded_mask=F32
+[mask_e2e] 256x256→128x128: no_mask=I16Srgb rounded_mask=F32
+[mask_e2e] 512x512→256x256: no_mask=I16Srgb rounded_mask=F32
+[mask_e2e] 800x600→400x300: no_mask=I16Srgb rounded_mask=F32
+[mask_e2e] 1024x1024→512x512: no_mask=I16Srgb rounded_mask=F32
+[mask_e2e] 1440x1080→720x540: no_mask=I16Srgb rounded_mask=F32
+[mask_e2e] 4K→1080p: no_mask=I16Srgb rounded_mask=F32
+[mask_e2e] 1080p→4K up: no_mask=I16Srgb rounded_mask=F32
+[zenbench] calibration: int=0.19ns/iter mem_bw=117.2GiB/s mem_lat=9.3ns
+[zenbench] timer resolution: 10ns, loop overhead: 0.18ns/iter, TSC: 4.691 ticks/ns (invariant)
+[zenbench] results → /tmp/zenbench/zenbench-1792537758-168c5f.txt
+
+═══════════════════════════════════════════════════════════════
+  zenbench  1792537758-168c5f
+  git: afcfa87a6c01e724427df195469a31aeefe825e3
+═══════════════════════════════════════════════════════════════
+
+  64x64→32x32  4 rounds × 24 calls ⚠ only 4 rounds
+                     mean ±mad µs  95% CI vs base     iB/s
+  ├─ no_mask         35.3 ±1.0µs  [33.1–36.9]µs      443M
+  ├─ rounded_mask    46.5 ±2.4µs  [+26.3%–+38.7%]    336M [1]
+  ╰─ gradient_mask   45.8 ±1.5µs  [+28.6%–+30.9%]    341M
+
+  no_mask        █████████████████████████████████████████████████████ 443 MiB/s
+  gradient_mask  █████████████████████████████████████████ 341 MiB/s
+  rounded_mask   ████████████████████████████████████████ 336 MiB/s
+  [1] drift r=1.00 — later rounds slower
+
+  128x128→64x64  4 rounds × 50 calls ⚠ only 4 rounds
+                      mean ±mad µs  95% CI vs base     iB/s
+  ├─ no_mask          85.1 ±6.2µs  [79.5–91.1]µs      735M
+  ├─ rounded_mask    107.0 ±2.5µs  [+21.0%–+31.6%]    584M
+  ╰─ gradient_mask   108.0 ±4.8µs  [+23.6%–+30.4%]    579M [1]
+
+  no_mask        █████████████████████████████████████████████████████ 735 MiB/s
+  rounded_mask   ██████████████████████████████████████████ 584 MiB/s
+  gradient_mask  ██████████████████████████████████████████ 579 MiB/s
+  [1] drift r=-0.80 — later rounds faster
+
+  256x256→128x128  4 rounds × 18 calls ⚠ only 4 rounds
+                       mean ±mad µs  95% CI vs base       iB/s
+  ├─ no_mask          242.4 ±1.5µs  [241.2–243.6]µs     1.01G
+  ├─ rounded_mask    313.1 ±10.2µs  [+25.4%–+33.1%]      798M [1]
+  ╰─ gradient_mask   328.6 ±13.7µs  [+30.5%–+40.4%]      761M
+
+  no_mask        ████████████████████████████████████████████████████ 1.01 GiB/s
+  rounded_mask   ████████████████████████████████████████ 798 MiB/s
+  gradient_mask  ██████████████████████████████████████ 761 MiB/s
+  [1] drift r=0.80 — later rounds slower
+
+  512x512→256x256  4 rounds × 5 calls ⚠ only 4 rounds
+                        mean ±mad µs  95% CI vs base       iB/s
+  ├─ no_mask           772.5 ±5.7µs  [760.4–791.2]µs     1.26G
+  ├─ rounded_mask    1000.1 ±35.1µs  [+24.4%–+34.7%]     1000M
+  ╰─ gradient_mask   1033.9 ±35.8µs  [+29.1%–+38.9%]      967M
+
+  no_mask        ████████████████████████████████████████████████████ 1.26 GiB/s
+  rounded_mask   ████████████████████████████████████████ 1000 MiB/s
+  gradient_mask  ███████████████████████████████████████ 967 MiB/s
+
+  800x600→400x300  4 rounds × 3 calls ⚠ only 4 rounds
+                    mean ±mad ms  95% CI vs base      iB/s
+  ├─ no_mask         1.3 ±0.0ms  [1.3–1.3]ms        1.39G
+  ├─ rounded_mask    1.6 ±0.0ms  [+21.4%–+27.9%]    1.12G [1]
+  ╰─ gradient_mask   1.7 ±0.0ms  [+26.4%–+44.5%]    1.04G [2]
+
+  no_mask        ████████████████████████████████████████████████████ 1.39 GiB/s
+  rounded_mask   ██████████████████████████████████████████ 1.12 GiB/s
+  gradient_mask  ███████████████████████████████████████ 1.04 GiB/s
+  [1] drift r=-0.80 — later rounds faster
+  [2] drift r=-0.80 — later rounds faster
+
+  1024x1024→512x512  4 rounds × 1 calls ⚠ only 4 rounds
+                    mean ±mad ms  95% CI vs base      iB/s
+  ├─ no_mask         2.7 ±0.1ms  [2.6–2.8]ms        1.44G
+  ├─ rounded_mask    3.4 ±0.1ms  [+19.7%–+28.0%]    1.16G
+  ╰─ gradient_mask   3.6 ±0.1ms  [+27.7%–+41.0%]    1.07G [1]
+
+  no_mask        ████████████████████████████████████████████████████ 1.44 GiB/s
+  rounded_mask   ██████████████████████████████████████████ 1.16 GiB/s
+  gradient_mask  ███████████████████████████████████████ 1.07 GiB/s
+  [1] drift r=-0.80 — later rounds faster
+
+  1440x1080→720x540  4 rounds × 1 calls ⚠ only 4 rounds
+                    mean ±mad ms  95% CI vs base      iB/s
+  ├─ no_mask         3.9 ±0.1ms  [3.8–4.0]ms        1.50G
+  ├─ rounded_mask    5.0 ±0.2ms  [+22.6%–+37.3%]    1.15G
+  ╰─ gradient_mask   5.4 ±0.2ms  [+28.1%–+53.2%]    1.07G
+
+  no_mask        ████████████████████████████████████████████████████ 1.50 GiB/s
+  rounded_mask   ████████████████████████████████████████ 1.15 GiB/s
+  gradient_mask  █████████████████████████████████████ 1.07 GiB/s
+
+  4K→1080p  4 rounds × 1 calls ⚠ only 4 rounds
+                    mean ±mad ms  95% CI vs base      iB/s
+  ├─ no_mask         19.1 ±0.1ms  [18.4–19.6]ms      1.61G
+  ├─ rounded_mask    27.2 ±0.5ms  [+40.5%–+43.5%]    1.14G [1]
+  ╰─ gradient_mask   28.7 ±0.5ms  [+47.1%–+52.8%]    1.08G
+
+  no_mask        ████████████████████████████████████████████████████ 1.61 GiB/s
+  rounded_mask   █████████████████████████████████████ 1.14 GiB/s
+  gradient_mask  ███████████████████████████████████ 1.08 GiB/s
+  [1] drift r=0.80 — later rounds slower
+
+  1080p→4K up  4 rounds × 1 calls ⚠ only 4 rounds
+                    mean ±mad ms  95% CI vs base     iB/s
+  ├─ no_mask         26.2 ±0.1ms  [26.0–26.3]ms      302M
+  ├─ rounded_mask    39.5 ±0.1ms  [+50.1%–+51.3%]    200M
+  ╰─ gradient_mask   44.9 ±0.3ms  [+70.3%–+73.1%]    176M [1]
+
+  no_mask        █████████████████████████████████████████████████████ 302 MiB/s
+  rounded_mask   ███████████████████████████████████ 200 MiB/s
+  gradient_mask  ███████████████████████████████ 176 MiB/s
+  [1] drift r=-0.80 — later rounds faster
+
+  total: 1121.8s  (1008 noisy rounds)
+═══════════════════════════════════════════════════════════════
+  filter: cargo bench -- --group=NAME  format: --format=llm|csv|md|json
+run-heavy: done rc=0 1123s | peak-RSS 0.22GiB | min-avail 16495MiB | peak-load 1.81

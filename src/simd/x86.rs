@@ -438,6 +438,13 @@ pub(crate) fn premultiply_u8_row_v3(_token: X64V3Token, input: &[u8], output: &m
     }
 }
 
+/// AVX2 tier of [`super::scalar::mask_i16_row_body`]: the shared body,
+/// compiled with V3 target features so it vectorizes.
+#[archmage::arcane]
+pub(crate) fn mask_i16_row_v3(_token: X64V3Token, px: &mut [i16], mask: &[f32]) {
+    super::scalar::mask_i16_row_body(px, mask)
+}
+
 /// Unpremultiply alpha in-place on RGBA u8 row using SSE4.1.
 ///
 /// Exactly the integer formula of the scalar tier, `min(255, (c*255 + a/2) / a)`
@@ -2877,6 +2884,9 @@ macro_rules! paste_v3 {
     (premultiply_u8_row_v4) => {
         premultiply_u8_row_v3
     };
+    (mask_i16_row_v4) => {
+        mask_i16_row_v3
+    };
     (unpremultiply_u8_row_v4) => {
         unpremultiply_u8_row_v3
     };
@@ -2960,6 +2970,7 @@ v4_delegate_v3! {
     fn filter_h_u8_i16_4rows_v4(in0: &[u8], in1: &[u8], in2: &[u8], in3: &[u8], out0: &mut [u8], out1: &mut [u8], out2: &mut [u8], out3: &mut [u8], weights: &I16WeightTable);
     fn premultiply_u8_row_v4(input: &[u8], output: &mut [u8]);
     fn unpremultiply_u8_row_v4(row: &mut [u8]);
+    fn mask_i16_row_v4(px: &mut [i16], mask: &[f32]);
     fn srgb_u8_to_linear_f32_v4(input: &[u8], output: &mut [f32], channels: usize, has_alpha: bool);
     fn linear_f32_to_srgb_u8_v4(input: &[f32], output: &mut [u8], channels: usize, has_alpha: bool);
     fn filter_h_i16_i16_v4(input: &[i16], output: &mut [i16], weights: &I16WeightTable, channels: usize);

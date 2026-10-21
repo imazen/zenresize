@@ -156,6 +156,14 @@ harness = false
 name = "mask_e2e"
 harness = false
 
+# TEMPORARY (issue #3): the f32 mask path's output is wrong on x86-64 for odd
+# rounded-corner extents with zenblend 0.1.3 (fixed in zenblend 6719a262,
+# unreleased), and mask_i16_matches_f32 checks against that path. Before
+# merging: publish zenblend 0.1.4, raise the requirement above to "0.1.4",
+# and delete this section.
+[patch.crates-io]
+zenblend = { git = "https://github.com/imazen/zenblend", rev = "ee9999395240" }
+
 [package.metadata.superwork.ci]
 strategy = "strip_path"
 
