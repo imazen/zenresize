@@ -1859,39 +1859,18 @@ impl<B: Background> StreamingResize<B> {
                 return Some(&self.output_buf_u8[..total_row_len]);
             }
 
-            // Phase 2: content rows with left/right padding
+            // Phase 2: content rows with left/right padding. Produce into a
+            // copy of the padding template and flip the copy: flipping the
+            // template itself would mirror its padding, and the next row's
+            // content would land beside the previous row's flipped pixels
+            // when the margins are uneven (#25).
             if self.output_rows_produced < self.config.out_height {
                 if !self.can_produce_next_output() {
                     return None;
                 }
-                let content_len = self.config.out_width as usize * self.channels;
-                let content_start = self.pad_left_elements;
-                let mut tmp = core::mem::take(&mut self.padded_output_buf_u8);
-                match self.path {
-                    StreamingPath::I16Srgb => {
-                        self.produce_next_i16_srgb(
-                            &mut tmp[content_start..content_start + content_len],
-                        );
-                    }
-                    StreamingPath::I16Linear => {
-                        self.produce_next_i16_linear(
-                            &mut tmp[content_start..content_start + content_len],
-                        );
-                    }
-                    StreamingPath::F32 => {
-                        self.produce_next_f32();
-                        Self::encode_output_u8(
-                            &self.temp_output_f32[..content_len],
-                            &mut tmp[content_start..content_start + content_len],
-                            self.config.effective_output_transfer(),
-                            self.channels,
-                            self.alpha_is_last,
-                        );
-                    }
-                }
-                flip_h_row(&mut tmp[..total_row_len], self.channels);
-                self.padded_output_buf_u8 = tmp;
-                return Some(&self.padded_output_buf_u8[..total_row_len]);
+                self.produce_content_row_to_output_buf(total_row_len);
+                flip_h_row(&mut self.output_buf_u8[..total_row_len], self.channels);
+                return Some(&self.output_buf_u8[..total_row_len]);
             }
 
             // Phase 3: bottom padding
@@ -2761,8 +2740,13 @@ impl<B: Background> StreamingResize<B> {
             return true;
         }
 
-        // Phase 3: bottom padding
-        if self.pad_bottom_emitted < self.pad_bottom {
+        // Phase 3: bottom padding, once every content row is out. This runs
+        // eagerly after each pushed row, usually before the first content
+        // row can be produced; without the guard the bottom margin would be
+        // captured right after the top one (#25).
+        if self.output_rows_produced >= self.config.out_height
+            && self.pad_bottom_emitted < self.pad_bottom
+        {
             self.pad_bottom_emitted += 1;
             self.orient_buf[dst_offset..dst_offset + row_len]
                 .copy_from_slice(&self.pad_full_row_u8[..row_len]);
