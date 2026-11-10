@@ -1,8 +1,7 @@
-# Magic Kernel Sharp
+# Magic Kernel Sharp 2013 and 2021
 
-`Filter::MagicKernelSharp` is the opt-in 2021 direct kernel. The 2013 variant
-is retained only as a historical mathematical test reference, not a public preset. Mitchell
-remains the comparison baseline; the library default remains Robidoux.
+`Filter::MagicKernelSharp` and `Filter::MagicKernelSharp2021` are opt-in direct resampling kernels. The unqualified name denotes the 2013 formula, which Costella recommends for most applications.
+Mitchell remains the comparison baseline; the library default remains Robidoux.
 
 ## Provenance and derivation
 
@@ -20,8 +19,8 @@ Expanding gives:
 - 3/2 ≤ t < 5/2: -(t - 5/2)²/8
 - otherwise zero
 
-The historical test reference evaluates these three quadratics; its oracle
-independently composes the spline and discrete correction. Its identity-scale samples are [-1, 0, 34, 0, -1]/32,
+Production evaluates these quadratics; tests independently compose the spline
+and discrete correction. The identity-scale samples are [-1, 0, 34, 0, -1]/32,
 so identity resizing is not an exact copy.
 
 The existing weight builder supplies center alignment, widened downsampling
@@ -31,14 +30,14 @@ claim equivalence to a multi-pass reference at boundaries or after rounding.
 
 ## Validation
 
-Run `just magic-kernel-test`. Current production tests cover the formula on a dense grid and near
+Run `just magic-kernel-test`. Tests cover the formula on a dense grid and near
 piece boundaries, partition of unity, a dense f64 image oracle for tiny,
 identity, fractional up/downscale and mixed-axis dimensions, and exact constant
 preservation through both u8 APIs. The f32 APIs use an f16 cache, so their
 comparison with the f64 image oracle allows 0.001 absolute error on the tested
 normalized samples. This is not a cross-tier bit-exactness claim.
 
-Historical 2013 comparison measured 2026-11-10 at commit `bb6712bd`, sampling the unit-step reconstruction at
+Measured 2026-11-10 by that test, sampling the unit-step reconstruction at
 1/1024-pixel intervals from -4 to 4:
 
 | Filter | Minimum | Maximum |
@@ -63,8 +62,7 @@ have not been run.
 
 ## Mitchell with resize_sharpen(15)
 
-Historical comparison measured 2026-11-10 at commit `ed10ee9c` using
-`just magic-kernel-test`: actual normalized f32
+Measured 2026-11-10 using `just magic-kernel-test`: actual normalized f32
 weight tables, every interior output sampling phase and every integer step
 boundary under its support. Image-edge-truncated rows are excluded. Values
 below are maximum response to an unclipped unit step (1 is the bright plateau).
@@ -100,8 +98,7 @@ Identity-grid samples are [-1, 0, 0, 0, 1154, 0, 0, 0, -1]/1152.
 This is closer to identity than 2013, but not mathematically exact identity.
 The wider support can require more convolution taps; speed has not been measured.
 
-Measured 2026-11-10 at commit `e151d491` with the same normalized f32
-weight-table procedure (current tests reproduce the Mitchell and 2021 columns):
+Measured 2026-11-10 with the same normalized f32 weight-table procedure:
 
 | Input → output | Mitchell sharpen 15 | Magic 2013 | Magic 2021 |
 |---|---:|---:|---:|
@@ -111,6 +108,10 @@ weight-table procedure (current tests reproduce the Mitchell and 2021 columns):
 | 257 → 63 | 1.092833095 | 1.095590078 | 1.059846469 |
 
 2021 has less step overshoot in these cases. This does not establish a
-photographic quality ranking. The retained 2021 production kernel runs through the dense
+photographic quality ranking. Both Magic variants now run through the dense
 image oracle and integer constant-preservation tests. The 2021 formula test
 covers every piece boundary, dense sampling, and partition of unity.
+
+Both production functions in `src/filter.rs` explain their derivations,
+including the choice a = 1/4 for the 2013 correction and the 2021 residual
+cancellation. These names do not change the library default (Robidoux).

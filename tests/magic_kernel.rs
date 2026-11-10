@@ -3,22 +3,6 @@
 use zenresize::filter::InterpolationDetails;
 use zenresize::{Filter, PixelDescriptor, ResizeConfig, Resizer, StreamingResize};
 
-/// Independently expanded from (6 m(x) - m(x-1) - m(x+1)) / 4,
-/// where m is the centered quadratic B-spline. Mathematical specification:
-/// <https://johncostella.com/magic/>. No reference implementation code used.
-fn historical_2013(x: f64) -> f64 {
-    let t = x.abs();
-    if t < 0.5 {
-        17.0 / 16.0 - 7.0 / 4.0 * t * t
-    } else if t < 1.5 {
-        (t - 1.0) * (t - 7.0 / 4.0)
-    } else if t < 2.5 {
-        -0.125 * (t - 2.5) * (t - 2.5)
-    } else {
-        0.0
-    }
-}
-
 fn spline(x: f64) -> f64 {
     let t = x.abs();
     if t <= 0.5 {
@@ -47,7 +31,7 @@ fn oracle_2021(x: f64) -> f64 {
 
 #[test]
 fn magic_2021_formula_and_partition_of_unity() {
-    let f = InterpolationDetails::create(Filter::MagicKernelSharp);
+    let f = InterpolationDetails::create(Filter::MagicKernelSharp2021);
     for i in -6144..=6144 {
         let x = i as f64 / 1024.0;
         assert!((f.filter(x) - oracle_2021(x)).abs() < 1e-14, "x={x}");
@@ -65,22 +49,21 @@ fn magic_2021_formula_and_partition_of_unity() {
 
 #[test]
 fn magic_formula_and_partition_of_unity() {
-    // Historical derivation only; no 2013 production preset.
-    let f = historical_2013;
+    let f = InterpolationDetails::create(Filter::MagicKernelSharp);
     for i in -4096..=4096 {
         let x = i as f64 / 1024.0;
-        assert!((f(x) - oracle(x)).abs() < 1e-14, "x={x}");
-        let sum: f64 = (-8..=8).map(|j| f(x - j as f64)).sum();
+        assert!((f.filter(x) - oracle(x)).abs() < 1e-14, "x={x}");
+        let sum: f64 = (-8..=8).map(|j| f.filter(x - j as f64)).sum();
         assert!((sum - 1.0).abs() < 1e-14);
     }
     for x in [0.5, 1.5, 2.5] {
         for delta in [-1e-9, 0.0, 1e-9] {
-            assert!((f(x + delta) - oracle(x + delta)).abs() < 1e-14);
+            assert!((f.filter(x + delta) - oracle(x + delta)).abs() < 1e-14);
         }
     }
-    assert_eq!(f(0.0), 17.0 / 16.0);
-    assert_eq!(f(1.0), 0.0);
-    assert_eq!(f(2.0), -1.0 / 32.0);
+    assert_eq!(f.filter(0.0), 17.0 / 16.0);
+    assert_eq!(f.filter(1.0), 0.0);
+    assert_eq!(f.filter(2.0), -1.0 / 32.0);
 }
 
 // The f32 APIs use a streaming f16 row cache; allow two f16 ULPs
@@ -101,7 +84,10 @@ fn weights(n: usize, out: usize, at: usize, reference: fn(f64) -> f64) -> Vec<f6
 
 #[test]
 fn magic_fullframe_and_streaming_match_dense_oracle() {
-    for (filter, reference) in [(Filter::MagicKernelSharp, oracle_2021 as fn(f64) -> f64)] {
+    for (filter, reference) in [
+        (Filter::MagicKernelSharp, oracle as fn(f64) -> f64),
+        (Filter::MagicKernelSharp2021, oracle_2021 as fn(f64) -> f64),
+    ] {
         for (w, h, ow, oh) in [
             (1, 1, 7, 5),
             (2, 3, 1, 1),
@@ -164,7 +150,11 @@ fn magic_fullframe_and_streaming_match_dense_oracle() {
 
 #[test]
 fn mitchell_comparison_and_integer_constant_preservation() {
-    for filter in [Filter::Mitchell, Filter::MagicKernelSharp] {
+    for filter in [
+        Filter::Mitchell,
+        Filter::MagicKernelSharp,
+        Filter::MagicKernelSharp2021,
+    ] {
         let details = InterpolationDetails::create(filter);
         let mut minimum = f64::INFINITY;
         let mut maximum = f64::NEG_INFINITY;
@@ -224,6 +214,10 @@ fn sharpened_mitchell_step_response() {
             (
                 "magic_kernel_sharp",
                 InterpolationDetails::create(Filter::MagicKernelSharp),
+            ),
+            (
+                "magic_kernel_sharp_2021",
+                InterpolationDetails::create(Filter::MagicKernelSharp2021),
             ),
         ] {
             let weights = F32WeightTable::new(input, output, &details);

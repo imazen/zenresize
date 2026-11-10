@@ -84,8 +84,10 @@ pub enum Filter {
     NCubicSharp = 30,
     /// Legacy IDCT filter
     LegacyIDCTFilter = 31,
-    /// Magic Kernel with the seven-tap Sharp correction (2021).
+    /// Magic Kernel Sharp (2013), recommended by its author for most applications.
     MagicKernelSharp = 32,
+    /// Magic Kernel with the seven-tap Sharp correction (2021).
+    MagicKernelSharp2021 = 33,
 }
 
 impl Filter {
@@ -125,6 +127,7 @@ impl Filter {
             NCubicSharp,
             LegacyIDCTFilter,
             MagicKernelSharp,
+            MagicKernelSharp2021,
         ]
     }
 
@@ -163,6 +166,7 @@ impl Filter {
             Filter::NCubicSharp => "n_cubic_sharp",
             Filter::LegacyIDCTFilter => "legacy_idct",
             Filter::MagicKernelSharp => "magic_kernel_sharp",
+            Filter::MagicKernelSharp2021 => "magic_kernel_sharp_2021",
         }
     }
 }
@@ -251,8 +255,13 @@ impl InterpolationDetails {
     pub fn create(filter: Filter) -> Self {
         match filter {
             Filter::MagicKernelSharp => Self {
-                window: 4.5,
+                window: 2.5,
                 filter_fn: filter_magic_kernel_sharp,
+                ..Default::default()
+            },
+            Filter::MagicKernelSharp2021 => Self {
+                window: 4.5,
+                filter_fn: filter_magic_kernel_sharp_2021,
                 ..Default::default()
             },
             Filter::Triangle | Filter::Linear => Self {
@@ -493,6 +502,37 @@ impl InterpolationDetails {
 // Filter Functions
 // =============================================================================
 
+/// Magic Kernel Sharp (2013), from <https://johncostella.com/magic/>.
+/// Independently derived; no reference implementation code was used.
+///
+/// The quadratic B-spline m(x) is 3/4 - x² for |x| < 1/2 and
+/// (3/2 - |x|)²/2 for 1/2 <= |x| < 3/2, zero elsewhere. Its integer
+/// translates sum to one, but its samples [1, 6, 1]/8 blur the input.
+/// Apply [-a, 1+2a, -a] at offsets -1, 0, 1 to counteract this blur.
+/// Setting the resulting samples at +/-1 to zero gives
+/// (1+2a)/8 - 3a/4 = 0, hence a = 1/4 and correction [-1, 6, -1]/4.
+/// Thus K13(x) = (6m(x) - m(x-1) - m(x+1))/4.
+///
+/// Expanding the shifted splines gives the three quadratics below, with
+/// support radius 3/2 + 1 = 5/2. The correction sums to one, preserving
+/// constants and partition of unity. Its negative lobes permit overshoot.
+/// Integer samples [-1, 0, 34, 0, -1]/32 leave mild residual sharpening;
+/// the 2021 kernel below reduces it at the cost of wider support.
+/// `blur` scales the argument; the weight builder handles downscale dilation
+/// and normalization. This is the direct kernel, not a separate sharpen pass.
+fn filter_magic_kernel_sharp(d: &InterpolationDetails, x: f64) -> f64 {
+    let t = f64_abs(x) / d.blur;
+    if t < 0.5 {
+        17.0 / 16.0 - 7.0 / 4.0 * t * t
+    } else if t < 1.5 {
+        (t - 1.0) * (t - 7.0 / 4.0)
+    } else if t < 2.5 {
+        -0.125 * (t - 2.5) * (t - 2.5)
+    } else {
+        0.0
+    }
+}
+
 /// Magic Kernel Sharp (2021), derived from the published mathematics:
 /// <https://johncostella.com/magic/>. No implementation source was used.
 ///
@@ -506,7 +546,7 @@ impl InterpolationDetails {
 /// The 2013 kernel corrects that blur with S = [-1, 6, -1]/4 at offsets
 /// -1, 0, 1: K13(x) = (6m(x) - m(x-1) - m(x+1))/4. Its integer
 /// samples are [-1, 0, 34, 0, -1]/32, leaving a small sharpening residual.
-/// It has radius 5/2 and three quadratic pieces (retained in the tests).
+/// It has radius 5/2 and three quadratic pieces (implemented above).
 ///
 /// The 2021 refinement applies B = [1, 0, 34, 0, 1]/36 at offsets -2..2
 /// to K13. This cancels the residual at offsets +/-2. Convolving S and B
@@ -522,7 +562,7 @@ impl InterpolationDetails {
 /// to evaluate to zero at the support boundary without cancellation.
 /// `blur` scales x; the weight builder handles downscale dilation and
 /// normalization. This direct kernel needs no additional image-filter pass.
-fn filter_magic_kernel_sharp(d: &InterpolationDetails, x: f64) -> f64 {
+fn filter_magic_kernel_sharp_2021(d: &InterpolationDetails, x: f64) -> f64 {
     let t = f64_abs(x) / d.blur;
     if t < 0.5 {
         577.0 / 576.0 - 239.0 / 144.0 * t * t
