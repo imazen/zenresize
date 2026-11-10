@@ -77,3 +77,8 @@ beta-cohort-check:
 # Clean-room formula oracle and Mitchell comparison.
 magic-kernel-test:
     cargo test --test magic_kernel -- --nocapture
+
+# Independent Magic image oracle across all 9 sample pairs and working paths.
+magic-paths-test:
+    cargo test --test magic_paths
+    ZENRESIZE_MAGIC_SCALAR=1 cargo test --test magic_paths

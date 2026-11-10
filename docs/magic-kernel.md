@@ -144,3 +144,32 @@ Pixel tests exercise I16Srgb and I16Linear through both resize APIs.
 Requested lobe ratios >= 0.5 select f32: positive coefficients can reach 2,
 which is not representable in signed Q14. Direct I16WeightTable construction
 rejects an unrepresentable adjusted coefficient rather than saturating it.
+
+## Pixel-path coverage and alpha overshoot
+
+`just magic-paths-test` runs both Magic formulas against an independent dense
+f64 convolution, with analytic sRGB decoding/encoding and premultiply math.
+It checks 9/9 u8/u16/f32 sample-type pairs, strided source rows with sentinels,
+RGB three-channel input, and RGBX linear-light integer processing, at three
+up/downscale sizes. All 3/3 working formats (I16Srgb, I16Linear, F32) are
+asserted explicitly, including the existing 2021 >14-tap linear precision
+fallback. Fullframe and streaming output must agree exactly for each case.
+
+The oracle permits finite-precision differences: five u8 codes for integer
+straight-alpha output with source alpha >=0.5, two for opaque integer output,
+one for f32-to-u8 output, and 0.001 for other f32-path output. These bounds
+account for premultiplication, intermediate rounding and f16 input caching;
+this is not a bit-exact f64-reference claim.
+
+The matrix exposed a real integer output bug: negative lobes can push filtered
+alpha above 255. Clamping that alpha before unpremultiplication brightened
+RGB. Both direct and paired output rows now retain the unclamped signed alpha
+as the divisor and clamp the final result. In-range alpha keeps the existing
+SIMD implementation. The varying-alpha oracle fails without this repair.
+
+Native dispatch and forced scalar both pass locally on x86-64. CI runs the
+same oracle with native and forced-scalar dispatch on supported integration
+lanes. Dedicated AVX-512, NEON and WASM execution has not been measured locally;
+Windows ARM currently runs library tests only under the existing CI policy.
+Mask/compositing behavior has existing generic tests; this matrix does not
+add a separate Magic-specific mask/compositing oracle.
