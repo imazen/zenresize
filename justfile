@@ -73,3 +73,18 @@ beta-cohort-check:
     cargo fmt --check
     cargo clippy --locked --lib -- -D warnings
     cargo test --locked --lib
+
+# Diff zenresize::halo against GEGL's NoHalo/LoHalo (needs the `gegl` CLI).
+# Usage: just halo-oracle <in.png> <width> <height>
+halo-oracle input width height:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release --example halo_oracle
+    out="${HOME}/tmp/halo-oracle"
+    mkdir -p "$out"
+    for s in nohalo lohalo; do
+        gegl "{{input}}" -o "$out/gegl_$s.png" -- gegl:scale-size x={{width}} y={{height}} sampler=$s abyss-policy=clamp
+        target/release/examples/halo_oracle resize "{{input}}" {{width}} {{height}} $s "$out/zen_$s.png"
+        echo -n "$s {{width}}x{{height}}: "
+        target/release/examples/halo_oracle diff "$out/gegl_$s.png" "$out/zen_$s.png"
+    done

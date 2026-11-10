@@ -6,29 +6,30 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: zenresize.txt 300 lines (supported surface) | zenresize.features.txt 0 added (features: avx512,bench-simd-competitors,pretty-safe,std) | zenresize.internal.txt 160 lines (203 hidden + 0 excluded-feature)
+# files: zenresize.txt 308 lines (supported surface) | zenresize.features.txt 0 added (features: avx512,bench-simd-competitors,pretty-safe,std) | zenresize.internal.txt 185 lines (228 hidden + 0 excluded-feature)
 
 ## summary
 #
-#   pub modules                                 4
-#   pub types (struct/enum/trait/alias)        35
+#   pub modules                                 5
+#   pub types (struct/enum/trait/alias)        36
 #   pub consts/statics                          4
-#   free functions                             17
+#   free functions                             20
 #   inherent methods                          154
 #   struct fields                              27
-#   enum variants                              27
+#   enum variants                              29
 #   re-exports                                 20
-#   trait roster entries (type × trait)        88
-#   auto-trait-complete types                  21
+#   trait roster entries (type × trait)        93
+#   auto-trait-complete types                  22
 #   auto-trait exceptions                       2
 #
 # per-module pub lines:
-#   (root)                          234
+#   (root)                          235
 #   composite                        34
 #   fit                               7
+#   halo                              6
 #   plane                            13
 
-## items (274 lines)
+## items (281 lines)
 
 pub mod zenresize
 pub use AlphaMode
@@ -71,6 +72,13 @@ pub fit::FitMode::Cover
 pub fit::FitMode::Fit
 pub fit::FitMode::Stretch
 pub fit::FitMode::Within
+pub mod halo
+#[non_exhaustive] pub enum halo::HaloSampler
+pub halo::HaloSampler::LoHalo
+pub halo::HaloSampler::NoHalo
+pub fn halo::resize_halo(imgref::ImgRef<'_, [f32; 4]>, u32, u32, halo::HaloSampler) -> imgref::ImgVec<[f32; 4]>
+pub fn halo::resize_halo_into(imgref::ImgRef<'_, [f32; 4]>, imgref::ImgRefMut<'_, [f32; 4]>, halo::HaloSampler)
+pub fn halo::resize_halo_srgba8(imgref::ImgRef<'_, [u8; 4]>, u32, u32, halo::HaloSampler) -> imgref::ImgVec<[u8; 4]>
 pub mod plane
 pub fn plane::PlaneResizer::dst_height(&self) -> usize
 pub fn plane::PlaneResizer::dst_width(&self) -> usize
@@ -305,7 +313,7 @@ pub fn resize_hfirst_streaming(&ResizeConfig, &[u8]) -> core::result::Result<all
 pub fn resize_hfirst_streaming_f32(&ResizeConfig, &[u8]) -> core::result::Result<alloc::vec::Vec<u8>, &'static str>
 pub fn unpremultiply_f32_row(&mut [f32]) [also: composite]
 
-## trait impls (23 types)
+## trait impls (24 types)
 
 Bt709: Clone, Copy, Debug, Default, TransferCurve
 ConfigError: Clone, Copy, Debug, Display, Eq, Error, PartialEq
@@ -328,11 +336,12 @@ composite::SolidBackground: Clone, composite::Background
 composite::StreamedBackground: composite::Background
 f32: Element
 fit::FitMode: Clone, Copy, Debug, Default, Eq, PartialEq
+halo::HaloSampler: Clone, Copy, Debug, Eq, PartialEq
 u16: Element
 u8: Element
 
 ## auto traits
 
-21 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+22 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
 Resizer<B>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
 StreamingResize<B>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe

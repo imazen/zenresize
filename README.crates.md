@@ -72,6 +72,7 @@ The pipeline order is always: **crop** (input side) -> **resize** -> **pad** (ou
 
 - **Crop, resize, and pad** -- independently or combined, streaming or fullframe
 - 31 resampling filters (Lanczos, Mitchell, Robidoux, Ginseng, etc.)
+- NoHalo and LoHalo samplers (full-frame, non-separable) in `zenresize::halo`
 - sRGB-aware linear-light processing for correct gamma handling
 - Row-at-a-time streaming API for pipeline integration
 - `Resizer` struct for amortizing weight computation across repeated resizes
@@ -560,6 +561,26 @@ use zenresize::Filter;
 let f = Filter::default();      // Robidoux
 let all = Filter::all();        // &[Filter] -- all 31 variants
 ```
+
+## NoHalo and LoHalo
+
+`zenresize::halo` implements the two halo-suppressing samplers GIMP offers (issue #17), written from the published definitions (Racette 2012; Robidoux et al. 2009):
+
+- **NoHalo**: one Nohalo subdivision plus LBB (locally bounded bicubic). Upsampling never leaves the range of the nearby input pixels, so it creates no halos.
+- **LoHalo**: Mitchell-Netravali in sigmoidized light. It is smoother than NoHalo and has small halos.
+
+When downscaling, both blend in an elliptical weighted average. They are not separable, so they run full-frame on premultiplied f32 RGBA (`resize_halo`), not through `Resizer` or `StreamingResize`. `resize_halo_srgba8` handles sRGB u8 input and output.
+
+```rust
+use zenresize::halo::{HaloSampler, resize_halo_srgba8};
+
+let src = vec![[200u8, 100, 50, 255]; 64 * 48];
+let img = imgref::ImgVec::new(src, 64, 48);
+let out = resize_halo_srgba8(img.as_ref(), 160, 120, HaloSampler::NoHalo);
+assert_eq!((out.width(), out.height()), (160, 120));
+```
+
+`just halo-oracle <in.png> <w> <h>` compares both against GEGL (`gegl:scale-size`). On three CID22 photos, up, down 3× and mixed scales agree within 1 level. At 8× and beyond, LoHalo differs by up to 6 levels: there GEGL reads mipmaps, while this reads full resolution.
 
 ## imgref Integration
 
