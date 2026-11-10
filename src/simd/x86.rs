@@ -2543,6 +2543,11 @@ pub(crate) fn filter_v_row_f16_v3(
     let width = output.len();
     debug_assert_eq!(rows.len(), weights.len());
 
+    if (32..=512).contains(&width) {
+        filter_v_f16_short(_token, rows, output, weights);
+        return;
+    }
+
     // Zero the output buffer
     let (out_chunks, out_tail) = output.as_chunks_mut::<8>();
     let zero = _mm256_setzero_ps();
@@ -3322,5 +3327,106 @@ pub(crate) fn filter_v_row_i16_v4(
         }
         let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
         *out_val = rounded as i16;
+    }
+}
+
+// Short rows fit a small register block. Keep each component's tap/FMA order
+// while avoiding a load/store of every accumulator after every tap. Wider rows
+// retain the row-major body, which broadcasts each weight once for the row.
+#[archmage::rite]
+fn filter_v_f16_short(_token: X64V3Token, rows: &[&[u16]], output: &mut [f32], weights: &[f32]) {
+    let (blocks, rest) = output.as_chunks_mut::<32>();
+    for (index, dst) in blocks.iter_mut().enumerate() {
+        let base = index * 32;
+        let mut acc = [_mm256_setzero_ps(); 4];
+        for (row, &weight) in rows.iter().zip(weights) {
+            let w = _mm256_set1_ps(weight);
+            let chunks = row[base..base + 32].as_chunks::<8>().0;
+            for lane in 0..4 {
+                let v = _mm256_cvtph_ps(_mm_loadu_si128(&chunks[lane]));
+                acc[lane] = _mm256_fmadd_ps(v, w, acc[lane]);
+            }
+        }
+        let dst = dst.as_chunks_mut::<8>().0;
+        for lane in 0..4 {
+            _mm256_storeu_ps(&mut dst[lane], acc[lane]);
+        }
+    }
+    let base = blocks.len() * 32;
+    let (chunks, tail) = rest.as_chunks_mut::<8>();
+    for (index, dst) in chunks.iter_mut().enumerate() {
+        let start = base + index * 8;
+        let mut acc = _mm256_setzero_ps();
+        for (row, &weight) in rows.iter().zip(weights) {
+            let src: &[u16; 8] = row[start..start + 8].try_into().unwrap();
+            let v = _mm256_cvtph_ps(_mm_loadu_si128(src));
+            acc = _mm256_fmadd_ps(v, _mm256_set1_ps(weight), acc);
+        }
+        _mm256_storeu_ps(dst, acc);
+    }
+    let base = base + chunks.len() * 8;
+    for (index, dst) in tail.iter_mut().enumerate() {
+        let mut acc = 0.0f32;
+        for (row, &weight) in rows.iter().zip(weights) {
+            acc += super::scalar::f16_to_f32_soft(row[base + index]) * weight;
+        }
+        *dst = acc;
+    }
+}
+
+#[cfg(test)]
+mod short_float_vertical_tests {
+    use super::*;
+    #[cfg(not(feature = "std"))]
+    use alloc::{vec, vec::Vec};
+    use archmage::SimdToken;
+    #[test]
+    fn short_f16_vertical_preserves_fma_order() {
+        let fma = X64V3Token::summon().is_some();
+        let mut state = 0x12345678u32;
+        for width in [
+            0, 1, 7, 8, 9, 31, 32, 33, 63, 64, 65, 128, 255, 256, 260, 511, 512, 513, 1024,
+        ] {
+            for taps in [0, 1, 2, 3, 17, 18, 33] {
+                let weights: Vec<f32> = (0..taps)
+                    .map(|t| ((t * 7 % 19) as f32 - 9.0) / 32.0)
+                    .collect();
+                let data: Vec<Vec<u16>> = (0..taps)
+                    .map(|_| {
+                        (0..width + 7)
+                            .map(|_| {
+                                state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                                // All finite binary16 values, including signed subnormals.
+                                let bits = (state >> 16) as u16;
+                                if bits & 0x7c00 == 0x7c00 {
+                                    bits ^ 0x0400
+                                } else {
+                                    bits
+                                }
+                            })
+                            .collect()
+                    })
+                    .collect();
+                let rows: Vec<&[u16]> = data.iter().map(|r| r.as_slice()).collect();
+                let mut actual = vec![0.0f32; width];
+                crate::simd::filter_v_row_f16(&rows, &mut actual, &weights);
+                for (x, &value) in actual.iter().enumerate() {
+                    let mut expected = 0.0f32;
+                    for (row, &w) in rows.iter().zip(&weights) {
+                        let v = super::super::scalar::f16_to_f32_soft(row[x]);
+                        expected = if fma && x < width / 8 * 8 {
+                            libm::fmaf(v, w, expected)
+                        } else {
+                            expected + v * w
+                        };
+                    }
+                    assert_eq!(
+                        value.to_bits(),
+                        expected.to_bits(),
+                        "width={width} taps={taps} x={x}"
+                    );
+                }
+            }
+        }
     }
 }
