@@ -1,4 +1,4 @@
-//! Interpolation filters ported from imageflow.
+//! Imageflow-compatible interpolation presets and independently derived Magic kernels.
 //!
 //! This module provides all 31 resampling filters from imageflow, enabling
 //! high-quality image resizing with various tradeoffs between sharpness,

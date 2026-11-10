@@ -114,6 +114,7 @@ jobs:
         run: |
           cargo test --target wasm32-wasip1 --test magic_paths
           cargo test --target wasm32-wasip1 --lib fused_integer_output_matches_exact_division -- --test-threads=1
+          cargo test --target wasm32-wasip1 --lib packed_i12_lut_matches_every_signed_input_and_tail
         env:
           RUSTFLAGS: "-C target-feature=+simd128"
           CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime

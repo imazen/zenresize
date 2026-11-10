@@ -243,3 +243,9 @@ and after: integer V 26/26 → 89/89, float H 29/29 → 59/59. These counts cove
 the changed portable function bodies, not archmage target-feature bodies.
 See [the scalar coverage report](../benchmarks/scalar_coverage_2026-11-10.json)
 and [the paired performance record](../benchmarks/alpha_output_2026-11-10.md).
+
+The signed-i12 sRGB lookup processes eight independent components per block
+with the original scalar tail. Its exhaustive oracle covers every signed i16
+input and tail lengths; the LUT formula and clamping bounds are unchanged.
+Before/after executable-region coverage is 16/16 and 40/40 (42/42 including
+the closure), recorded in [the LUT audit](../benchmarks/lut_coverage_2026-11-10.json).

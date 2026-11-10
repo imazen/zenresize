@@ -118,6 +118,7 @@ alpha-output-arm-tests-build:
 magic-wasm-test:
     CARGO_TARGET_WASM32_WASIP1_RUNNER=wasmtime RUSTFLAGS="-C target-feature=+simd128" cargo test --target wasm32-wasip1 --test magic_paths
     CARGO_TARGET_WASM32_WASIP1_RUNNER=wasmtime RUSTFLAGS="-C target-feature=+simd128" cargo test --target wasm32-wasip1 --lib fused_integer_output_matches_exact_division -- --test-threads=1
+    CARGO_TARGET_WASM32_WASIP1_RUNNER=wasmtime RUSTFLAGS="-C target-feature=+simd128" cargo test --target wasm32-wasip1 --lib packed_i12_lut_matches_every_signed_input_and_tail
 
 # Region audit for both portable convolution changes, using their arithmetic oracles.
 scalar-coverage output:
@@ -126,3 +127,7 @@ scalar-coverage output:
 # Integer dot-product and float accumulation-order oracles for every native tier.
 convolution-exact:
     cargo test --lib simd::
+
+# Exact signed LUT mapping and before/after region audit.
+lut-coverage output:
+    cargo llvm-cov --lib --json --output-path {{output}} -- packed_i12_lut_matches_every_signed_input_and_tail

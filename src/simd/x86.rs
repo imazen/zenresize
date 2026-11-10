@@ -1813,8 +1813,8 @@ pub(crate) fn filter_h_i16_i16_v3(
 
 /// Integer horizontal filter for 4-channel i16 data (linear-light i12 path).
 ///
-/// Input: i16 values (0-4095) laid out as [R,G,B,A, R,G,B,A, ...]
-/// Output: i16 values (0-4095) clamped after convolution.
+/// Input: signed i16 intermediates laid out as [R,G,B,A, R,G,B,A, ...].
+/// Output: signed i16 values, preserving convolution ringing.
 ///
 /// Since i16 data is already in i16 format, we load directly with
 /// `_mm256_loadu_si256` — no `cvtepu8_epi16` needed. Each 4 RGBA pixels

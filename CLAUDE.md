@@ -6,10 +6,10 @@
 
 Two resize APIs with different pipeline architectures:
 
-**Fullframe `Resizer` (H-first):** `src/resize.rs`
-- Processes full image at once: H-filter all rows → intermediate buffer → V-filter all rows
-- Uses i16 integer path for sRGB 4ch, f32 for linear/other layouts
-- Batch kernels: `filter_h_u8_i16_4rows`, `filter_v_all_u8_i16`, `filter_v_all_i16_i16`
+**Fullframe `Resizer` wrapper:** `src/resize.rs`
+- Caches a `StreamingResize` and resets it for each resize call.
+- Feeds input rows and drains output rows through that shared engine.
+- Uses the same working format and axis order as the streaming API.
 
 **Streaming `StreamingResize` (F32 V-first, integer H-first):** `src/streaming.rs`
 - Row-at-a-time: push input rows, pull output rows
@@ -18,7 +18,7 @@ Two resize APIs with different pipeline architectures:
 - Ring buffer is `v_weights.max_taps + 2` slots; F32 rows are `in_width * ch + h_padding` wide and integer rows are `out_width * ch` wide.
 - F32 H-filter runs once per output row; integer H-filter runs once per input row.
 - Three internal paths (selected automatically in `new_inner()`):
-  - **F32**: Full f32 pipeline with linearization/premul. Used for compositing, 3ch, f32 I/O, u16 I/O.
+  - **F32**: f32 arithmetic with an f16 row cache, linearization and premultiplication. Used for compositing, 3ch, f32 I/O, u16 I/O.
   - **I16Srgb**: u8 → `filter_h_u8_to_i16` → i16 ring → `filter_v_row_i16` → fused u8 output. For sRGB 4ch without linearization. ~2× faster.
   - **I16Linear**: i12 → `filter_h_i16_i16` → i16 ring → `filter_v_row_i16` → `linear_i12_to_srgb_u8`. For Rgbx 4ch with linearization, no premul.
 
@@ -268,6 +268,9 @@ one output pixel; other channel counts still take the original path.
 ## Investigation Notes
 
 ### i16 accuracy gap [FIXED]
+
+Historical H-first/V-first investigation. Current `Resizer` delegates to
+`StreamingResize`; `tests/magic_paths.rs` checks exact API agreement.
 Intermediate clamping removed from all i16 kernels. Max diff 52→1.
 **Measured max diff (u8 output):**
 - sRGB-i16 path: 2-6 (downscale), 25 (upscale)

@@ -22,6 +22,7 @@ None.
 
 ### Changed
 
+- Batch eight independent signed-i12 sRGB lookups with the original exact clamping and lookup formula (`a5d1d442`).
 - Expose adjacent-lane parallelism in signed vertical filtering; NEON shares the vectorizable portable loop.
 - Keep four-channel scalar float accumulators and short AVX2 float vertical rows in registers; reuse AVX2 integer vertical weights across 32 components while preserving arithmetic order (`4c1a2657`, `9dee5e5e`, `95c329d6`).
 - Accept the archmage and magetypes 0.9.31 stable release.
