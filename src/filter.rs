@@ -86,6 +86,8 @@ pub enum Filter {
     LegacyIDCTFilter = 31,
     /// Quadratic Magic Kernel with the three-tap Sharp correction (2013).
     MagicKernelSharp2013 = 32,
+    /// Magic Kernel with the seven-tap Sharp correction (2021).
+    MagicKernelSharp2021 = 33,
 }
 
 impl Filter {
@@ -125,6 +127,7 @@ impl Filter {
             NCubicSharp,
             LegacyIDCTFilter,
             MagicKernelSharp2013,
+            MagicKernelSharp2021,
         ]
     }
 
@@ -163,6 +166,7 @@ impl Filter {
             Filter::NCubicSharp => "n_cubic_sharp",
             Filter::LegacyIDCTFilter => "legacy_idct",
             Filter::MagicKernelSharp2013 => "magic_kernel_sharp_2013",
+            Filter::MagicKernelSharp2021 => "magic_kernel_sharp_2021",
         }
     }
 }
@@ -250,6 +254,11 @@ impl InterpolationDetails {
     /// Create interpolation details for a named filter.
     pub fn create(filter: Filter) -> Self {
         match filter {
+            Filter::MagicKernelSharp2021 => Self {
+                window: 4.5,
+                filter_fn: filter_magic_kernel_sharp_2021,
+                ..Default::default()
+            },
             Filter::MagicKernelSharp2013 => Self {
                 window: 2.5,
                 filter_fn: filter_magic_kernel_sharp_2013,
@@ -504,6 +513,25 @@ fn filter_magic_kernel_sharp_2013(d: &InterpolationDetails, x: f64) -> f64 {
         (t - 1.0) * (t - 7.0 / 4.0)
     } else if t < 2.5 {
         -0.125 * (t - 2.5) * (t - 2.5)
+    } else {
+        0.0
+    }
+}
+
+/// Independently expand m convolved with [-1, 6, -35, 204, -35, 6, -1]/144.
+/// See <https://johncostella.com/magic/>; no implementation source used.
+fn filter_magic_kernel_sharp_2021(d: &InterpolationDetails, x: f64) -> f64 {
+    let t = f64_abs(x) / d.blur;
+    if t < 0.5 {
+        577.0 / 576.0 - 239.0 / 144.0 * t * t
+    } else if t < 1.5 {
+        (239.0 + t * (-379.0 + 140.0 * t)) / 144.0
+    } else if t < 2.5 {
+        (-130.0 + t * (113.0 - 24.0 * t)) / 144.0
+    } else if t < 3.5 {
+        (45.0 + t * (-27.0 + 4.0 * t)) / 144.0
+    } else if t < 4.5 {
+        -(t - 4.5) * (t - 4.5) / 288.0
     } else {
         0.0
     }

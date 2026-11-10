@@ -1,6 +1,6 @@
-# Magic Kernel Sharp 2013
+# Magic Kernel Sharp 2013 and 2021
 
-`Filter::MagicKernelSharp2013` is an opt-in direct resampling kernel. Mitchell
+`Filter::MagicKernelSharp2013` and `Filter::MagicKernelSharp2021` are opt-in direct resampling kernels. Mitchell
 remains the comparison baseline; the library default remains Robidoux.
 
 ## Provenance and derivation
@@ -52,7 +52,7 @@ advantage has been established.
 [resamplescope-rs](https://github.com/imazen/resamplescope-rs) can reconstruct
 resizer responses; its documented known-filter matcher includes Mitchell but
 not Magic Kernel Sharp. No resamplescope run was used for the numbers above.
-2021 and multi-pass variants are outside this addition.
+Multi-pass variants are outside this addition.
 
 Validation on 2026-11-10: `cargo test --lib --tests`, strict clippy for the
 library and new integration test, `cargo test --no-default-features --lib`,
@@ -86,3 +86,28 @@ apply `lobe_ratio_goal`. At 257→1021, **0 of 1021** Mitchell weight rows chang
 when requesting sharpen 15. Consequently this table describes f32-path
 sharpening, not current i16-path behavior. The diagnostic reports the number
 without asserting that the bug must remain. Fixing it is outside this comparison.
+
+## Magic Kernel Sharp 2021
+
+The independently expanded 2021 formula composes m with
+[-1, 6, -35, 204, -35, 6, -1]/144. Production uses five quadratic pieces;
+the test oracle sums seven shifted splines. Its support radius is 4.5,
+compared with 2.5 for 2013. No implementation source was consulted or copied.
+
+Identity-grid samples are [-1, 0, 0, 0, 1154, 0, 0, 0, -1]/1152.
+This is closer to identity than 2013, but not mathematically exact identity.
+The wider support can require more convolution taps; speed has not been measured.
+
+Measured 2026-11-10 with the same normalized f32 weight-table procedure:
+
+| Input → output | Mitchell sharpen 15 | Magic 2013 | Magic 2021 |
+|---|---:|---:|---:|
+| 257 → 1021 | 1.176470712 | 1.142857015 | 1.104601771 |
+| 257 → 257 | 1.000000000 | 1.031250000 | 1.000868109 |
+| 257 → 127 | 1.108607737 | 1.101290702 | 1.065072305 |
+| 257 → 63 | 1.092833095 | 1.095590078 | 1.059846469 |
+
+2021 has less step overshoot in these cases. This does not establish a
+photographic quality ranking. Both Magic variants now run through the dense
+image oracle and integer constant-preservation tests. The 2021 formula test
+covers every piece boundary, dense sampling, and partition of unity.

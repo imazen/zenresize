@@ -8,7 +8,7 @@ None.
 
 ### Added
 
-- Opt-in clean-room `MagicKernelSharp2013` filter; independent formula and image-oracle tests, with Mitchell response comparison.
+- Opt-in clean-room `MagicKernelSharp2013` and `MagicKernelSharp2021` filters; independent formula and image-oracle tests, with Mitchell response comparison.
 
 ### Dependency compatibility
 

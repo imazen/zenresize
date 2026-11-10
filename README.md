@@ -55,7 +55,7 @@ All operations work in the streaming API. Crop and padding also work independent
 
 | Operation | What it does | Builder method |
 |-----------|-------------|----------------|
-| **Resize** | Resample to new dimensions with a choice of 32 filters | `.filter(Filter::Lanczos)` |
+| **Resize** | Resample to new dimensions with a choice of 33 filters | `.filter(Filter::Lanczos)` |
 | **Fit** | Aspect-preserving resize to a target box | `.fit(FitMode::Fit, max_w, max_h)` |
 | **Crop** | Extract a rectangular region from the input | `.crop(x, y, w, h)` |
 | **Pad** | Add solid-color border around the output | `.padding(top, right, bottom, left)` |
@@ -69,7 +69,7 @@ The pipeline order is always: **crop** (input side) -> **resize** -> **pad** (ou
 ## Features
 
 - **Crop, resize, and pad** -- independently or combined, streaming or fullframe
-- 32 resampling filters (Lanczos, Mitchell, Robidoux, Ginseng, etc.)
+- 33 resampling filters (Lanczos, Mitchell, Robidoux, Ginseng, etc.)
 - sRGB-aware linear-light processing for correct gamma handling
 - Row-at-a-time streaming API for pipeline integration
 - `Resizer` struct for amortizing weight computation across repeated resizes
@@ -531,7 +531,7 @@ All five transfer functions work with all channel types and layouts:
 
 ## Filters
 
-32 filters covering a range of sharpness/smoothness tradeoffs:
+33 filters covering a range of sharpness/smoothness tradeoffs:
 
 | Filter | Category | Window | Notes |
 |--------|----------|--------|-------|
@@ -539,6 +539,7 @@ All five transfer functions work with all channel types and layouts:
 | `Lanczos2` | Sinc | 2.0 | Less ringing than Lanczos-3. |
 | `Robidoux` | Cubic | 2.0 | **Default.** Balanced sharpness/smoothness. |
 | `RobidouxSharp` | Cubic | 2.0 | More detail, slight ringing. |
+| `MagicKernelSharp2021` | Quadratic | 4.5 | Wider support; smaller identity-scale residual than 2013. |
 | `MagicKernelSharp2013` | Quadratic | 2.5 | Magic Kernel with discrete sharpening; slight residual sharpening at identity scale. |
 | `Mitchell` | Cubic | 2.0 | Mitchell-Netravali (B=1/3, C=1/3). Balanced blur/ringing. |
 | `CatmullRom` | Cubic | 2.0 | Catmull-Rom spline (B=0, C=0.5). |
@@ -559,7 +560,7 @@ Imageflow Sharp variants use a slightly reduced blur factor for tighter kernels.
 use zenresize::Filter;
 
 let f = Filter::default();      // Robidoux
-let all = Filter::all();        // &[Filter] -- all 32 variants
+let all = Filter::all();        // &[Filter] -- all 33 variants
 ```
 
 ## imgref Integration
