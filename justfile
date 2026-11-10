@@ -78,6 +78,14 @@ beta-cohort-check:
 magic-kernel-test:
     cargo test --test magic_kernel -- --nocapture
 
+# Before/after table fingerprint; compare output files from the two revisions.
+weight-fingerprint output:
+    cargo run --release --example weight_fingerprint > {{output}}
+
+# Region-level coverage for the weight construction and adjustment tests.
+weight-coverage output:
+    cargo llvm-cov --lib --json --output-path {{output}} -- weights::tests
+
 # Independent Magic image oracle across all 9 sample pairs and working paths.
 magic-paths-test:
     cargo test --test magic_paths

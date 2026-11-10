@@ -22,6 +22,11 @@ pub const WEIGHT_THRESHOLD: f64 = 2e-8;
 /// Fixed-point precision for i16 weights (14 bits).
 pub const I16_PRECISION: i32 = 14;
 
+// Reserve one integer step for largest-remainder correction after rounding.
+// Positive adjusted weights sum to 1/(1-r), bounding each coefficient.
+pub(crate) const MAX_I16_LOBE_RATIO: f64 =
+    1.0 - (1 << I16_PRECISION) as f64 / (i16::MAX as i32 - 1) as f64;
+
 // =============================================================================
 // Weight table types
 // =============================================================================
@@ -71,96 +76,6 @@ pub struct I16WeightTable {
     pub(crate) expanded_stride: usize,
 }
 
-// Shared by floating-point and fixed-point table construction so lobe controls
-// describe the same filter regardless of the selected pixel pipeline.
-fn lobe_adjustment(filter: &InterpolationDetails) -> (f64, bool) {
-    match filter.lobe_ratio_goal {
-        Some(r) => {
-            let natural = filter.calculate_percent_negative_weight();
-            let desired = (r as f64).clamp(0.0, 0.9999);
-            // Apply adjustment when the desired ratio differs from natural.
-            // Skip if the filter has no negative lobes and we're not asking
-            // to add any (e.g., Box with ratio > 0 — can't amplify what
-            // doesn't exist).
-            let apply = if natural < 1e-10 {
-                // No negative lobes exist — can only flatten (which is already
-                // the natural state) or attempt to sharpen (impossible).
-                false
-            } else {
-                (desired - natural).abs() > 1e-10
-            };
-            (desired, apply)
-        }
-        None => (0.0, false),
-    }
-}
-
-fn normalize_weights(w: &[f64], slice: &mut [f32], desired_ratio: f64, apply_lobe_adj: bool) {
-    if apply_lobe_adj {
-        // Lobe ratio adjustment: separately scale positive and negative
-        // weights so the neg/pos ratio equals desired_ratio.
-        // r=0 zeroes negatives, r<natural softens, r>natural sharpens.
-        // Uses the per-pixel normalized weight sums (compute_pixel_weights
-        // normalizes to sum=1.0, preserving the natural ratio).
-        let mut total_pos = 0.0f64;
-        let mut total_neg = 0.0f64;
-        for &val in w.iter() {
-            if val >= 0.0 {
-                total_pos += val;
-            } else {
-                total_neg += val;
-            }
-        }
-        if total_neg < 0.0 && desired_ratio < 1.0 {
-            if desired_ratio < 1e-10 {
-                // Flatten: zero all negative weights, renormalize positives
-                for v in slice.iter_mut() {
-                    if *v < 0.0 {
-                        *v = 0.0;
-                    }
-                }
-                let f32_sum: f32 = slice.iter().filter(|v| **v > 0.0).sum();
-                if f32_sum != 0.0 {
-                    let inv = 1.0f32 / f32_sum;
-                    for v in slice.iter_mut() {
-                        *v *= inv;
-                    }
-                }
-            } else {
-                let target_pos = 1.0 / (1.0 - desired_ratio);
-                let target_neg = desired_ratio * -target_pos;
-                let pos_factor = (target_pos / total_pos) as f32;
-                let neg_factor = (target_neg / total_neg) as f32;
-                for v in slice.iter_mut() {
-                    if *v < 0.0 {
-                        *v *= neg_factor;
-                    } else {
-                        *v *= pos_factor;
-                    }
-                }
-            }
-        } else {
-            // No negative weights — standard normalization
-            let f32_sum: f32 = slice.iter().sum();
-            if f32_sum != 0.0 {
-                let inv = 1.0f32 / f32_sum;
-                for v in slice.iter_mut() {
-                    *v *= inv;
-                }
-            }
-        }
-    } else {
-        // Standard normalization: renormalize f32 weights to sum to 1.0
-        let f32_sum: f32 = slice.iter().sum();
-        if f32_sum != 0.0 {
-            let inv = 1.0f32 / f32_sum;
-            for v in slice.iter_mut() {
-                *v *= inv;
-            }
-        }
-    }
-}
-
 // =============================================================================
 // F32WeightTable
 // =============================================================================
@@ -179,7 +94,29 @@ impl F32WeightTable {
         let downscale_factor = scale.min(1.0);
         let effective_window = filter.window / downscale_factor;
 
-        let (desired_ratio, apply_lobe_adj) = lobe_adjustment(filter);
+        // Compute lobe ratio adjustment targets.
+        // When lobe_ratio_goal is Some(r), the desired neg/pos ratio is r.
+        // r=0 flattens negatives, r<natural softens, r>natural sharpens.
+        // Clamped to [0, 1) since r≥1 would make weights diverge.
+        let (desired_ratio, apply_lobe_adj) = match filter.lobe_ratio_goal {
+            Some(r) => {
+                let natural = filter.calculate_percent_negative_weight();
+                let desired = (r as f64).clamp(0.0, 0.9999);
+                // Apply adjustment when the desired ratio differs from natural.
+                // Skip if the filter has no negative lobes and we're not asking
+                // to add any (e.g., Box with ratio > 0 — can't amplify what
+                // doesn't exist).
+                let apply = if natural < 1e-10 {
+                    // No negative lobes exist — can only flatten (which is already
+                    // the natural state) or attempt to sharpen (impossible).
+                    false
+                } else {
+                    (desired - natural).abs() > 1e-10
+                };
+                (desired, apply)
+            }
+            None => (0.0, false),
+        };
 
         // First pass: compute weights and find max_taps
         let mut temp_weights: Vec<f64> = Vec::new();
@@ -215,7 +152,69 @@ impl F32WeightTable {
 
             let slice = &mut weights_flat[offset..offset + w.len()];
 
-            normalize_weights(w, slice, desired_ratio, apply_lobe_adj);
+            if apply_lobe_adj {
+                // Lobe ratio adjustment: separately scale positive and negative
+                // weights so the neg/pos ratio equals desired_ratio.
+                // r=0 zeroes negatives, r<natural softens, r>natural sharpens.
+                // Uses the per-pixel normalized weight sums (compute_pixel_weights
+                // normalizes to sum=1.0, preserving the natural ratio).
+                let mut total_pos = 0.0f64;
+                let mut total_neg = 0.0f64;
+                for &val in w.iter() {
+                    if val >= 0.0 {
+                        total_pos += val;
+                    } else {
+                        total_neg += val;
+                    }
+                }
+                if total_neg < 0.0 && desired_ratio < 1.0 {
+                    if desired_ratio < 1e-10 {
+                        // Flatten: zero all negative weights, renormalize positives
+                        for v in slice.iter_mut() {
+                            if *v < 0.0 {
+                                *v = 0.0;
+                            }
+                        }
+                        let f32_sum: f32 = slice.iter().filter(|v| **v > 0.0).sum();
+                        if f32_sum != 0.0 {
+                            let inv = 1.0f32 / f32_sum;
+                            for v in slice.iter_mut() {
+                                *v *= inv;
+                            }
+                        }
+                    } else {
+                        let target_pos = 1.0 / (1.0 - desired_ratio);
+                        let target_neg = desired_ratio * -target_pos;
+                        let pos_factor = (target_pos / total_pos) as f32;
+                        let neg_factor = (target_neg / total_neg) as f32;
+                        for v in slice.iter_mut() {
+                            if *v < 0.0 {
+                                *v *= neg_factor;
+                            } else {
+                                *v *= pos_factor;
+                            }
+                        }
+                    }
+                } else {
+                    // No negative weights — standard normalization
+                    let f32_sum: f32 = slice.iter().sum();
+                    if f32_sum != 0.0 {
+                        let inv = 1.0f32 / f32_sum;
+                        for v in slice.iter_mut() {
+                            *v *= inv;
+                        }
+                    }
+                }
+            } else {
+                // Standard normalization: renormalize f32 weights to sum to 1.0
+                let f32_sum: f32 = slice.iter().sum();
+                if f32_sum != 0.0 {
+                    let inv = 1.0f32 / f32_sum;
+                    for v in slice.iter_mut() {
+                        *v *= inv;
+                    }
+                }
+            }
         }
 
         Self {
@@ -277,6 +276,38 @@ impl F32WeightTable {
     }
 }
 
+/// Adjust only requested integer lobes. The f32 constructor is deliberately
+/// unchanged: these operations mirror its positive/negative rescaling and f32
+/// rounding before the existing Q14 quantizer. Unmodified integer filters keep
+/// the original f64-to-Q14 path without any extra allocation or row pass.
+fn adjust_integer_lobes(weights: &mut [f64], ratio: f64) {
+    let positive: f64 = weights.iter().filter(|&&v| v >= 0.0).sum();
+    let negative: f64 = weights.iter().filter(|&&v| v < 0.0).sum();
+    if negative >= 0.0 {
+        return;
+    }
+    if ratio < 1e-10 {
+        let sum: f32 = weights.iter().map(|&v| (v as f32).max(0.0)).sum();
+        let inv = if sum != 0.0 { 1.0f32 / sum } else { 1.0 };
+        for v in weights {
+            *v = f64::from((*v as f32).max(0.0) * inv);
+        }
+    } else {
+        let target_positive = 1.0 / (1.0 - ratio);
+        let pos_factor = (target_positive / positive) as f32;
+        let neg_factor = (-ratio * target_positive / negative) as f32;
+        for v in weights {
+            let adjusted = (*v as f32) * if *v < 0.0 { neg_factor } else { pos_factor };
+            let quantized = (adjusted as f64 * (1 << I16_PRECISION) as f64).round();
+            assert!(
+                ((i16::MIN as i32 + 1) as f64..=(i16::MAX as i32 - 1) as f64).contains(&quantized),
+                "adjusted weight exceeds signed Q14; use F32WeightTable"
+            );
+            *v = f64::from(adjusted);
+        }
+    }
+}
+
 // =============================================================================
 // I16WeightTable
 // =============================================================================
@@ -295,8 +326,11 @@ impl I16WeightTable {
         let downscale_factor = scale.min(1.0);
         let effective_window = filter.window / downscale_factor;
 
-        let (desired_ratio, apply_lobe_adj) = lobe_adjustment(filter);
-        let mut adjusted = Vec::<f32>::new();
+        let adjustment = filter.lobe_ratio_goal.and_then(|r| {
+            let natural = filter.calculate_percent_negative_weight();
+            let desired = (r as f64).clamp(0.0, 0.9999);
+            (natural >= 1e-10 && (desired - natural).abs() > 1e-10).then_some(desired)
+        });
         let mut temp_weights: Vec<f64> = Vec::new();
         let mut left_vec = Vec::with_capacity(out_size as usize);
         let mut all_weights: Vec<Vec<i16>> = Vec::with_capacity(out_size as usize);
@@ -321,17 +355,8 @@ impl I16WeightTable {
             );
             max_taps = max_taps.max(tap_count);
 
-            if apply_lobe_adj {
-                adjusted.clear();
-                adjusted.extend(temp_weights.iter().map(|&v| v as f32));
-                normalize_weights(&temp_weights, &mut adjusted, desired_ratio, true);
-                for (dst, &value) in temp_weights.iter_mut().zip(&adjusted) {
-                    assert!(
-                        (-2.0..2.0).contains(&value),
-                        "adjusted weight exceeds signed Q14; use F32WeightTable"
-                    );
-                    *dst = value as f64;
-                }
+            if let Some(ratio) = adjustment {
+                adjust_integer_lobes(&mut temp_weights, ratio);
             }
 
             // Convert to fixed-point i16 using largest-remainder method.
@@ -579,6 +604,67 @@ mod tests {
     use crate::filter::{Filter, InterpolationDetails};
     #[cfg(not(feature = "std"))]
     use alloc::{format, string::String, vec, vec::Vec};
+
+    #[test]
+    #[should_panic(expected = "adjusted weight exceeds signed Q14")]
+    fn integer_adjustment_reserves_largest_remainder_headroom() {
+        // Below 0.5, yet a near-two coefficient leaves no correction headroom.
+        adjust_integer_lobes(&mut [-0.1, 1.2, -0.1], 0.49999);
+    }
+
+    #[test]
+    fn integer_padding_handles_even_and_odd_supports() {
+        for &filter in Filter::all() {
+            for n in [1, 2, 3, 7] {
+                for out in [1, 2, 3, 5] {
+                    let details = InterpolationDetails::create(filter);
+                    let table = I16WeightTable::new(n, out, &details);
+                    assert_eq!(table.max_taps % 2, 0);
+                    for x in 0..out as usize {
+                        assert!(table.tap_count(x) <= table.max_taps);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn empty_support_rows_remain_empty_in_float_tables() {
+        for goal in [None, Some(0.0)] {
+            let mut filter = InterpolationDetails::create(Filter::Mitchell).with_blur(0.1);
+            filter.lobe_ratio_goal = goal;
+            let table = F32WeightTable::new(2, 11, &filter);
+            assert!((0..11).any(|x| table.weights(x).is_empty()));
+            for x in 0..11 {
+                assert!(table.weights(x).iter().all(|v| v.is_finite()));
+            }
+        }
+    }
+
+    #[test]
+    fn integer_adjustment_zero_positive_and_unrepresentable_rows() {
+        adjust_integer_lobes(&mut [], 0.12);
+        let mut positive = [0.25, 0.75];
+        adjust_integer_lobes(&mut positive, 0.12);
+        assert_eq!(positive, [0.25, 0.75]);
+        let mut flat = [-0.1, 1.2, -0.1];
+        adjust_integer_lobes(&mut flat, 0.0);
+        assert_eq!(flat, [0.0, 1.0, 0.0]);
+        let mut only_negative = [-0.1, -0.2];
+        adjust_integer_lobes(&mut only_negative, 0.0);
+        assert_eq!(only_negative, [0.0, 0.0]);
+        let plain = InterpolationDetails::create(Filter::Box);
+        let adjusted = plain.clone().with_lobe_ratio(0.15);
+        let a = I16WeightTable::new(17, 65, &plain);
+        let b = I16WeightTable::new(17, 65, &adjusted);
+        assert_eq!(a.weights_flat, b.weights_flat);
+    }
+
+    #[test]
+    #[should_panic(expected = "adjusted weight exceeds signed Q14")]
+    fn integer_adjustment_rejects_unrepresentable_coefficient() {
+        adjust_integer_lobes(&mut [-0.1, 1.2, -0.1], 0.9);
+    }
 
     #[test]
     fn integer_lobe_controls_match_float_weights() {

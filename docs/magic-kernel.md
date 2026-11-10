@@ -141,9 +141,35 @@ The earlier 0/1021 changed-row observations above describe the pre-fix state.
 Tests now require sharpen 12 and 15 to change i16 weights and compare adjusted
 coefficients to f32 within one Q14 step while checking exact weight sums.
 Pixel tests exercise I16Srgb and I16Linear through both resize APIs.
-Requested lobe ratios >= 0.5 select f32: positive coefficients can reach 2,
+Requested lobe ratios near 0.5 select f32: positive coefficients can reach 2,
 which is not representable in signed Q14. Direct I16WeightTable construction
 rejects an unrepresentable adjusted coefficient rather than saturating it.
+
+### Weight-construction review
+
+The PR #28 follow-up keeps `F32WeightTable`'s original implementation
+byte-for-byte unchanged and adds integer-side adjustment without moving the
+f32 normalization code. No additional row allocation is required.
+
+The executable-region coverage audit is recorded in
+[`benchmarks/weight_coverage_2026-11-10.json`](../benchmarks/weight_coverage_2026-11-10.json).
+Both constructors have 100% region coverage before and after; the new integer
+adjustment helper also has 100%. This is LLVM region coverage, not a branch
+or MC/DC claim. The audit exercises narrow support, empty rows, all-negative
+flattening, positive-only rows, odd/even padding, and unrepresentable adjusted
+coefficients, in addition to the normal filter matrix.
+
+`just weight-fingerprint OUTPUT` records all table fields for all 33 filters,
+42 dimension pairs and 10 controls. The 15,246 f32/unadjusted-i16 table
+fingerprints match the pre-PR source byte-for-byte. The report records their
+SHA-256 and source identities. Requested integer adjustments are tested
+separately against f32 coefficients within one Q14 step.
+
+The ratio cutoff reserves one Q14 step for largest-remainder correction:
+`r < 1 - 16384/32766`. Direct integer table construction checks the rounded
+coefficient with that same one-step headroom. A ratio just below 0.5 can
+otherwise round to the signed limit before correction; regression tests
+exercise this boundary as well as the larger ratios.
 
 ## Pixel-path coverage and alpha overshoot
 
