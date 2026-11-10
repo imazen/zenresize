@@ -2965,6 +2965,14 @@ mod tests {
 
     #[test]
     fn fused_integer_output_matches_exact_division() {
+        // The justfile runs this filtered test in its own process for each tier.
+        #[cfg(feature = "std")]
+        if std::env::var_os("ZENRESIZE_MAGIC_SCALAR").is_some() {
+            #[cfg(target_arch = "x86_64")]
+            archmage::X64V3Token::dangerously_disable_token_process_wide(true).unwrap();
+            #[cfg(target_arch = "aarch64")]
+            archmage::NeonToken::dangerously_disable_token_process_wide(true).unwrap();
+        }
         // Every nonnegative i16 alpha/color pair; negative lanes and the
         // 1/2/3-pixel tail are covered separately below.
         let mut input = vec![0i16; 32768 * 4];
@@ -2986,6 +2994,36 @@ mod tests {
                     [expected, expected, expected, alpha.min(255) as u8],
                     "a={alpha} c={color}"
                 );
+            }
+        }
+        // Mix different signed colors and alphas within each SIMD block;
+        // the exhaustive domain above intentionally holds alpha fixed per row.
+        let mut state = 0x12345678u32;
+        for width in 1..=33 {
+            let input: Vec<i16> = (0..width * 4)
+                .map(|_| {
+                    state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                    (state >> 16) as i16
+                })
+                .collect();
+            let mut output = vec![0; input.len()];
+            simd::encode_i16_output(&input, &mut output, true);
+            for (src, dst) in input
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(output.as_chunks::<4>().0)
+            {
+                let a = i32::from(src[3]).max(0);
+                for c in 0..3 {
+                    let expected = if a == 0 {
+                        0
+                    } else {
+                        ((i32::from(src[c]).max(0) * 255 + a / 2) / a).min(255) as u8
+                    };
+                    assert_eq!(dst[c], expected, "mixed a={a} c={c}");
+                }
+                assert_eq!(dst[3], a.min(255) as u8);
             }
         }
         for n in [0, 1, 2, 3, 4, 5, 7, 8, 9] {

@@ -95,6 +95,17 @@ magic-paths-test:
 alpha-output-bench *args:
     cargo bench --bench alpha_output -- {{args}}
 
-# Full region coverage for the lobe/normalization tests (reports outside git).
-weight-coverage output:
-    cargo llvm-cov --lib --json --output-path {{output}} -- weights::tests
+
+# Exhaustive exact-division oracle in separate native and forced-scalar processes.
+alpha-output-exact:
+    cargo test --lib fused_integer_output_matches_exact_division -- --test-threads=1
+    ZENRESIZE_MAGIC_SCALAR=1 cargo test --lib fused_integer_output_matches_exact_division -- --test-threads=1
+
+# Build the same benchmark for ARM locally; copy only binaries to a worker.
+alpha-output-arm-build:
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc cargo bench --target aarch64-unknown-linux-gnu --bench alpha_output --no-run
+
+# Execute the portable SIMD image oracle and exact alpha-output test under WASI.
+magic-wasm-test:
+    CARGO_TARGET_WASM32_WASIP1_RUNNER=wasmtime RUSTFLAGS="-C target-feature=+simd128" cargo test --target wasm32-wasip1 --test magic_paths
+    CARGO_TARGET_WASM32_WASIP1_RUNNER=wasmtime RUSTFLAGS="-C target-feature=+simd128" cargo test --target wasm32-wasip1 --lib fused_integer_output_matches_exact_division -- --test-threads=1
