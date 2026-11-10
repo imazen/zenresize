@@ -282,7 +282,7 @@ Intermediate clamping removed from all i16 kernels. Max diff 52→1.
 
 ## Known Bugs
 
-- `I16WeightTable::new` ignores `lobe_ratio_goal`, so integer paths do not
-  apply `resize_sharpen(15)`. Verified 2026-11-10: Mitchell 257→1021 has
-  0/1021 changed i16 weight rows. The f32 builder applies the adjustment.
-  Reproduce with `just magic-kernel-test`; see `docs/magic-kernel.md`.
+- Fixed in the stacked integer-sharpening change: `I16WeightTable::new`
+  previously ignored `lobe_ratio_goal`. Both builders now share adjustment
+  math; integer regression and pixel-path tests cover sharpen 12 and 15.
+  Ratios >= 0.5 select f32 to avoid unrepresentable Q14 coefficients.

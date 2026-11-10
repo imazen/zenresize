@@ -661,14 +661,20 @@ impl<B: Background> StreamingResize<B> {
         let output_tf = config.effective_output_transfer();
         let is_u8_io = config.input.channel_type() == ChannelType::U8
             && config.output.channel_type() == ChannelType::U8;
-        let path = if !active_composite
+        // For adjusted ratio r, positive weights sum to 1/(1-r). At r >=
+        // 1/2 a coefficient can reach 2, outside signed Q14 i16. Use f32
+        // rather than saturating a coefficient and silently changing the filter.
+        let integer_lobes_fit = filter.lobe_ratio_goal.is_none_or(|r| r < 0.5);
+        let path = if integer_lobes_fit
+            && !active_composite
             && is_u8_io
             && input_tf == TransferFunction::Linear
             && output_tf == TransferFunction::Linear
             && channels == 4
         {
             StreamingPath::I16Srgb
-        } else if !active_composite
+        } else if integer_lobes_fit
+            && !active_composite
             && is_u8_io
             && input_tf == TransferFunction::Srgb
             && output_tf == TransferFunction::Srgb

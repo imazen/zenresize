@@ -6,6 +6,10 @@
 
 None.
 
+### Fixed
+
+- Honor lobe-ratio controls in integer weight tables; use f32 for extreme sharpening ratios.
+
 ### Added
 
 - Opt-in clean-room `MagicKernelSharp` (2013) and `MagicKernelSharp2021` filters; independent formula and image-oracle tests, with Mitchell response comparison.

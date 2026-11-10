@@ -133,3 +133,14 @@ nonidentity cases tested. This is a ringing measurement, not a photographic
 quality ranking. The i16 diagnostic also found 0/1021 changed weight rows
 for sharpen 12, confirming that the existing ignored-adjustment bug applies
 to this setting as well.
+
+## Integer sharpening fix
+
+The stacked fix shares lobe adjustment math between f32 and i16 builders.
+The earlier 0/1021 changed-row observations above describe the pre-fix state.
+Tests now require sharpen 12 and 15 to change i16 weights and compare adjusted
+coefficients to f32 within one Q14 step while checking exact weight sums.
+Pixel tests exercise I16Srgb and I16Linear through both resize APIs.
+Requested lobe ratios >= 0.5 select f32: positive coefficients can reach 2,
+which is not representable in signed Q14. Direct I16WeightTable construction
+rejects an unrepresentable adjusted coefficient rather than saturating it.
