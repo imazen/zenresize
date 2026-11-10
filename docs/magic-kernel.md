@@ -141,7 +141,7 @@ The earlier 0/1021 changed-row observations above describe the pre-fix state.
 Tests now require sharpen 12 and 15 to change i16 weights and compare adjusted
 coefficients to f32 within one Q14 step while checking exact weight sums.
 Pixel tests exercise I16Srgb and I16Linear through both resize APIs.
-Requested lobe ratios >= 0.5 select f32: positive coefficients can reach 2,
+Requested lobe ratios near 0.5 select f32: positive coefficients can reach 2,
 which is not representable in signed Q14. Direct I16WeightTable construction
 rejects an unrepresentable adjusted coefficient rather than saturating it.
 
@@ -164,3 +164,9 @@ coefficients, in addition to the normal filter matrix.
 fingerprints match the pre-PR source byte-for-byte. The report records their
 SHA-256 and source identities. Requested integer adjustments are tested
 separately against f32 coefficients within one Q14 step.
+
+The ratio cutoff reserves one Q14 step for largest-remainder correction:
+`r < 1 - 16384/32766`. Direct integer table construction checks the rounded
+coefficient with that same one-step headroom. A ratio just below 0.5 can
+otherwise round to the signed limit before correction; regression tests
+exercise this boundary as well as the larger ratios.

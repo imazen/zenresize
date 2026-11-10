@@ -22,6 +22,11 @@ pub const WEIGHT_THRESHOLD: f64 = 2e-8;
 /// Fixed-point precision for i16 weights (14 bits).
 pub const I16_PRECISION: i32 = 14;
 
+// Reserve one integer step for largest-remainder correction after rounding.
+// Positive adjusted weights sum to 1/(1-r), bounding each coefficient.
+pub(crate) const MAX_I16_LOBE_RATIO: f64 =
+    1.0 - (1 << I16_PRECISION) as f64 / (i16::MAX as i32 - 1) as f64;
+
 // =============================================================================
 // Weight table types
 // =============================================================================
@@ -293,8 +298,9 @@ fn adjust_integer_lobes(weights: &mut [f64], ratio: f64) {
         let neg_factor = (-ratio * target_positive / negative) as f32;
         for v in weights {
             let adjusted = (*v as f32) * if *v < 0.0 { neg_factor } else { pos_factor };
+            let quantized = (adjusted as f64 * (1 << I16_PRECISION) as f64).round();
             assert!(
-                (-2.0..2.0).contains(&adjusted),
+                ((i16::MIN as i32 + 1) as f64..=(i16::MAX as i32 - 1) as f64).contains(&quantized),
                 "adjusted weight exceeds signed Q14; use F32WeightTable"
             );
             *v = f64::from(adjusted);
@@ -598,6 +604,13 @@ mod tests {
     use crate::filter::{Filter, InterpolationDetails};
     #[cfg(not(feature = "std"))]
     use alloc::{format, string::String, vec, vec::Vec};
+
+    #[test]
+    #[should_panic(expected = "adjusted weight exceeds signed Q14")]
+    fn integer_adjustment_reserves_largest_remainder_headroom() {
+        // Below 0.5, yet a near-two coefficient leaves no correction headroom.
+        adjust_integer_lobes(&mut [-0.1, 1.2, -0.1], 0.49999);
+    }
 
     #[test]
     fn integer_padding_handles_even_and_odd_supports() {

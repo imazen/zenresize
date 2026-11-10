@@ -45,7 +45,7 @@ fn integer_sharpen_changes_pixels_in_both_pipelines() {
             actual.extend_from_slice(row);
         }
         assert_eq!(actual, expected);
-        for percent in [50.0, 90.0, 100.0] {
+        for percent in [49.999, 50.0, 90.0, 100.0] {
             assert_eq!(
                 StreamingResize::new(&make(percent)).working_format(),
                 WorkingFormat::F32
