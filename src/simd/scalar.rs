@@ -12,6 +12,26 @@ pub(crate) fn filter_h_row_f32_scalar(
     weights: &F32WeightTable,
     channels: usize,
 ) {
+    if channels == 4 {
+        // Four independent lanes, with the same tap order and separate
+        // multiply/add as the generic body. Fixed arrays keep accumulators
+        // in registers and expose portable SIMD without aliasing output.
+        let pixels = input.as_chunks::<4>().0;
+        let out_pixels = output[..weights.len() * 4].as_chunks_mut::<4>().0;
+        for (out_x, dst) in out_pixels.iter_mut().enumerate() {
+            let left = weights.left[out_x] as usize;
+            let mut acc = [0.0f32; 4];
+            for (t, &weight) in weights.weights(out_x).iter().enumerate() {
+                let pixel = pixels[left + t];
+                for c in 0..4 {
+                    acc[c] += pixel[c] * weight;
+                }
+            }
+            *dst = acc;
+        }
+        return;
+    }
+
     let out_width = weights.len();
 
     for out_x in 0..out_width {
@@ -1110,6 +1130,73 @@ mod integer_vertical_tests {
                         dispatched[x], expected,
                         "native width={width} taps={taps} x={x}"
                     );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod float_horizontal_tests {
+    use super::*;
+    use crate::filter::{Filter, InterpolationDetails};
+    #[cfg(not(feature = "std"))]
+    use alloc::{vec, vec::Vec};
+
+    #[test]
+    fn four_channel_float_matches_original_order() {
+        for &filter in Filter::all() {
+            for (iw, ow) in [(1, 1), (3, 7), (17, 9), (9, 17)] {
+                let weights = F32WeightTable::new(iw, ow, &InterpolationDetails::create(filter));
+                for ch in [0, 1, 2, 3, 4, 5] {
+                    for special in [false, true] {
+                        let values = if special {
+                            [
+                                f32::NEG_INFINITY,
+                                f32::INFINITY,
+                                f32::from_bits(0x7fc01234),
+                                -0.0,
+                                f32::from_bits(1),
+                                -f32::from_bits(1),
+                                f32::MAX,
+                                f32::MIN,
+                            ]
+                        } else {
+                            [
+                                -0.0,
+                                0.0,
+                                0.3,
+                                -0.7,
+                                1e20,
+                                -1e20,
+                                f32::MIN_POSITIVE,
+                                -f32::MIN_POSITIVE,
+                            ]
+                        };
+                        let input: Vec<f32> = (0..iw as usize * ch)
+                            .map(|i| values[i % values.len()])
+                            .collect();
+                        let mut expected = vec![17.0f32; ow as usize * ch + 7];
+                        // Original generic loop, retained as the arithmetic oracle.
+                        for x in 0..ow as usize {
+                            let left = weights.left[x] as usize;
+                            for c in 0..ch {
+                                expected[x * ch + c] = 0.0;
+                            }
+                            for (t, &w) in weights.weights(x).iter().enumerate() {
+                                for c in 0..ch {
+                                    expected[x * ch + c] += input[(left + t) * ch + c] * w;
+                                }
+                            }
+                        }
+                        let mut actual = vec![17.0f32; expected.len()];
+                        filter_h_row_f32_scalar(ScalarToken, &input, &mut actual, &weights, ch);
+                        assert_eq!(
+                            actual.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                            expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                            "{filter:?} {iw}->{ow} ch={ch} special={special}"
+                        );
+                    }
                 }
             }
         }
