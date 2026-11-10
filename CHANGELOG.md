@@ -8,6 +8,8 @@ None.
 
 ### Fixed
 
+- Preserve overshooting filtered alpha during integer unpremultiplication in direct and paired output rows.
+
 - Honor lobe-ratio controls in integer weight tables; use f32 for extreme sharpening ratios.
 
 ### Added

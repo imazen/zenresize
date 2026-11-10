@@ -48,6 +48,26 @@ use crate::weights::{F32WeightTable, I16WeightTable};
 use whereat::{At, ResultAtExt, at};
 use zenpixels::{AlphaMode, ChannelType, TransferFunction};
 
+// Negative lobes can push alpha above 255. Keep that value as the divisor:
+// clamping alpha before unpremultiply brightens RGB. The SIMD result remains
+// valid for in-range alpha; repair only overshooting pixels using signed
+// intermediates, with the same round-to-nearest integer division convention.
+fn repair_overshoot_alpha(filtered: &[i16], output: &mut [u8]) {
+    for (src, dst) in filtered
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(output.as_chunks_mut::<4>().0)
+    {
+        let alpha = src[3] as i32;
+        if alpha > 255 {
+            for c in 0..3 {
+                dst[c] = ((src[c] as i32 * 255 + alpha / 2) / alpha).clamp(0, 255) as u8;
+            }
+        }
+    }
+}
+
 /// Estimate the maximum filter tap count for a given dimension and filter.
 ///
 /// Used to decide whether the i16 integer pipeline would accumulate
@@ -2546,6 +2566,10 @@ impl<B: Background> StreamingResize<B> {
         }
         if self.needs_premul {
             simd::unpremultiply_u8_row(&mut dst[..out_row_len]);
+            repair_overshoot_alpha(
+                &self.temp_v_output_i16[..out_row_len],
+                &mut dst[..out_row_len],
+            );
         }
         self.output_rows_produced += 1;
 
@@ -2576,6 +2600,10 @@ impl<B: Background> StreamingResize<B> {
             }
             if self.needs_premul {
                 simd::unpremultiply_u8_row(&mut self.paired_row_buf[..out_row_len]);
+                repair_overshoot_alpha(
+                    &self.temp_v_output_i16[..out_row_len],
+                    &mut self.paired_row_buf[..out_row_len],
+                );
             }
             self.paired_row_ready = true;
         }

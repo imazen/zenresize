@@ -286,3 +286,8 @@ Intermediate clamping removed from all i16 kernels. Max diff 52→1.
   previously ignored `lobe_ratio_goal`. Both builders now share adjustment
   math; integer regression and pixel-path tests cover sharpen 12 and 15.
   Ratios >= 0.5 select f32 to avoid unrepresentable Q14 coefficients.
+
+- Fixed in the stacked Magic path-coverage change: integer output clamped
+  alpha before unpremultiplication when negative lobes pushed it above 255.
+  Direct and paired rows now divide by the signed filtered alpha. The
+  varying-alpha dense oracle in `tests/magic_paths.rs` reproduces the bug.
