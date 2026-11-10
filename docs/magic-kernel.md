@@ -136,7 +136,7 @@ to this setting as well.
 
 ## Integer sharpening fix
 
-The stacked fix shares lobe adjustment math between f32 and i16 builders.
+The stacked fix applies matching lobe adjustment math in the i16 builder.
 The earlier 0/1021 changed-row observations above describe the pre-fix state.
 Tests now require sharpen 12 and 15 to change i16 weights and compare adjusted
 coefficients to f32 within one Q14 step while checking exact weight sums.
@@ -190,12 +190,33 @@ this is not a bit-exact f64-reference claim.
 The matrix exposed a real integer output bug: negative lobes can push filtered
 alpha above 255. Clamping that alpha before unpremultiplication brightened
 RGB. Both direct and paired output rows now retain the unclamped signed alpha
-as the divisor and clamp the final result. In-range alpha keeps the existing
-SIMD implementation. The varying-alpha oracle fails without this repair.
+as the divisor and clamp the final result. Output conversion and
+unpremultiplication are fused in `src/simd/output.rs`; there is no separate
+overshoot repair traversal. AVX2 and WASM use packed integer-to-float division
+and explicit saturating vector narrowing. NEON deinterleaves channel planes,
+divides RGB only, and interleaves packed bytes. Opaque rows bypass division.
+The varying-alpha oracle fails without preserving the signed divisor.
 
-Native dispatch and forced scalar both pass locally on x86-64. CI runs the
-same oracle with native and forced-scalar dispatch on supported integration
-lanes. Dedicated AVX-512, NEON and WASM execution has not been measured locally;
-Windows ARM currently runs library tests only under the existing CI policy.
+The scalar body shares one 24-bit integer reciprocal across RGB. Because the
+numerator is below 2^23, multiplying by floor(2^24/alpha) underestimates the
+integer quotient by at most one; one integer comparison corrects it exactly.
+SIMD division has exact f32 numerators and sufficient precision below the
+255 saturation boundary to truncate to the same result. The exhaustive test
+checks every nonnegative i16 color/alpha pair, signed inputs, and vector tails
+against integer division. `just alpha-output-exact` runs native and scalar.
+
+Profiling identified scalar vertical filtering as another ARM bottleneck.
+The portable vertical body now accumulates eight adjacent components per tap,
+keeping the original tap order, rounding and signed intermediate semantics.
+NEON uses this same loop: the compiler emits widening NEON multiply-adds.
+Short rows retain the original dot product, including an exact unit-weight
+copy. An independent i64 dot-product test covers signed values, padding,
+zero taps, short rows, full blocks and tails.
+
+Native and forced-scalar execution are checked on x86-64 and ARM Neoverse-N1;
+WASM SIMD executes under Wasmtime. CI also executes the WASM image oracle and
+exhaustive conversion test. Dedicated AVX-512 output kernels are not added;
+that tier dispatches this operation to AVX2. Windows ARM currently runs library
+tests only under the existing CI policy.
 Mask/compositing behavior has existing generic tests; this matrix does not
 add a separate Magic-specific mask/compositing oracle.
