@@ -286,6 +286,14 @@ Intermediate clamping removed from all i16 kernels. Max diff 52→1.
 
 ## Known Bugs
 
+- Published zenblend 0.1.3 expands partial mask spans into mask-buffer
+  positions that `RoundedRectMask::mask_spans` leaves unwritten. On x86-64,
+  `just mask-span-probe` reproduces transparent pixels where identical
+  full-row coverage is opaque (17×17, radius 5.5, first at (5, 0)).
+  PR 24 carries a temporary dependency patch for this issue, but also
+  introduces a separate low-alpha straight-color regression. See
+  [the PR 24 investigation](docs/pr24-review.md).
+
 - Fixed in the stacked integer-sharpening change: `I16WeightTable::new`
   previously ignored `lobe_ratio_goal`. Both builders now share adjustment
   math; integer regression and pixel-path tests cover sharpen 12 and 15.

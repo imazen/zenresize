@@ -131,3 +131,11 @@ convolution-exact:
 # Exact signed LUT mapping and before/after region audit.
 lut-coverage output:
     cargo llvm-cov --lib --json --output-path {{output}} -- packed_i12_lut_matches_every_signed_input_and_tail
+
+# Straight-color preservation at low mask coverage; includes SIMD blocks and paired rows.
+mask-low-alpha-test:
+    cargo test --test mask_low_alpha -- --nocapture
+
+# Compare optimized mask spans with a full-row source using identical coverage.
+mask-span-probe:
+    cargo run --example mask_span_probe
