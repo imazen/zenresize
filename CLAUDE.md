@@ -285,9 +285,16 @@ Intermediate clamping removed from all i16 kernels. Max diff 52→1.
 - Fixed in the stacked integer-sharpening change: `I16WeightTable::new`
   previously ignored `lobe_ratio_goal`. Both builders now share adjustment
   math; integer regression and pixel-path tests cover sharpen 12 and 15.
-  Ratios >= 0.5 select f32 to avoid unrepresentable Q14 coefficients.
+  Ratios >= `1 - 16384/32766` select f32, reserving a Q14 step for
+  largest-remainder correction as well as avoiding unrepresentable coefficients.
 
 - Fixed in the stacked Magic path-coverage change: integer output clamped
   alpha before unpremultiplication when negative lobes pushed it above 255.
   Direct and paired rows now divide by the signed filtered alpha. The
   varying-alpha dense oracle in `tests/magic_paths.rs` reproduces the bug.
+
+- The initial signed-alpha correction added a separate repair traversal. The
+  fused encoder in `src/simd/output.rs` converts signed intermediate values
+  directly to straight-alpha bytes with AVX2/NEON/WASM dispatch and exact
+  scalar division. `benches/alpha_output.rs` compares preallocated end-to-end
+  resizes against a frozen executable, including opaque and RGBX controls.

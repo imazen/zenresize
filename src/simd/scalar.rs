@@ -1078,15 +1078,17 @@ mod integer_vertical_tests {
             let mut out = vec![0; width];
             filter_v_row_i16_scalar(ScalarToken, &[&data], &mut out, &[1 << I16_PRECISION]);
             assert_eq!(out, data);
+            crate::simd::filter_v_row_i16(&[&data], &mut out, &[1 << I16_PRECISION]);
+            assert_eq!(out, data);
         }
         let mut state = 0x9e3779b9u32;
         for width in [0, 1, 3, 4, 7, 8, 9, 15, 16, 17, 33, 64, 129] {
-            for taps in [0, 1, 2, 3, 8, 17, 64] {
+            for taps in [0, 1, 2, 3, 8, 16, 17, 32, 33, 64, 127, 128, 129, 257] {
                 let mut next = || {
                     state = state.wrapping_mul(1664525).wrapping_add(1013904223);
                     (state >> 16) as i16
                 };
-                let weights: Vec<i16> = (0..taps).map(|_| next() >> 6).collect();
+                let weights: Vec<i16> = (0..taps).map(|_| next() >> 10).collect();
                 // Padded physical rows exercise slice bounds without processing padding.
                 let data: Vec<Vec<i16>> = (0..taps)
                     .map(|_| (0..width + 5).map(|_| next()).collect())
@@ -1094,6 +1096,8 @@ mod integer_vertical_tests {
                 let rows: Vec<&[i16]> = data.iter().map(|row| &row[..width]).collect();
                 let mut output = vec![0i16; width];
                 filter_v_row_i16_scalar(ScalarToken, &rows, &mut output, &weights);
+                let mut dispatched = vec![0i16; width];
+                crate::simd::filter_v_row_i16(&rows, &mut dispatched, &weights);
                 for x in 0..width {
                     let sum: i64 = rows
                         .iter()
@@ -1102,6 +1106,10 @@ mod integer_vertical_tests {
                         .sum();
                     let expected = ((sum + (1 << (I16_PRECISION - 1))) >> I16_PRECISION) as i16;
                     assert_eq!(output[x], expected, "width={width} taps={taps} x={x}");
+                    assert_eq!(
+                        dispatched[x], expected,
+                        "native width={width} taps={taps} x={x}"
+                    );
                 }
             }
         }

@@ -210,8 +210,15 @@ The portable vertical body now accumulates eight adjacent components per tap,
 keeping the original tap order, rounding and signed intermediate semantics.
 NEON uses this same loop: the compiler emits widening NEON multiply-adds.
 Short rows retain the original dot product, including an exact unit-weight
-copy. An independent i64 dot-product test covers signed values, padding,
-zero taps, short rows, full blocks and tails.
+copy. AVX2 uses 16- or 32-tap scratch when it fits and retains its 128-tap body and
+portable fallback for wider filters. An independent i64 dot-product test
+covers signed values, padding, zero taps, short rows, full blocks, tails,
+and all scratch-capacity boundaries. The portable vertical body has 100%
+executable-region coverage before (26/26) and after (89/89), using the same
+oracle fixture on both revisions; see
+[`benchmarks/vertical_coverage_2026-11-10.json`](../benchmarks/vertical_coverage_2026-11-10.json).
+LLVM's export omits the archmage target-feature bodies, so the native scratch
+boundary checks are reported as oracle tests rather than a region-coverage claim.
 
 Native and forced-scalar execution are checked on x86-64 and ARM Neoverse-N1;
 WASM SIMD executes under Wasmtime. CI also executes the WASM image oracle and

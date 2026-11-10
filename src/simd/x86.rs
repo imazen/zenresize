@@ -2284,10 +2284,34 @@ pub(crate) fn filter_v_row_u8_i16_v3(
 
 /// Streaming V-filter: i16 rows → i16 output via i16 weights using AVX2.
 ///
-/// For linear i12 streaming path. Processes row references from the ring
-/// buffer. Uses paired interleaving + madd_epi16, clamping output to [0, 4095].
+/// Processes signed intermediate rows from the ring buffer using paired
+/// interleaving and madd_epi16. Output preserves signed ringing.
 #[archmage::arcane]
 pub(crate) fn filter_v_row_i16_v3(
+    token: X64V3Token,
+    rows: &[&[i16]],
+    output: &mut [i16],
+    weights: &[i16],
+) {
+    debug_assert_eq!(rows.len(), weights.len());
+    if rows.len() == 1 && weights[0] == (1 << I16_PRECISION) {
+        output.copy_from_slice(&rows[0][..output.len()]);
+    } else if rows.len() <= 16 {
+        filter_v_i16_bounded::<16, 8>(token, rows, output, weights);
+    } else if rows.len() <= 32 {
+        filter_v_i16_bounded::<32, 16>(token, rows, output, weights);
+    } else if rows.len() <= 128 {
+        filter_v_i16_bounded::<128, 64>(token, rows, output, weights);
+    } else {
+        super::scalar::filter_v_row_i16_scalar(archmage::ScalarToken, rows, output, weights);
+    }
+}
+
+// Keep one paired multiply-add body with 16-, 32- and 128-tap capacities.
+// Choose the smallest scratch that fits, avoiding initialization of unused
+// 128-tap storage on narrower filters.
+#[archmage::rite]
+fn filter_v_i16_bounded<const MAX_TAPS: usize, const MAX_PAIRS: usize>(
     _token: X64V3Token,
     rows: &[&[i16]],
     output: &mut [i16],
@@ -2295,15 +2319,6 @@ pub(crate) fn filter_v_row_i16_v3(
 ) {
     let width = output.len();
     let tap_count = rows.len();
-    debug_assert_eq!(tap_count, weights.len());
-
-    // Fall back to scalar for extreme upscale (>128 taps exceeds stack arrays).
-    const MAX_TAPS: usize = 128;
-    if tap_count > MAX_TAPS {
-        super::scalar::filter_v_row_i16_scalar(archmage::ScalarToken, rows, output, weights);
-        return;
-    }
-
     let half = _mm256_set1_epi32(1 << (I16_PRECISION - 1));
     let chunks8 = width / 8;
 
@@ -2320,7 +2335,7 @@ pub(crate) fn filter_v_row_i16_v3(
     let odd = !tap_count.is_multiple_of(2);
 
     let zero_ymm = _mm256_setzero_si256();
-    let mut paired_wts = [zero_ymm; MAX_TAPS / 2];
+    let mut paired_wts = [zero_ymm; MAX_PAIRS];
     for p in 0..pairs {
         let w0 = weights[p * 2] as i32;
         let w1 = weights[p * 2 + 1] as i32;

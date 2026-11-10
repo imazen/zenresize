@@ -10,6 +10,11 @@ fn cases() -> impl IntoBenchmarks {
         #[cfg(target_arch = "aarch64")]
         archmage::NeonToken::dangerously_disable_token_process_wide(true).unwrap();
     }
+    let filter = if std::env::var_os("ZENRESIZE_MAGIC_2021").is_some() {
+        Filter::MagicKernelSharp2021
+    } else {
+        Filter::MagicKernelSharp
+    };
     [
         (1, 1),
         (64, 32),
@@ -20,7 +25,7 @@ fn cases() -> impl IntoBenchmarks {
         (1920, 960),
     ]
     .into_iter()
-    .flat_map(|(w, ow)| {
+    .flat_map(move |(w, ow)| {
         ["opaque", "partial", "ringing", "rgbx", "linear_rgbx"]
             .into_iter()
             .map(move |alpha| {
@@ -42,13 +47,13 @@ fn cases() -> impl IntoBenchmarks {
                             [64 + (x % 96) as u8, 96, 128, a]
                         })
                         .collect();
-                    let builder = ResizeConfig::builder(w, w, ow, ow)
-                        .filter(Filter::MagicKernelSharp)
-                        .format(if alpha.contains("rgbx") {
+                    let builder = ResizeConfig::builder(w, w, ow, ow).filter(filter).format(
+                        if alpha.contains("rgbx") {
                             PixelDescriptor::RGBX8_SRGB
                         } else {
                             PixelDescriptor::RGBA8_SRGB
-                        });
+                        },
+                    );
                     let config = if alpha == "linear_rgbx" {
                         builder.linear().build()
                     } else {

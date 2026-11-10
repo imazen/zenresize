@@ -109,6 +109,11 @@ alpha-output-exact:
 alpha-output-arm-build:
     CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc cargo bench --target aarch64-unknown-linux-gnu --bench alpha_output --no-run
 
+# Cross-build the exact and dense-oracle test binaries for an ARM worker.
+alpha-output-arm-tests-build:
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc cargo test --release --target aarch64-unknown-linux-gnu --lib --no-run
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc cargo test --release --target aarch64-unknown-linux-gnu --test magic_paths --no-run
+
 # Execute the portable SIMD image oracle and exact alpha-output test under WASI.
 magic-wasm-test:
     CARGO_TARGET_WASM32_WASIP1_RUNNER=wasmtime RUSTFLAGS="-C target-feature=+simd128" cargo test --target wasm32-wasip1 --test magic_paths
