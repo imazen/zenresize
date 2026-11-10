@@ -3000,12 +3000,18 @@ mod tests {
         // the exhaustive domain above intentionally holds alpha fixed per row.
         let mut state = 0x12345678u32;
         for width in 1..=33 {
-            let input: Vec<i16> = (0..width * 4)
+            let mut input: Vec<i16> = (0..width * 4)
                 .map(|_| {
                     state = state.wrapping_mul(1664525).wrapping_add(1013904223);
                     (state >> 16) as i16
                 })
                 .collect();
+            // Opaque blocks inside a mixed row exercise the SIMD bypass.
+            for (index, pixel) in input.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                if index / 4 % 2 == 1 {
+                    pixel[3] = 255;
+                }
+            }
             let mut output = vec![0; input.len()];
             simd::encode_i16_output(&input, &mut output, true);
             for (src, dst) in input
