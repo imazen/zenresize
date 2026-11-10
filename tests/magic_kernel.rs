@@ -199,14 +199,20 @@ fn mitchell_comparison_and_integer_constant_preservation() {
 fn sharpened_mitchell_step_response() {
     use zenresize::weights::{F32WeightTable, I16WeightTable};
     let base = InterpolationDetails::create(Filter::Mitchell);
-    let sharp = base.clone().with_sharpen_percent(15.0);
     let a = I16WeightTable::new(257, 1021, &base);
-    let b = I16WeightTable::new(257, 1021, &sharp);
-    let changed = (0..1021).filter(|&i| a.weights(i) != b.weights(i)).count();
-    println!("i16 Mitchell sharpen(15): {changed}/1021 weight rows changed");
+    for percent in [12.0, 15.0] {
+        let sharp = base.clone().with_sharpen_percent(percent);
+        let b = I16WeightTable::new(257, 1021, &sharp);
+        let changed = (0..1021).filter(|&i| a.weights(i) != b.weights(i)).count();
+        println!("i16 Mitchell sharpen({percent}): {changed}/1021 weight rows changed");
+    }
     for (input, output) in [(257, 1021), (257, 257), (257, 127), (257, 63)] {
         for (name, details) in [
             ("mitchell", InterpolationDetails::create(Filter::Mitchell)),
+            (
+                "mitchell_sharpen_12",
+                InterpolationDetails::create(Filter::Mitchell).with_sharpen_percent(12.0),
+            ),
             (
                 "mitchell_sharpen_15",
                 InterpolationDetails::create(Filter::Mitchell).with_sharpen_percent(15.0),

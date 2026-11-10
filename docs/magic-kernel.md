@@ -115,3 +115,21 @@ covers every piece boundary, dense sampling, and partition of unity.
 Both production functions in `src/filter.rs` explain their derivations,
 including the choice a = 1/4 for the 2013 correction and the 2021 residual
 cancellation. These names do not change the library default (Robidoux).
+
+## Mitchell with resize_sharpen(12)
+
+Measured 2026-11-10 with `just magic-kernel-test`, using the same interior
+normalized f32 weight-table step-response procedure. Maximum response:
+
+| Input → output | Mitchell sharpen 12 | Mitchell sharpen 15 | MagicKernelSharp | MagicKernelSharp2021 |
+|---|---:|---:|---:|---:|
+| 257 → 1021 | 1.136363745 | 1.176470712 | 1.142857015 | 1.104601771 |
+| 257 → 257 | 1.000000000 | 1.000000000 | 1.031250000 | 1.000868109 |
+| 257 → 127 | 1.083924182 | 1.108607737 | 1.101290702 | 1.065072305 |
+| 257 → 63 | 1.071734626 | 1.092833095 | 1.095590078 | 1.059846469 |
+
+Sharpen 12 has less overshoot than 2013 and more than 2021 in all three
+nonidentity cases tested. This is a ringing measurement, not a photographic
+quality ranking. The i16 diagnostic also found 0/1021 changed weight rows
+for sharpen 12, confirming that the existing ignored-adjustment bug applies
+to this setting as well.
