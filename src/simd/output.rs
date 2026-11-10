@@ -7,7 +7,8 @@ use encode_vector_v3 as encode_output_v3;
 #[cfg(target_arch = "wasm32")]
 use encode_vector_wasm128 as encode_output_wasm128;
 
-#[inline(always)]
+#[cfg_attr(target_arch = "x86_64", inline(never))]
+#[cfg_attr(not(target_arch = "x86_64"), inline(always))]
 pub(crate) fn encode_i16_output(input: &[i16], output: &mut [u8], premul: bool) {
     if !premul {
         for (&v, dst) in input.iter().zip(output.iter_mut()) {

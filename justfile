@@ -86,6 +86,10 @@ weight-fingerprint output:
 weight-coverage output:
     cargo llvm-cov --lib --json --output-path {{output}} -- weights::tests
 
+# Region audit for the portable signed vertical convolution, including tails.
+vertical-coverage output:
+    cargo llvm-cov --lib --json --output-path {{output}} -- blocked_vertical_matches_i64_dot_product
+
 # Independent Magic image oracle across all 9 sample pairs and working paths.
 magic-paths-test:
     cargo test --test magic_paths

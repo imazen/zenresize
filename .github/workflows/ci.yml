@@ -60,11 +60,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Run tests (default features)
         run: cargo test ${{ matrix.strip-colorutils && '--lib' || '' }}
-      - name: Magic oracle with scalar dispatch
+      - name: Magic and exact alpha oracles with scalar dispatch
         if: ${{ !matrix.strip-colorutils }}
         env:
           ZENRESIZE_MAGIC_SCALAR: "1"
-        run: cargo test --test magic_paths
+        run: |
+          cargo test --test magic_paths
+          cargo test --lib fused_integer_output_matches_exact_division -- --test-threads=1
       - name: Run tests (no_std)
         if: ${{ !matrix.strip-colorutils }}
         run: cargo test --no-default-features --lib
