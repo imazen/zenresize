@@ -1,6 +1,6 @@
 # Alpha output and convolution audit — 2026-11-10
 
-Code: `95c329d6`, stacked on the reviewed integer-weight fix. Baseline:
+Code: `a5d1d442`, stacked on the reviewed integer-weight fix. Baseline:
 `581fc9a90e6f`, before the signed-alpha correction. The subsequent Q14-headroom
 fix changes plan construction, not the untimed benchmark's unadjusted tables.
 Toolchain, source hashes, lock hash, CPU/OS/RAM and artifact location are in
@@ -35,19 +35,28 @@ its displayed times are rounded.
 
 | Formula / CPU / tier | Case | Before | After | Change |
 |---|---|---:|---:|---:|
-| 2021 / 270K Plus / AVX2 | 256→512 partial | 802.7 µs | 625.9 µs | −22.03% |
-| 2021 / 270K Plus / AVX2 | 1920→960 ringing | 8.4 ms | 7.7 ms | −8.32% |
-| 2021 / 270K Plus / AVX2 | 64→32 linear RGBX | 12.1 µs | 10.9 µs | −10.37% |
-| 2021 / N1 / scalar | 512→256 linear RGBX | 33.3 ms | 27.0 ms | −19.13% |
+| 2021 / 270K Plus / AVX2 | 1920→960 ringing | 8.5 ms | 7.5 ms | −11.36% |
+| 2021 / 270K Plus / AVX2 | 64→32 linear RGBX | 12.6 µs | 10.8 µs | −14.26% |
+| 2021 / N1 / NEON | 1920→960 ringing | 157.3 ms | 123.7 ms | −21.38% |
+| 2021 / N1 / scalar | 1920→960 ringing | 206.5 ms | 134.3 ms | −34.97% |
 
-The x86 rows above are from `vertical-four-block-gate.log`; the ARM row is
-from `fixed-float-arm.log`. The former run's resource footer is recorded with
-its result log; the ARM run reports peak RSS 0.01 GiB, 90 seconds, exit 0.
-Full final native matrices and scalar controls are recorded alongside this
-report. Failed pilot measurements are retained in the artifact directory;
-they are not measurements of the final implementation. In particular, the
-f32 fallback controls were retained and optimized when repeat runs confirmed
-a slowdown; no expectation or significance threshold was relaxed.
+All 280 final printed ratios are nonpositive. Every case is retained in the
+[native x86 CSV](alpha_output_native_2026-11-10.csv),
+[scalar x86 CSV](alpha_output_scalar_2026-11-10.csv), and
+[final ARM CSV](alpha_output_arm_final_2026-11-10.csv).
+Both formulas run at seven square-image sizes, with opaque, partial-alpha,
+ringing-alpha, RGBX and linear-RGBX controls, in native and forced-scalar
+processes on each CPU. Forced scalar selects portable entry points;
+compiler autovectorization remains enabled, including baseline NEON on ARM.
+
+Combined x86 test/build/benchmark job: `run-heavy: done rc=0 176s | peak-RSS
+0.43GiB | min-avail 24920MiB | peak-load 1.48`.
+ARM full-matrix job: `run-heavy: done rc=0 406s | peak-RSS 0.06GiB |
+min-avail 7098MiB | peak-load 2.77`.
+These are job peaks, not per-image allocation measurements.
+Failed pilot measurements are retained in the artifact directory and are not
+measurements of the final implementation. No expectation or significance
+threshold was relaxed.
 
 ## Coverage scope
 
@@ -86,3 +95,9 @@ not a 95% confidence interval or a guarantee of zero slowdown on every CPU.
 No Apple M4 or dedicated AVX-512 timing is claimed. AVX-512 output dispatches
 to AVX2; the new native kernels here are AVX2 and NEON, with WASM SIMD execution
 checked under Wasmtime.
+
+The signed-i12 lookup follow-up keeps eight independent lookups in flight.
+The compiler unrolls this loop on the measured x86 build; packed min/max is
+not claimed. All 65,536 signed inputs match the original formula, with 100%
+region coverage before (16/16) and after (40/40 plus 2/2 closure regions).
+See [the LUT audit](lut_coverage_2026-11-10.json).

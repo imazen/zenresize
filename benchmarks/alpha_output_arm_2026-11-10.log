@@ -1,3 +1,5 @@
+# Historical initial ARM matrix; predates the final float-H and LUT follow-ups.
+# Current implementation measurements are recorded in the final ARM CSV and metadata.
 run-heavy: mem-cap=3G (cgroup, hard) jobs=1/4 avail=7173MiB :: bash -c ./exact-test --test-threads=1 && ZENRESIZE_MAGIC_SCALAR=1 ./exact-test fused_integer_output_matches_exact_division --test-threads=1 && ./magic-test && ZENRESIZE_MAGIC_SCALAR=1 ./magic-test && taskset -c 0 ./candidate compare ./baseline -s 60 --seed 71 && ZENRESIZE_MAGIC_SCALAR=1 taskset -c 0 ./candidate compare ./baseline -s 25 --seed 71
 
 running 234 tests
