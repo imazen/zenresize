@@ -534,7 +534,7 @@ impl<B: Background> StreamingResize<B> {
 
     /// Set an output mask (rounded corners, gradients, etc).
     ///
-    /// The mask is applied after compositing and before unpremultiply,
+    /// The mask is applied before compositing and before unpremultiply,
     /// shaping the final output's transparency. In premultiplied space,
     /// all four RGBA channels are multiplied by the mask value.
     ///

@@ -139,3 +139,7 @@ mask-low-alpha-test:
 # Compare optimized mask spans with a full-row source using identical coverage.
 mask-span-probe:
     cargo run --example mask_span_probe
+
+# PR 23 diagnostic: mask exactly once, then caller-side composite.
+mask-output-probe:
+    cargo run --example mask_output_probe
