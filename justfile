@@ -90,3 +90,11 @@ weight-coverage output:
 magic-paths-test:
     cargo test --test magic_paths
     ZENRESIZE_MAGIC_SCALAR=1 cargo test --test magic_paths
+
+# Paired regression benchmark; compare to a binary built from a source export.
+alpha-output-bench *args:
+    cargo bench --bench alpha_output -- {{args}}
+
+# Full region coverage for the lobe/normalization tests (reports outside git).
+weight-coverage output:
+    cargo llvm-cov --lib --json --output-path {{output}} -- weights::tests

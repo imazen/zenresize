@@ -172,3 +172,7 @@ harness = false
 [[bench]]
 name = "profile_coz"
 harness = false
+
+[[bench]]
+name = "alpha_output"
+harness = false

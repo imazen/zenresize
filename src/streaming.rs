@@ -48,26 +48,6 @@ use crate::weights::{F32WeightTable, I16WeightTable};
 use whereat::{At, ResultAtExt, at};
 use zenpixels::{AlphaMode, ChannelType, TransferFunction};
 
-// Negative lobes can push alpha above 255. Keep that value as the divisor:
-// clamping alpha before unpremultiply brightens RGB. The SIMD result remains
-// valid for in-range alpha; repair only overshooting pixels using signed
-// intermediates, with the same round-to-nearest integer division convention.
-fn repair_overshoot_alpha(filtered: &[i16], output: &mut [u8]) {
-    for (src, dst) in filtered
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .zip(output.as_chunks_mut::<4>().0)
-    {
-        let alpha = src[3] as i32;
-        if alpha > 255 {
-            for c in 0..3 {
-                dst[c] = ((src[c] as i32 * 255 + alpha / 2) / alpha).clamp(0, 255) as u8;
-            }
-        }
-    }
-}
-
 /// Estimate the maximum filter tap count for a given dimension and filter.
 ///
 /// Used to decide whether the i16 integer pipeline would accumulate
@@ -2557,20 +2537,11 @@ impl<B: Background> StreamingResize<B> {
             },
         );
 
-        // Clamp i16 → u8 [0,255]
-        for (&v, o) in self.temp_v_output_i16[..out_row_len]
-            .iter()
-            .zip(dst[..out_row_len].iter_mut())
-        {
-            *o = v.clamp(0, 255) as u8;
-        }
-        if self.needs_premul {
-            simd::unpremultiply_u8_row(&mut dst[..out_row_len]);
-            repair_overshoot_alpha(
-                &self.temp_v_output_i16[..out_row_len],
-                &mut dst[..out_row_len],
-            );
-        }
+        simd::encode_i16_output(
+            &self.temp_v_output_i16[..out_row_len],
+            &mut dst[..out_row_len],
+            self.needs_premul,
+        );
         self.output_rows_produced += 1;
 
         // Paired row B: same V-filter rows (L1-hot), different weights
@@ -2592,19 +2563,11 @@ impl<B: Background> StreamingResize<B> {
                 },
             );
 
-            for (&v, o) in self.temp_v_output_i16[..out_row_len]
-                .iter()
-                .zip(self.paired_row_buf[..out_row_len].iter_mut())
-            {
-                *o = v.clamp(0, 255) as u8;
-            }
-            if self.needs_premul {
-                simd::unpremultiply_u8_row(&mut self.paired_row_buf[..out_row_len]);
-                repair_overshoot_alpha(
-                    &self.temp_v_output_i16[..out_row_len],
-                    &mut self.paired_row_buf[..out_row_len],
-                );
-            }
+            simd::encode_i16_output(
+                &self.temp_v_output_i16[..out_row_len],
+                &mut self.paired_row_buf[..out_row_len],
+                self.needs_premul,
+            );
             self.paired_row_ready = true;
         }
     }
@@ -2998,6 +2961,57 @@ mod tests {
             rows.push(out.to_vec());
         }
         rows
+    }
+
+    #[test]
+    fn fused_integer_output_matches_exact_division() {
+        // Every nonnegative i16 alpha/color pair; negative lanes and the
+        // 1/2/3-pixel tail are covered separately below.
+        let mut input = vec![0i16; 32768 * 4];
+        let mut output = vec![0u8; input.len()];
+        for alpha in 0..=i16::MAX {
+            for (color, pixel) in input.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                *pixel = [color as i16, color as i16, color as i16, alpha];
+            }
+            simd::encode_i16_output(&input, &mut output, true);
+            for (color, pixel) in output.as_chunks::<4>().0.iter().enumerate() {
+                let a = i32::from(alpha);
+                let expected = if a == 0 {
+                    0
+                } else {
+                    ((color as i32 * 255 + a / 2) / a).min(255) as u8
+                };
+                assert_eq!(
+                    *pixel,
+                    [expected, expected, expected, alpha.min(255) as u8],
+                    "a={alpha} c={color}"
+                );
+            }
+        }
+        for n in [0, 1, 2, 3, 4, 5, 7, 8, 9] {
+            for alpha in [i16::MIN, -1, 0, 1, 254, 255, 256, i16::MAX] {
+                let input: Vec<i16> = (0..n)
+                    .flat_map(|_| [i16::MIN, -1, i16::MAX, alpha])
+                    .collect();
+                let mut output = vec![0; input.len()];
+                simd::encode_i16_output(&input, &mut output, true);
+                for p in output.as_chunks::<4>().0 {
+                    assert_eq!(
+                        *p,
+                        [
+                            0,
+                            0,
+                            if alpha > 0 { 255 } else { 0 },
+                            alpha.clamp(0, 255) as u8
+                        ]
+                    );
+                }
+                simd::encode_i16_output(&input, &mut output, false);
+                for p in output.as_chunks::<4>().0 {
+                    assert_eq!(*p, [0, 0, 255, alpha.clamp(0, 255) as u8]);
+                }
+            }
+        }
     }
 
     #[test]

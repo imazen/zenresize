@@ -7,6 +7,9 @@
 //! - Fallback: Scalar
 #![allow(clippy::too_many_arguments)]
 
+mod output;
+pub(crate) use output::encode_i16_output;
+
 mod scalar;
 #[allow(unused_imports)]
 use scalar::*;
