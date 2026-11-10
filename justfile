@@ -77,3 +77,11 @@ beta-cohort-check:
 # Clean-room formula oracle and Mitchell comparison.
 magic-kernel-test:
     cargo test --test magic_kernel -- --nocapture
+
+# Before/after table fingerprint; compare output files from the two revisions.
+weight-fingerprint output:
+    cargo run --release --example weight_fingerprint > {{output}}
+
+# Region-level coverage for the weight construction and adjustment tests.
+weight-coverage output:
+    cargo llvm-cov --lib --json --output-path {{output}} -- weights::tests

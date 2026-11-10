@@ -1,0 +1,48 @@
+{
+  "date": "2026-11-10",
+  "metric": "LLVM executable region coverage (not branch or MC/DC coverage)",
+  "before_commit": "fb0f2103a9bc",
+  "after_source_sha256": "1ded5d6d9964e520bfd2b392b61a4fea2269afae0514153dd2929eafc9bd6eac",
+  "coverage_command": "cargo llvm-cov --lib --json --output-path REPORT -- weights::tests",
+  "functions": {
+    "before": [
+      {
+        "function": "F32WeightTable::new",
+        "covered": 166,
+        "total": 166,
+        "missing": []
+      },
+      {
+        "function": "I16WeightTable::new",
+        "covered": 181,
+        "total": 181,
+        "missing": []
+      }
+    ],
+    "after": [
+      {
+        "function": "F32WeightTable::new",
+        "covered": 166,
+        "total": 166,
+        "missing": []
+      },
+      {
+        "function": "I16WeightTable::new",
+        "covered": 189,
+        "total": 189,
+        "missing": []
+      },
+      {
+        "function": "adjust_integer_lobes",
+        "covered": 51,
+        "total": 51,
+        "missing": []
+      }
+    ]
+  },
+  "differential": {
+    "table_cases": 15246,
+    "sha256": "a9912197d6a694e2820224b3599fee401bb16e05dd2f7fd217f8685e6ce215b0",
+    "result": "byte-identical before/after; adjusted f32 and unadjusted i16"
+  }
+}
