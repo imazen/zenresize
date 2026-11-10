@@ -328,8 +328,19 @@ pub(crate) fn srgb_u8_to_linear_i12_row(input: &[u8], output: &mut [i16]) {
 /// Input values are clamped to 0-4095 before lookup.
 pub(crate) fn linear_i12_to_srgb_u8_row(input: &[i16], output: &mut [u8]) {
     debug_assert_eq!(input.len(), output.len());
-    for (inp, out) in input.iter().zip(output.iter_mut()) {
-        *out = LINEAR_I12_TO_SRGB_U8[(*inp).clamp(0, 4095) as usize];
+    let len = input.len().min(output.len());
+    let (chunks, tail) = input[..len].as_chunks::<8>();
+    let (out_chunks, out_tail) = output[..len].as_chunks_mut::<8>();
+    for (src, dst) in chunks.iter().zip(out_chunks) {
+        // Expose eight independent clamps/lookups for instruction scheduling.
+        // Keep the scalar tail and the exact signed-clamp/LUT formula.
+        let indices = src.map(|v| v.clamp(0, 4095));
+        for lane in 0..8 {
+            dst[lane] = LINEAR_I12_TO_SRGB_U8[indices[lane] as usize];
+        }
+    }
+    for (&value, dst) in tail.iter().zip(out_tail) {
+        *dst = LINEAR_I12_TO_SRGB_U8[value.clamp(0, 4095) as usize];
     }
 }
 
@@ -508,6 +519,38 @@ mod srgb_premul_fusion_gate {
             let a: Vec<u32> = fused.iter().map(|v| v.to_bits()).collect();
             let b: Vec<u32> = seq.iter().map(|v| v.to_bits()).collect();
             assert_eq!(a, b, "fused sRGB+premul diverges at {px} px");
+        }
+    }
+}
+
+#[cfg(test)]
+mod packed_i12_tests {
+    use super::*;
+    #[cfg(not(feature = "std"))]
+    use alloc::{vec, vec::Vec};
+    #[test]
+    fn packed_i12_lut_matches_every_signed_input_and_tail() {
+        let input: Vec<i16> = (i16::MIN..=i16::MAX).collect();
+        let expected: Vec<u8> = input
+            .iter()
+            .map(|&v| LINEAR_I12_TO_SRGB_U8[v.clamp(0, 4095) as usize])
+            .collect();
+        let mut output = vec![0u8; input.len()];
+        linear_i12_to_srgb_u8_row(&input, &mut output);
+        assert_eq!(output, expected);
+        let values = [i16::MIN, -1, 0, 1, 4094, 4095, 4096, i16::MAX];
+        for width in 0..=17 {
+            for rotation in 0..values.len() {
+                let input: Vec<i16> = (0..width)
+                    .map(|i| values[(i + rotation) % values.len()])
+                    .collect();
+                let mut output = vec![91u8; width + 7];
+                linear_i12_to_srgb_u8_row(&input, &mut output[..width]);
+                for (i, &v) in input.iter().enumerate() {
+                    assert_eq!(output[i], LINEAR_I12_TO_SRGB_U8[v.clamp(0, 4095) as usize]);
+                }
+                assert!(output[width..].iter().all(|&v| v == 91));
+            }
         }
     }
 }

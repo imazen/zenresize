@@ -3,8 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+  pull_request: {}
 
 concurrency:
   # `github.head_ref` is set ONLY on pull_request events. On a push it is
@@ -61,6 +60,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Run tests (default features)
         run: cargo test ${{ matrix.strip-colorutils && '--lib' || '' }}
+      - name: Magic and exact alpha oracles with scalar dispatch
+        if: ${{ !matrix.strip-colorutils }}
+        env:
+          ZENRESIZE_MAGIC_SCALAR: "1"
+        run: |
+          cargo test --test magic_paths
+          cargo test --lib fused_integer_output_matches_exact_division -- --test-threads=1
       - name: Run tests (no_std)
         if: ${{ !matrix.strip-colorutils }}
         run: cargo test --no-default-features --lib
@@ -103,6 +109,15 @@ jobs:
         run: cargo check --target wasm32-wasip1 --lib
         env:
           RUSTFLAGS: "-C target-feature=+simd128"
+
+      - name: Run portable Magic and exact alpha-output oracles
+        run: |
+          cargo test --target wasm32-wasip1 --test magic_paths
+          cargo test --target wasm32-wasip1 --lib fused_integer_output_matches_exact_division -- --test-threads=1
+          cargo test --target wasm32-wasip1 --lib packed_i12_lut_matches_every_signed_input_and_tail
+        env:
+          RUSTFLAGS: "-C target-feature=+simd128"
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
 
   clippy:
     name: Clippy

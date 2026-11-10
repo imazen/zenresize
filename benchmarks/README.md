@@ -91,3 +91,9 @@ For new comparison charts, prefer [zenbench](https://github.com/imazen/zenbench)
 self-contained **SVG** report (`--format=html`), and violin/PDF/regression plots
 (plotters.rs). `paired_bench` predates that; porting it to zenbench is the way to
 get publishable SVG charts without hand-rolling stats.
+
+## Signed-alpha output audit
+
+[The 2026-11-10 audit](alpha_output_2026-11-10.md) records paired measurements
+for both Magic formulas, exact arithmetic oracles, and before/after executable-
+region coverage. Its metadata pins the source, baseline, toolchain and hardware.

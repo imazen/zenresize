@@ -73,3 +73,61 @@ beta-cohort-check:
     cargo fmt --check
     cargo clippy --locked --lib -- -D warnings
     cargo test --locked --lib
+
+# Clean-room formula oracle and Mitchell comparison.
+magic-kernel-test:
+    cargo test --test magic_kernel -- --nocapture
+
+# Before/after table fingerprint; compare output files from the two revisions.
+weight-fingerprint output:
+    cargo run --release --example weight_fingerprint > {{output}}
+
+# Region-level coverage for the weight construction and adjustment tests.
+weight-coverage output:
+    cargo llvm-cov --lib --json --output-path {{output}} -- weights::tests
+
+# Region audit for the portable signed vertical convolution, including tails.
+vertical-coverage output:
+    cargo llvm-cov --lib --json --output-path {{output}} -- blocked_vertical_matches_i64_dot_product
+
+# Independent Magic image oracle across all 9 sample pairs and working paths.
+magic-paths-test:
+    cargo test --test magic_paths
+    ZENRESIZE_MAGIC_SCALAR=1 cargo test --test magic_paths
+
+# Paired regression benchmark; compare to a binary built from a source export.
+alpha-output-bench *args:
+    cargo bench --bench alpha_output -- {{args}}
+
+
+# Exhaustive exact-division oracle in separate native and forced-scalar processes.
+alpha-output-exact:
+    cargo test --lib fused_integer_output_matches_exact_division -- --test-threads=1
+    ZENRESIZE_MAGIC_SCALAR=1 cargo test --lib fused_integer_output_matches_exact_division -- --test-threads=1
+
+# Build the same benchmark for ARM locally; copy only binaries to a worker.
+alpha-output-arm-build:
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc cargo bench --target aarch64-unknown-linux-gnu --bench alpha_output --no-run
+
+# Cross-build the exact and dense-oracle test binaries for an ARM worker.
+alpha-output-arm-tests-build:
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc cargo test --release --target aarch64-unknown-linux-gnu --lib --no-run
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc cargo test --release --target aarch64-unknown-linux-gnu --test magic_paths --no-run
+
+# Execute the portable SIMD image oracle and exact alpha-output test under WASI.
+magic-wasm-test:
+    CARGO_TARGET_WASM32_WASIP1_RUNNER=wasmtime RUSTFLAGS="-C target-feature=+simd128" cargo test --target wasm32-wasip1 --test magic_paths
+    CARGO_TARGET_WASM32_WASIP1_RUNNER=wasmtime RUSTFLAGS="-C target-feature=+simd128" cargo test --target wasm32-wasip1 --lib fused_integer_output_matches_exact_division -- --test-threads=1
+    CARGO_TARGET_WASM32_WASIP1_RUNNER=wasmtime RUSTFLAGS="-C target-feature=+simd128" cargo test --target wasm32-wasip1 --lib packed_i12_lut_matches_every_signed_input_and_tail
+
+# Region audit for both portable convolution changes, using their arithmetic oracles.
+scalar-coverage output:
+    cargo llvm-cov --lib --json --output-path {{output}} -- simd::scalar::
+
+# Integer dot-product and float accumulation-order oracles for every native tier.
+convolution-exact:
+    cargo test --lib simd::
+
+# Exact signed LUT mapping and before/after region audit.
+lut-coverage output:
+    cargo llvm-cov --lib --json --output-path {{output}} -- packed_i12_lut_matches_every_signed_input_and_tail

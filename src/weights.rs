@@ -22,6 +22,11 @@ pub const WEIGHT_THRESHOLD: f64 = 2e-8;
 /// Fixed-point precision for i16 weights (14 bits).
 pub const I16_PRECISION: i32 = 14;
 
+// Reserve one integer step for largest-remainder correction after rounding.
+// Positive adjusted weights sum to 1/(1-r), bounding each coefficient.
+pub(crate) const MAX_I16_LOBE_RATIO: f64 =
+    1.0 - (1 << I16_PRECISION) as f64 / (i16::MAX as i32 - 1) as f64;
+
 // =============================================================================
 // Weight table types
 // =============================================================================
@@ -271,12 +276,48 @@ impl F32WeightTable {
     }
 }
 
+/// Adjust only requested integer lobes. The f32 constructor is deliberately
+/// unchanged: these operations mirror its positive/negative rescaling and f32
+/// rounding before the existing Q14 quantizer. Unmodified integer filters keep
+/// the original f64-to-Q14 path without any extra allocation or row pass.
+fn adjust_integer_lobes(weights: &mut [f64], ratio: f64) {
+    let positive: f64 = weights.iter().filter(|&&v| v >= 0.0).sum();
+    let negative: f64 = weights.iter().filter(|&&v| v < 0.0).sum();
+    if negative >= 0.0 {
+        return;
+    }
+    if ratio < 1e-10 {
+        let sum: f32 = weights.iter().map(|&v| (v as f32).max(0.0)).sum();
+        let inv = if sum != 0.0 { 1.0f32 / sum } else { 1.0 };
+        for v in weights {
+            *v = f64::from((*v as f32).max(0.0) * inv);
+        }
+    } else {
+        let target_positive = 1.0 / (1.0 - ratio);
+        let pos_factor = (target_positive / positive) as f32;
+        let neg_factor = (-ratio * target_positive / negative) as f32;
+        for v in weights {
+            let adjusted = (*v as f32) * if *v < 0.0 { neg_factor } else { pos_factor };
+            let quantized = (adjusted as f64 * (1 << I16_PRECISION) as f64).round();
+            assert!(
+                ((i16::MIN as i32 + 1) as f64..=(i16::MAX as i32 - 1) as f64).contains(&quantized),
+                "adjusted weight exceeds signed Q14; use F32WeightTable"
+            );
+            *v = f64::from(adjusted);
+        }
+    }
+}
+
 // =============================================================================
 // I16WeightTable
 // =============================================================================
 
 impl I16WeightTable {
     /// Create i16 fixed-point weight table with flat layout.
+    ///
+    /// # Panics
+    /// Panics if a lobe adjustment produces a coefficient outside signed Q14.
+    /// Resize pipelines select f32 for high requested ratios automatically.
     pub fn new(in_size: u32, out_size: u32, filter: &InterpolationDetails) -> Self {
         debug_assert!(in_size > 0, "in_size must be positive");
         debug_assert!(out_size > 0, "out_size must be positive");
@@ -285,6 +326,11 @@ impl I16WeightTable {
         let downscale_factor = scale.min(1.0);
         let effective_window = filter.window / downscale_factor;
 
+        let adjustment = filter.lobe_ratio_goal.and_then(|r| {
+            let natural = filter.calculate_percent_negative_weight();
+            let desired = (r as f64).clamp(0.0, 0.9999);
+            (natural >= 1e-10 && (desired - natural).abs() > 1e-10).then_some(desired)
+        });
         let mut temp_weights: Vec<f64> = Vec::new();
         let mut left_vec = Vec::with_capacity(out_size as usize);
         let mut all_weights: Vec<Vec<i16>> = Vec::with_capacity(out_size as usize);
@@ -308,6 +354,10 @@ impl I16WeightTable {
                 &mut temp_weights,
             );
             max_taps = max_taps.max(tap_count);
+
+            if let Some(ratio) = adjustment {
+                adjust_integer_lobes(&mut temp_weights, ratio);
+            }
 
             // Convert to fixed-point i16 using largest-remainder method.
             // This distributes rounding error across weights instead of
@@ -554,6 +604,110 @@ mod tests {
     use crate::filter::{Filter, InterpolationDetails};
     #[cfg(not(feature = "std"))]
     use alloc::{format, string::String, vec, vec::Vec};
+
+    #[test]
+    #[should_panic(expected = "adjusted weight exceeds signed Q14")]
+    fn integer_adjustment_reserves_largest_remainder_headroom() {
+        // Below 0.5, yet a near-two coefficient leaves no correction headroom.
+        adjust_integer_lobes(&mut [-0.1, 1.2, -0.1], 0.49999);
+    }
+
+    #[test]
+    fn integer_padding_handles_even_and_odd_supports() {
+        for &filter in Filter::all() {
+            for n in [1, 2, 3, 7] {
+                for out in [1, 2, 3, 5] {
+                    let details = InterpolationDetails::create(filter);
+                    let table = I16WeightTable::new(n, out, &details);
+                    assert_eq!(table.max_taps % 2, 0);
+                    for x in 0..out as usize {
+                        assert!(table.tap_count(x) <= table.max_taps);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn empty_support_rows_remain_empty_in_float_tables() {
+        for goal in [None, Some(0.0)] {
+            let mut filter = InterpolationDetails::create(Filter::Mitchell).with_blur(0.1);
+            filter.lobe_ratio_goal = goal;
+            let table = F32WeightTable::new(2, 11, &filter);
+            assert!((0..11).any(|x| table.weights(x).is_empty()));
+            for x in 0..11 {
+                assert!(table.weights(x).iter().all(|v| v.is_finite()));
+            }
+        }
+    }
+
+    #[test]
+    fn integer_adjustment_zero_positive_and_unrepresentable_rows() {
+        adjust_integer_lobes(&mut [], 0.12);
+        let mut positive = [0.25, 0.75];
+        adjust_integer_lobes(&mut positive, 0.12);
+        assert_eq!(positive, [0.25, 0.75]);
+        let mut flat = [-0.1, 1.2, -0.1];
+        adjust_integer_lobes(&mut flat, 0.0);
+        assert_eq!(flat, [0.0, 1.0, 0.0]);
+        let mut only_negative = [-0.1, -0.2];
+        adjust_integer_lobes(&mut only_negative, 0.0);
+        assert_eq!(only_negative, [0.0, 0.0]);
+        let plain = InterpolationDetails::create(Filter::Box);
+        let adjusted = plain.clone().with_lobe_ratio(0.15);
+        let a = I16WeightTable::new(17, 65, &plain);
+        let b = I16WeightTable::new(17, 65, &adjusted);
+        assert_eq!(a.weights_flat, b.weights_flat);
+    }
+
+    #[test]
+    #[should_panic(expected = "adjusted weight exceeds signed Q14")]
+    fn integer_adjustment_rejects_unrepresentable_coefficient() {
+        adjust_integer_lobes(&mut [-0.1, 1.2, -0.1], 0.9);
+    }
+
+    #[test]
+    fn integer_lobe_controls_match_float_weights() {
+        for filter in [
+            Filter::Mitchell,
+            Filter::Lanczos,
+            Filter::MagicKernelSharp,
+            Filter::MagicKernelSharp2021,
+        ] {
+            for (input, output) in [(1, 7), (2, 1), (17, 65), (257, 127), (257, 63)] {
+                for ratio in [0.0, 0.02, 0.12, 0.15] {
+                    let details = InterpolationDetails::create(filter).with_lobe_ratio(ratio);
+                    let float = F32WeightTable::new(input, output, &details);
+                    let integer = I16WeightTable::new(input, output, &details);
+                    assert_eq!(float.left, integer.left);
+                    for x in 0..output as usize {
+                        let fw = float.weights(x);
+                        let iw = integer.weights(x);
+                        assert_eq!(fw.len(), iw.len());
+                        assert_eq!(
+                            iw.iter().map(|&v| v as i32).sum::<i32>(),
+                            1 << I16_PRECISION
+                        );
+                        for (&f, &i) in fw.iter().zip(iw) {
+                            assert!(
+                                (f as f64 - i as f64 / 16384.0).abs() <= 1.0 / 16384.0,
+                                "{filter:?} {input}->{output} ratio={ratio} x={x}: {f} vs {i}"
+                            );
+                        }
+                        if ratio == 0.0 {
+                            assert!(iw.iter().all(|&v| v >= 0));
+                        }
+                    }
+                }
+            }
+        }
+        let base = InterpolationDetails::create(Filter::Mitchell);
+        let plain = I16WeightTable::new(257, 1021, &base);
+        for percent in [12.0, 15.0] {
+            let sharp = I16WeightTable::new(257, 1021, &base.clone().with_sharpen_percent(percent));
+            assert!((0..1021).any(|x| plain.weights(x) != sharp.weights(x)));
+        }
+    }
 
     #[test]
     fn test_f32_weight_table_basic() {

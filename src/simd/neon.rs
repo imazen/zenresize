@@ -382,7 +382,10 @@ pub(crate) fn filter_v_row_i16_neon(
     output: &mut [i16],
     weights: &[i16],
 ) {
-    super::wide_kernels::filter_v_row_i16_impl_neon(_token, rows, output, weights)
+    // The fixed eight-lane portable loop lowers to widening NEON multiply-adds
+    // on aarch64 (NEON is baseline), avoiding four-lane scalar marshalling.
+    // Its tap order is unchanged and checked against the independent i64 oracle.
+    super::scalar::filter_v_row_i16_scalar(archmage::ScalarToken, rows, output, weights)
 }
 
 // f16 kernels — delegate to wide_kernels

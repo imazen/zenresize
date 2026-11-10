@@ -2,12 +2,29 @@
 
 ## [Unreleased]
 
+### QUEUED BREAKING CHANGES
+
+None.
+
+### Fixed
+
+- Preserve overshooting filtered alpha during integer unpremultiplication in direct and paired output rows, using fused AVX2/NEON/WASM and exact scalar conversion.
+
+- Honor lobe-ratio controls in integer weight tables; use f32 for extreme sharpening ratios.
+
+### Added
+
+- Opt-in clean-room `MagicKernelSharp` (2013) and `MagicKernelSharp2021` filters; independent formula and image-oracle tests, with Mitchell response comparison.
+
 ### Dependency compatibility
 
 - Admit archmage/magetypes 0.9.31-beta.1 in the current-main tool graph while retaining compatible stable requirements (`17c39822`). Strict library lint and all 224 library tests pass.
 
 ### Changed
 
+- Batch eight independent signed-i12 sRGB lookups with the original exact clamping and lookup formula (`a5d1d442`).
+- Expose adjacent-lane parallelism in signed vertical filtering; NEON shares the vectorizable portable loop.
+- Keep four-channel scalar float accumulators and short AVX2 float vertical rows in registers; reuse AVX2 integer vertical weights across 32 components while preserving arithmetic order (`4c1a2657`, `9dee5e5e`, `95c329d6`).
 - Accept the archmage and magetypes 0.9.31 stable release.
 - **`Cargo.lock` refreshed within the existing requirements — third-party crates only.** 74 registry packages moved (notably `palette 0.7.6 -> 0.7.7`, `pic-scale 0.7.9 -> 0.7.11`, `pic-scale-safe 0.1.10 -> 0.1.12`, `fast_image_resize 6.0.0 -> 6.1.0`, `imgref 1.12.2 -> 1.12.3`, `anyhow 1.0.102 -> 1.0.104`, `libc 0.2.186 -> 0.2.189`). No manifest requirement changed and no zen-family dependency moved — `archmage`, `magetypes`, `linear-srgb`, `zenpixels`, `zenblend`, `zenbench`, `whereat` are byte-identical in the lock, deliberately, because their requirements are governed separately. Verified green on aarch64 against all three CI test configurations (default / `--no-default-features --lib` / `--features pretty-safe`) plus `clippy --all-targets -D warnings` and `fmt --check`; every test count and result is identical to the pre-update baseline (367 tests, 0 failures). `palette 0.7.7` replaces its `fast-srgb8` backend with the new `palette_math` crate, which makes it a live risk for `tests/vs_palette.rs` — that suite is the oracle comparison for our sRGB transfer path, and all 25 of its cases still pass unchanged, as do `golden_outputs` (21), `dispatch_tiers` (3), `alpha_f32_exact` (3), `f16_hfilter_exact` (2) and `unpremul_u8_exhaustive` (3).
 - **`zenpixels` requirement now spans the published minor and the next one**: `">=0.2.10, <0.4.0"` (was `"0.2.10"`). For a `0.x` crate Cargo treats the minor as the major, so the plain requirement meant `^0.2.10` = `>=0.2.10, <0.3.0` and a `zenpixels 0.3.0` release would have been invisible until this manifest was hand-edited. The floor is unchanged and nothing newer is published, so resolution is identical — `cargo metadata --all-features` still resolves exactly one `zenpixels 0.2.16`. Widening every consumer uniformly is what prevents two copies of a `0.x` crate coexisting in one graph with non-unifying types. The standing current-plus-next rule is documented in the zencodec repo's `CLAUDE.md`.

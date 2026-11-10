@@ -1,0 +1,142 @@
+# Implementation a5d1d442; baseline 581fc9a90e6f; CPU Ampere Altra Neoverse-N1; samples 30 native / 25 scalar; seed 341
+filter,tier,case,baseline,candidate,percent,tango_significant
+MagicKernelSharp,NEON,alpha/1to1/opaque,130.8 ns,121.6 ns,-6.98,*
+MagicKernelSharp,NEON,alpha/1to1/partial,138.4 ns,125.7 ns,-9.14,*
+MagicKernelSharp,NEON,alpha/1to1/ringing,139.7 ns,128.0 ns,-8.34,*
+MagicKernelSharp,NEON,alpha/1to1/rgbx,126.6 ns,121.1 ns,-4.32,*
+MagicKernelSharp,NEON,alpha/1to1/linear_rgbx,128.8 ns,125.8 ns,-2.35,
+MagicKernelSharp,NEON,alpha/64to32/opaque,110.6 us,87.8 us,-20.57,*
+MagicKernelSharp,NEON,alpha/64to32/partial,110.4 us,90.4 us,-18.13,*
+MagicKernelSharp,NEON,alpha/64to32/ringing,111.5 us,90.9 us,-18.49,*
+MagicKernelSharp,NEON,alpha/64to32/rgbx,117.2 us,96.6 us,-17.54,*
+MagicKernelSharp,NEON,alpha/64to32/linear_rgbx,114.7 us,93.2 us,-18.72,*
+MagicKernelSharp,NEON,alpha/65to33/opaque,115.8 us,93.1 us,-19.58,*
+MagicKernelSharp,NEON,alpha/65to33/partial,116.2 us,95.5 us,-17.81,*
+MagicKernelSharp,NEON,alpha/65to33/ringing,116.0 us,95.6 us,-17.61,*
+MagicKernelSharp,NEON,alpha/65to33/rgbx,122.5 us,101.1 us,-17.49,*
+MagicKernelSharp,NEON,alpha/65to33/linear_rgbx,120.9 us,99.7 us,-17.52,*
+MagicKernelSharp,NEON,alpha/512to256/opaque,7.0 ms,5.5 ms,-21.55,*
+MagicKernelSharp,NEON,alpha/512to256/partial,6.9 ms,5.6 ms,-19.60,*
+MagicKernelSharp,NEON,alpha/512to256/ringing,6.9 ms,5.6 ms,-19.57,*
+MagicKernelSharp,NEON,alpha/512to256/rgbx,7.5 ms,6.1 ms,-18.78,*
+MagicKernelSharp,NEON,alpha/512to256/linear_rgbx,7.6 ms,6.2 ms,-18.70,*
+MagicKernelSharp,NEON,alpha/255to511/opaque,8.0 ms,4.5 ms,-43.63,*
+MagicKernelSharp,NEON,alpha/255to511/partial,8.1 ms,5.1 ms,-37.40,*
+MagicKernelSharp,NEON,alpha/255to511/ringing,7.9 ms,4.9 ms,-37.73,*
+MagicKernelSharp,NEON,alpha/255to511/rgbx,7.8 ms,4.7 ms,-39.15,*
+MagicKernelSharp,NEON,alpha/255to511/linear_rgbx,7.9 ms,4.9 ms,-37.93,*
+MagicKernelSharp,NEON,alpha/256to512/opaque,8.1 ms,4.6 ms,-43.84,*
+MagicKernelSharp,NEON,alpha/256to512/partial,8.1 ms,5.0 ms,-37.96,*
+MagicKernelSharp,NEON,alpha/256to512/ringing,7.9 ms,4.9 ms,-38.30,*
+MagicKernelSharp,NEON,alpha/256to512/rgbx,7.9 ms,4.8 ms,-38.97,*
+MagicKernelSharp,NEON,alpha/256to512/linear_rgbx,8.0 ms,4.9 ms,-38.86,*
+MagicKernelSharp,NEON,alpha/1920to960/opaque,97.7 ms,76.6 ms,-21.65,*
+MagicKernelSharp,NEON,alpha/1920to960/partial,97.7 ms,78.8 ms,-19.35,*
+MagicKernelSharp,NEON,alpha/1920to960/ringing,96.1 ms,76.9 ms,-19.89,*
+MagicKernelSharp,NEON,alpha/1920to960/rgbx,103.2 ms,84.0 ms,-18.63,*
+MagicKernelSharp,NEON,alpha/1920to960/linear_rgbx,103.8 ms,84.7 ms,-18.34,*
+MagicKernelSharp2021,NEON,alpha/1to1/opaque,128.3 ns,121.0 ns,-5.66,*
+MagicKernelSharp2021,NEON,alpha/1to1/partial,136.9 ns,124.1 ns,-9.32,*
+MagicKernelSharp2021,NEON,alpha/1to1/ringing,135.6 ns,123.4 ns,-8.98,*
+MagicKernelSharp2021,NEON,alpha/1to1/rgbx,122.7 ns,117.4 ns,-4.29,*
+MagicKernelSharp2021,NEON,alpha/1to1/linear_rgbx,124.3 ns,119.7 ns,-3.74,*
+MagicKernelSharp2021,NEON,alpha/64to32/opaque,173.2 us,138.8 us,-19.89,*
+MagicKernelSharp2021,NEON,alpha/64to32/partial,172.6 us,140.7 us,-18.51,*
+MagicKernelSharp2021,NEON,alpha/64to32/ringing,172.5 us,140.2 us,-18.73,*
+MagicKernelSharp2021,NEON,alpha/64to32/rgbx,176.7 us,143.9 us,-18.59,*
+MagicKernelSharp2021,NEON,alpha/64to32/linear_rgbx,220.6 us,218.9 us,-0.78,*
+MagicKernelSharp2021,NEON,alpha/65to33/opaque,180.9 us,146.4 us,-19.05,*
+MagicKernelSharp2021,NEON,alpha/65to33/partial,181.0 us,148.5 us,-17.97,*
+MagicKernelSharp2021,NEON,alpha/65to33/ringing,180.6 us,148.6 us,-17.71,*
+MagicKernelSharp2021,NEON,alpha/65to33/rgbx,183.4 us,151.3 us,-17.50,*
+MagicKernelSharp2021,NEON,alpha/65to33/linear_rgbx,227.6 us,226.4 us,-0.55,*
+MagicKernelSharp2021,NEON,alpha/512to256/opaque,11.1 ms,8.7 ms,-22.09,*
+MagicKernelSharp2021,NEON,alpha/512to256/partial,11.1 ms,8.8 ms,-20.89,*
+MagicKernelSharp2021,NEON,alpha/512to256/ringing,11.1 ms,8.8 ms,-20.88,*
+MagicKernelSharp2021,NEON,alpha/512to256/rgbx,11.9 ms,9.5 ms,-19.80,*
+MagicKernelSharp2021,NEON,alpha/512to256/linear_rgbx,14.9 ms,14.6 ms,-2.05,*
+MagicKernelSharp2021,NEON,alpha/255to511/opaque,11.9 ms,6.6 ms,-44.46,*
+MagicKernelSharp2021,NEON,alpha/255to511/partial,12.0 ms,7.1 ms,-40.59,*
+MagicKernelSharp2021,NEON,alpha/255to511/ringing,11.9 ms,7.1 ms,-40.58,*
+MagicKernelSharp2021,NEON,alpha/255to511/rgbx,11.8 ms,7.0 ms,-41.10,*
+MagicKernelSharp2021,NEON,alpha/255to511/linear_rgbx,12.4 ms,7.5 ms,-39.57,*
+MagicKernelSharp2021,NEON,alpha/256to512/opaque,12.0 ms,6.6 ms,-44.53,*
+MagicKernelSharp2021,NEON,alpha/256to512/partial,12.0 ms,7.1 ms,-40.65,*
+MagicKernelSharp2021,NEON,alpha/256to512/ringing,12.0 ms,7.1 ms,-40.79,*
+MagicKernelSharp2021,NEON,alpha/256to512/rgbx,11.9 ms,7.0 ms,-41.36,*
+MagicKernelSharp2021,NEON,alpha/256to512/linear_rgbx,12.3 ms,7.4 ms,-39.64,*
+MagicKernelSharp2021,NEON,alpha/1920to960/opaque,157.1 ms,122.1 ms,-22.29,*
+MagicKernelSharp2021,NEON,alpha/1920to960/partial,157.1 ms,123.6 ms,-21.33,*
+MagicKernelSharp2021,NEON,alpha/1920to960/ringing,157.3 ms,123.7 ms,-21.38,*
+MagicKernelSharp2021,NEON,alpha/1920to960/rgbx,169.6 ms,135.6 ms,-20.03,*
+MagicKernelSharp2021,NEON,alpha/1920to960/linear_rgbx,210.8 ms,205.9 ms,-2.29,*
+MagicKernelSharp,forced scalar,alpha/1to1/opaque,130.4 ns,124.2 ns,-4.81,*
+MagicKernelSharp,forced scalar,alpha/1to1/partial,137.3 ns,126.5 ns,-7.82,*
+MagicKernelSharp,forced scalar,alpha/1to1/ringing,136.3 ns,126.8 ns,-6.96,*
+MagicKernelSharp,forced scalar,alpha/1to1/rgbx,120.9 ns,117.2 ns,-2.98,*
+MagicKernelSharp,forced scalar,alpha/1to1/linear_rgbx,127.4 ns,123.5 ns,-3.10,*
+MagicKernelSharp,forced scalar,alpha/64to32/opaque,138.3 us,89.2 us,-35.49,*
+MagicKernelSharp,forced scalar,alpha/64to32/partial,144.1 us,95.1 us,-33.97,*
+MagicKernelSharp,forced scalar,alpha/64to32/ringing,141.4 us,93.6 us,-33.82,*
+MagicKernelSharp,forced scalar,alpha/64to32/rgbx,134.2 us,85.6 us,-36.21,*
+MagicKernelSharp,forced scalar,alpha/64to32/linear_rgbx,165.5 us,108.5 us,-34.41,*
+MagicKernelSharp,forced scalar,alpha/65to33/opaque,143.5 us,95.1 us,-33.77,*
+MagicKernelSharp,forced scalar,alpha/65to33/partial,149.9 us,101.2 us,-32.46,*
+MagicKernelSharp,forced scalar,alpha/65to33/ringing,146.3 us,100.1 us,-31.55,*
+MagicKernelSharp,forced scalar,alpha/65to33/rgbx,138.6 us,91.1 us,-34.29,*
+MagicKernelSharp,forced scalar,alpha/65to33/linear_rgbx,170.2 us,114.2 us,-32.90,*
+MagicKernelSharp,forced scalar,alpha/512to256/opaque,9.2 ms,5.7 ms,-37.64,*
+MagicKernelSharp,forced scalar,alpha/512to256/partial,9.6 ms,6.1 ms,-36.24,*
+MagicKernelSharp,forced scalar,alpha/512to256/ringing,9.4 ms,6.0 ms,-35.93,*
+MagicKernelSharp,forced scalar,alpha/512to256/rgbx,8.9 ms,5.5 ms,-38.52,*
+MagicKernelSharp,forced scalar,alpha/512to256/linear_rgbx,11.0 ms,7.0 ms,-36.47,*
+MagicKernelSharp,forced scalar,alpha/255to511/opaque,9.6 ms,4.6 ms,-52.36,*
+MagicKernelSharp,forced scalar,alpha/255to511/partial,11.1 ms,6.0 ms,-46.01,*
+MagicKernelSharp,forced scalar,alpha/255to511/ringing,10.3 ms,5.6 ms,-45.79,*
+MagicKernelSharp,forced scalar,alpha/255to511/rgbx,9.3 ms,4.4 ms,-53.03,*
+MagicKernelSharp,forced scalar,alpha/255to511/linear_rgbx,10.6 ms,5.4 ms,-49.01,*
+MagicKernelSharp,forced scalar,alpha/256to512/opaque,9.6 ms,4.5 ms,-52.72,*
+MagicKernelSharp,forced scalar,alpha/256to512/partial,11.1 ms,6.0 ms,-46.12,*
+MagicKernelSharp,forced scalar,alpha/256to512/ringing,10.3 ms,5.6 ms,-45.92,*
+MagicKernelSharp,forced scalar,alpha/256to512/rgbx,9.4 ms,4.4 ms,-53.33,*
+MagicKernelSharp,forced scalar,alpha/256to512/linear_rgbx,10.6 ms,5.4 ms,-49.11,*
+MagicKernelSharp,forced scalar,alpha/1920to960/opaque,130.8 ms,80.7 ms,-38.30,*
+MagicKernelSharp,forced scalar,alpha/1920to960/partial,136.2 ms,85.9 ms,-36.91,*
+MagicKernelSharp,forced scalar,alpha/1920to960/ringing,133.8 ms,85.0 ms,-36.50,*
+MagicKernelSharp,forced scalar,alpha/1920to960/rgbx,127.4 ms,77.4 ms,-39.20,*
+MagicKernelSharp,forced scalar,alpha/1920to960/linear_rgbx,156.7 ms,99.3 ms,-36.62,*
+MagicKernelSharp2021,forced scalar,alpha/1to1/opaque,130.6 ns,124.4 ns,-4.75,*
+MagicKernelSharp2021,forced scalar,alpha/1to1/partial,136.8 ns,127.4 ns,-6.93,*
+MagicKernelSharp2021,forced scalar,alpha/1to1/ringing,136.4 ns,126.8 ns,-7.08,*
+MagicKernelSharp2021,forced scalar,alpha/1to1/rgbx,120.6 ns,117.4 ns,-2.62,*
+MagicKernelSharp2021,forced scalar,alpha/1to1/linear_rgbx,127.6 ns,123.3 ns,-3.38,*
+MagicKernelSharp2021,forced scalar,alpha/64to32/opaque,207.9 us,136.9 us,-34.14,*
+MagicKernelSharp2021,forced scalar,alpha/64to32/partial,213.7 us,143.1 us,-33.03,*
+MagicKernelSharp2021,forced scalar,alpha/64to32/ringing,210.9 us,141.2 us,-33.06,*
+MagicKernelSharp2021,forced scalar,alpha/64to32/rgbx,203.8 us,133.2 us,-34.67,*
+MagicKernelSharp2021,forced scalar,alpha/64to32/linear_rgbx,496.4 us,403.3 us,-18.77,*
+MagicKernelSharp2021,forced scalar,alpha/65to33/opaque,212.8 us,145.3 us,-31.72,*
+MagicKernelSharp2021,forced scalar,alpha/65to33/partial,219.9 us,151.8 us,-30.97,*
+MagicKernelSharp2021,forced scalar,alpha/65to33/ringing,216.9 us,150.6 us,-30.58,*
+MagicKernelSharp2021,forced scalar,alpha/65to33/rgbx,208.9 us,140.7 us,-32.67,*
+MagicKernelSharp2021,forced scalar,alpha/65to33/linear_rgbx,516.7 us,419.3 us,-18.86,*
+MagicKernelSharp2021,forced scalar,alpha/512to256/opaque,14.2 ms,9.1 ms,-35.78,*
+MagicKernelSharp2021,forced scalar,alpha/512to256/partial,14.6 ms,9.5 ms,-35.21,*
+MagicKernelSharp2021,forced scalar,alpha/512to256/ringing,14.4 ms,9.4 ms,-34.83,*
+MagicKernelSharp2021,forced scalar,alpha/512to256/rgbx,14.0 ms,8.9 ms,-36.72,*
+MagicKernelSharp2021,forced scalar,alpha/512to256/linear_rgbx,33.2 ms,26.8 ms,-19.21,*
+MagicKernelSharp2021,forced scalar,alpha/255to511/opaque,15.0 ms,6.7 ms,-55.18,*
+MagicKernelSharp2021,forced scalar,alpha/255to511/partial,16.6 ms,8.2 ms,-50.59,*
+MagicKernelSharp2021,forced scalar,alpha/255to511/ringing,15.8 ms,7.8 ms,-50.69,*
+MagicKernelSharp2021,forced scalar,alpha/255to511/rgbx,14.8 ms,6.6 ms,-55.42,*
+MagicKernelSharp2021,forced scalar,alpha/255to511/linear_rgbx,16.7 ms,8.0 ms,-52.28,*
+MagicKernelSharp2021,forced scalar,alpha/256to512/opaque,15.0 ms,6.7 ms,-55.32,*
+MagicKernelSharp2021,forced scalar,alpha/256to512/partial,16.6 ms,8.2 ms,-50.78,*
+MagicKernelSharp2021,forced scalar,alpha/256to512/ringing,15.8 ms,7.8 ms,-50.82,*
+MagicKernelSharp2021,forced scalar,alpha/256to512/rgbx,14.8 ms,6.6 ms,-55.78,*
+MagicKernelSharp2021,forced scalar,alpha/256to512/linear_rgbx,16.7 ms,8.0 ms,-52.39,*
+MagicKernelSharp2021,forced scalar,alpha/1920to960/opaque,203.3 ms,129.5 ms,-36.31,*
+MagicKernelSharp2021,forced scalar,alpha/1920to960/partial,208.7 ms,134.7 ms,-35.47,*
+MagicKernelSharp2021,forced scalar,alpha/1920to960/ringing,206.5 ms,134.3 ms,-34.97,*
+MagicKernelSharp2021,forced scalar,alpha/1920to960/rgbx,200.3 ms,126.8 ms,-36.70,*
+MagicKernelSharp2021,forced scalar,alpha/1920to960/linear_rgbx,473.9 ms,382.7 ms,-19.24,*

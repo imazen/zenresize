@@ -1,0 +1,331 @@
+# Historical initial ARM matrix; predates the final float-H and LUT follow-ups.
+# Current implementation measurements are recorded in the final ARM CSV and metadata.
+run-heavy: mem-cap=3G (cgroup, hard) jobs=1/4 avail=7173MiB :: bash -c ./exact-test --test-threads=1 && ZENRESIZE_MAGIC_SCALAR=1 ./exact-test fused_integer_output_matches_exact_division --test-threads=1 && ./magic-test && ZENRESIZE_MAGIC_SCALAR=1 ./magic-test && taskset -c 0 ./candidate compare ./baseline -s 60 --seed 71 && ZENRESIZE_MAGIC_SCALAR=1 taskset -c 0 ./candidate compare ./baseline -s 25 --seed 71
+
+running 234 tests
+test blur::tests::blur_f32_identity_sigma_near_zero ... ok
+test blur::tests::blur_u8_does_not_panic ... ok
+test blur::tests::gaussian_weight_table_sums_to_one ... ok
+test blur::tests::gaussian_weight_table_symmetric_center ... ok
+test color::srgb_premul_fusion_gate::fused_srgb_premul_matches_sequence ... ok
+test color::tests::test_alpha_premultiply_roundtrip ... ok
+test color::tests::test_i12_lut_roundtrip ... ok
+test color::tests::test_i12_row_conversion ... ok
+test color::tests::test_srgb_space_roundtrip ... ok
+test color::tests::test_srgb_u8_roundtrip ... ok
+test color::tests::test_transparent_pixel_unpremultiply ... ok
+test composite::tests::composite_dispatch_no_background ... ok
+test composite::tests::composite_dispatch_slice_background ... ok
+test composite::tests::composite_dispatch_solid_opaque ... ok
+test composite::tests::multi_pixel_composite ... ok
+test composite::tests::no_background_is_transparent ... ok
+test composite::tests::non_4ch_is_noop ... ok
+test composite::tests::opaque_fg_ignores_bg ... ok
+test composite::tests::semi_transparent_blend ... ok
+test composite::tests::slice_background_fill_row ... ok
+test composite::tests::solid_background_from_srgb ... ok
+test composite::tests::solid_background_transparent ... ok
+test composite::tests::solid_background_white ... ok
+test composite::tests::solid_non_opaque_fast_path ... ok
+test composite::tests::solid_opaque_fast_path ... ok
+test composite::tests::streamed_background_push_and_fill ... ok
+test composite::tests::transparent_fg_passes_bg ... ok
+test filter::tests::test_all_filters_create ... ok
+test filter::tests::test_box_filter ... ok
+test filter::tests::test_filter_at_zero ... ok
+test filter::tests::test_filter_outside_window ... ok
+test filter::tests::test_filter_symmetry ... ok
+test filter::tests::test_lanczos_known_values ... ok
+test filter::tests::test_negative_weight_percentage ... ok
+test filter::tests::test_triangle_filter ... ok
+test fit::tests::cover_returns_target_dims ... ok
+test fit::tests::cover_source_crop_exact_aspect ... ok
+test fit::tests::cover_source_crop_taller_source ... ok
+test fit::tests::cover_source_crop_wider_source ... ok
+test fit::tests::cover_source_crop_zero_inputs ... ok
+test fit::tests::defaults ... ok
+test fit::tests::fit_snap_to_target ... ok
+test fit::tests::fit_taller_source ... ok
+test fit::tests::fit_upscales ... ok
+test fit::tests::fit_wider_source ... ok
+test fit::tests::never_collapses_to_zero ... ok
+test fit::tests::stretch_ignores_aspect ... ok
+test fit::tests::within_refuses_upscale ... ok
+test fit::tests::zero_inputs ... ok
+test pixel::validate_tests::accepts_108mp_within_default_cap ... ok
+test pixel::validate_tests::accepts_natural_lobe_ratio ... ok
+test pixel::validate_tests::accepts_padded_canvas_within_pixel_cap ... ok
+test pixel::validate_tests::accepts_realistic_large_downscale ... ok
+test pixel::validate_tests::accepts_zero_post_sharpen ... ok
+test pixel::validate_tests::default_output_pixel_cap_is_120mp ... ok
+test pixel::validate_tests::output_pixel_cap_opt_out_with_none ... ok
+test pixel::validate_tests::padded_canvas_len_is_checked_for_valid_config ... ok
+test pixel::validate_tests::rejects_extreme_downscale_height ... ok
+test pixel::validate_tests::rejects_extreme_downscale_ratio ... ok
+test pixel::validate_tests::rejects_inf_kernel_width_scale ... ok
+test pixel::validate_tests::rejects_inf_post_blur_sigma ... ok
+test pixel::validate_tests::rejects_inf_sharpen_percent ... ok
+test pixel::validate_tests::rejects_lobe_ratio_exact_one_or_more ... ok
+test pixel::validate_tests::rejects_nan_kernel_width_scale ... ok
+test pixel::validate_tests::rejects_nan_lobe_ratio_exact ... ok
+test pixel::validate_tests::rejects_nan_post_sharpen ... ok
+test pixel::validate_tests::rejects_nan_sharpen_percent ... ok
+test pixel::validate_tests::rejects_negative_post_sharpen ... ok
+test pixel::validate_tests::rejects_output_exceeding_pixel_cap ... ok
+test pixel::validate_tests::rejects_padded_canvas_exceeding_pixel_cap ... ok
+test pixel::validate_tests::rejects_padded_canvas_overflowing_usize_even_without_cap ... ok
+test pixel::validate_tests::rejects_zero_kernel_width_scale ... ok
+test plane::tests::constant_plane_preserves_value ... ok
+test plane::tests::identity_resize ... ok
+test plane::tests::resize_with_stride ... ok
+test plane::tests::reuse_resizer ... ok
+test plane::tests::upscale_preserves_value ... ok
+test resize::tests::f32_composite_opaque_bg ... ok
+test resize::tests::hfirst_streaming_f32_rejects_adversarial_size ... ok
+test resize::tests::hfirst_streaming_rejects_adversarial_size ... ok
+test resize::tests::hfirst_streaming_succeeds_on_normal_input ... ok
+test resize::tests::no_background_matches_new ... ok
+test resize::tests::rejects_premultiplied_input ... ok
+test resize::tests::resizer_composite_matches_streaming ... ok
+test resize::tests::solid_opaque_bg_makes_output_opaque ... ok
+test resize::tests::streaming_try_new_surfaces_validate_error ... ok
+test resize::tests::test_resize_1x1 ... ok
+test resize::tests::test_resize_constant_color ... ok
+test resize::tests::test_resize_f32 ... ok
+test resize::tests::test_resize_imgref_rgba ... ok
+test resize::tests::test_resize_into_matches_resize ... ok
+test resize::tests::test_resize_u16_constant_color ... ok
+test resize::tests::test_resize_u16_gray ... ok
+test resize::tests::test_resize_u16_into_matches_alloc ... ok
+test resize::tests::test_resize_u16_rgb_3ch ... ok
+test resize::tests::test_resize_u16_upscale ... ok
+test resize::tests::test_resize_upscale ... ok
+test resize::tests::test_resize_with_stride ... ok
+test resize::tests::test_resizer_reuse ... ok
+test resize::tests::try_new_surfaces_validate_error_instead_of_panicking ... ok
+test simd::neon::fused_u8_premul_gate::fused_u8_premul_matches_sequence ... ok
+test simd::neon::premultiply_neon_gate::premultiply_neon_matches_scalar_bitexact ... ok
+test simd::scalar::integer_vertical_tests::blocked_vertical_matches_i64_dot_product ... ok
+test simd::scalar::tests::test_horizontal_convolution_identity ... ok
+test simd::scalar::tests::test_horizontal_downscale ... ok
+test simd::scalar::tests::test_vertical_convolution_average ... ok
+test simd::scalar::tests::test_vertical_convolution_single_row ... ok
+test streaming::tests::fused_integer_output_matches_exact_division ... ok
+test streaming::tests::mask_forces_f32_path ... ok
+test streaming::tests::mask_only_corner_pixels_transparent ... ok
+test streaming::tests::mask_plus_background_white_corners ... ok
+test streaming::tests::no_background_matches_new ... ok
+test streaming::tests::no_mask_no_background_unchanged ... ok
+test streaming::tests::push_row_rejects_short_row_with_small_stride ... ok
+test streaming::tests::push_row_u16_rejects_short_row_with_small_stride ... ok
+test streaming::tests::push_rows_overflow_in_arithmetic_returns_error ... ok
+test streaming::tests::rejects_premultiplied_input ... ok
+test streaming::tests::solid_opaque_bg_makes_output_opaque ... ok
+test streaming::tests::test_background_mut_accessible ... ok
+test streaming::tests::test_bt709_allows_f32_path ... ok
+test streaming::tests::test_bt709_resize_constant_color ... ok
+test streaming::tests::test_builder_defaults ... ok
+test streaming::tests::test_f32_path_for_3ch ... ok
+test streaming::tests::test_f32_path_for_rgba_linear ... ok
+test streaming::tests::test_finish_returns_remaining_count ... ok
+test streaming::tests::test_hlg_forces_f32_path ... ok
+test streaming::tests::test_hlg_resize_constant_color ... ok
+test streaming::tests::test_i16_linear_constant_color ... ok
+test streaming::tests::test_i16_linear_fallback_heavy_downscale ... ok
+test streaming::tests::test_i16_linear_kept_mild_downscale ... ok
+test streaming::tests::test_i16_linear_matches_fullframe ... ok
+test streaming::tests::test_i16_linear_path_selected ... ok
+test streaming::tests::test_i16_srgb_constant_color ... ok
+test streaming::tests::test_i16_srgb_fallback_extreme_downscale ... ok
+test streaming::tests::test_i16_srgb_kept_moderate_downscale ... ok
+test streaming::tests::test_i16_srgb_matches_fullframe ... ok
+test streaming::tests::test_i16_srgb_path_selected ... ok
+test streaming::tests::test_input_output_row_len ... ok
+test streaming::tests::test_input_too_short_returns_error ... ok
+test streaming::tests::test_next_output_row_into ... ok
+test streaming::tests::test_next_output_row_over_matches_with_background ... ok
+test streaming::tests::test_orient_dimensions_reporting ... ok
+test streaming::tests::test_orient_flip_h ... ok
+test streaming::tests::test_orient_flip_v ... ok
+test streaming::tests::test_orient_identity_passthrough ... ok
+test streaming::tests::test_orient_rotate90 ... ok
+test streaming::tests::test_output_rows_available_accurate ... ok
+test streaming::tests::test_pq_forces_f32_path ... ok
+test streaming::tests::test_pq_resize_streaming_matches_fullframe ... ok
+test streaming::tests::test_premul_linear_f32_output ... ok
+test streaming::tests::test_push_after_finish_returns_error ... ok
+test streaming::tests::test_push_row_f32_with ... ok
+test streaming::tests::test_push_row_i16_linear_matches_push_row ... ok
+test streaming::tests::test_push_row_i16_srgb_matches_push_row ... ok
+test streaming::tests::test_push_row_linear_f32_matches_push_row ... ok
+test streaming::tests::test_push_rows_batch_matches_single ... ok
+test streaming::tests::test_streaming_constant_color ... ok
+test streaming::tests::test_streaming_crop_and_padding ... ok
+test streaming::tests::test_streaming_crop_basic ... ok
+test streaming::tests::test_streaming_crop_constant_color ... ok
+test streaming::tests::test_streaming_crop_no_resize ... ok
+test streaming::tests::test_streaming_crop_validation ... ok
+test streaming::tests::test_streaming_padding_basic ... ok
+test streaming::tests::test_streaming_padding_f32_output ... ok
+test streaming::tests::test_streaming_padding_no_resize ... ok
+test streaming::tests::test_streaming_padding_top_available_immediately ... ok
+test streaming::tests::test_streaming_produces_correct_row_count ... ok
+test streaming::tests::test_streaming_same_size ... ok
+test streaming::tests::test_streaming_u16_constant_color ... ok
+test streaming::tests::test_streaming_u16_matches_fullframe ... ok
+test streaming::tests::test_streaming_u16_rgb_3ch ... ok
+test streaming::tests::test_streaming_upscale ... ok
+test streaming::tests::test_working_format_f32 ... ok
+test streaming::tests::test_working_format_i16_linear ... ok
+test streaming::tests::test_working_format_i16_srgb ... ok
+test streaming::tests::transparent_background_matches_no_background ... ok
+test transfer::tests::bt709_endpoints ... ok
+test transfer::tests::bt709_monotonic ... ok
+test transfer::tests::bt709_roundtrip_u8 ... ok
+test transfer::tests::cicp_transfer_known_codes ... ok
+test transfer::tests::cicp_transfer_unknown_codes ... ok
+test transfer::tests::hlg_endpoints ... ok
+test transfer::tests::hlg_monotonic ... ok
+test transfer::tests::hlg_roundtrip_u8 ... ok
+test transfer::tests::no_alpha_3ch_roundtrip ... ok
+test transfer::tests::no_transfer_identity ... ok
+test transfer::tests::no_transfer_roundtrip_u8 ... ok
+test transfer::tests::pq_endpoints ... ok
+test transfer::tests::pq_monotonic ... ok
+test transfer::tests::pq_roundtrip_u8 ... ok
+test transfer::tests::srgb_i12_matches_existing ... ok
+test transfer::tests::srgb_not_identity ... ok
+test transfer::tests::srgb_roundtrip_u16 ... ok
+test transfer::tests::srgb_roundtrip_u8 ... ok
+test transfer::tests::srgb_scalar_matches_lut ... ok
+test transfer::tests::srgb_u8_premul_unpremul_roundtrip ... ok
+test transfer::tests::srgb_u8_to_f32_with_alpha ... ok
+test weights::tests::empty_support_rows_remain_empty_in_float_tables ... ok
+test weights::tests::f32_weight_table_matches_imageflow_within_tolerance ... ok
+test weights::tests::f32_weight_table_sharpen_matches_imageflow ... ok
+test weights::tests::i16_weights_max_deviation_from_f64 ... ok
+test weights::tests::i16_weights_sum_correctly_at_high_tap_counts ... ok
+test weights::tests::integer_adjustment_rejects_unrepresentable_coefficient - should panic ... ok
+test weights::tests::integer_adjustment_reserves_largest_remainder_headroom - should panic ... ok
+test weights::tests::integer_adjustment_zero_positive_and_unrepresentable_rows ... ok
+test weights::tests::integer_lobe_controls_match_float_weights ... ok
+test weights::tests::integer_padding_handles_even_and_odd_supports ... ok
+test weights::tests::lobe_ratio_amplifies_negative_lobes ... ok
+test weights::tests::lobe_ratio_flatten_zeroes_negatives ... ok
+test weights::tests::lobe_ratio_none_matches_default ... ok
+test weights::tests::lobe_ratio_on_all_positive_filter_is_noop ... ok
+test weights::tests::lobe_ratio_reduces_negative_lobes ... ok
+test weights::tests::test_downscale_weights ... ok
+test weights::tests::test_edge_handling ... ok
+test weights::tests::test_f32_weight_table_basic ... ok
+test weights::tests::test_i16_weight_table_basic ... ok
+test weights::tests::test_imageflow_parity_downscale ... ok
+test weights::tests::test_no_zero_weights_in_output ... ok
+test weights::tests::test_upscale_weights ... ok
+test weights::tests::weights_match_imageflow_reference ... ok
+test weights::tests::weights_params_match_imageflow_reference ... ok
+test working::tests::cmyk_4ch_no_alpha ... ok
+test working::tests::f32work_builds_f32_weights ... ok
+test working::tests::from_working_f32work_to_u16_srgb ... ok
+test working::tests::from_working_u8work_to_u8 ... ok
+test working::tests::i16work_builds_i16_weights ... ok
+test working::tests::into_working_u16_to_f32work_srgb ... ok
+test working::tests::into_working_u8_to_f32work_srgb ... ok
+test working::tests::into_working_u8_to_i16work_srgb ... ok
+test working::tests::into_working_u8_to_u8work ... ok
+test working::tests::no_alpha_rgb_3ch ... ok
+test working::tests::roundtrip_u16_f32work_srgb ... ok
+test working::tests::roundtrip_u8_f32work_srgb ... ok
+test working::tests::u8work_builds_i16_weights ... ok
+
+test result: ok. 234 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.65s
+
+
+running 1 test
+test streaming::tests::fused_integer_output_matches_exact_division ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 233 filtered out; finished in 12.55s
+
+
+running 1 test
+test all_sample_pairs_and_working_paths_match_independent_oracle ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
+running 1 test
+test all_sample_pairs_and_working_paths_match_independent_oracle ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+alpha/1to1/opaque                                  [ 129.8 ns ... 122.6 ns ]      -5.56%*
+alpha/1to1/partial                                 [ 138.5 ns ... 125.7 ns ]      -9.21%*
+alpha/1to1/ringing                                 [ 137.1 ns ... 126.9 ns ]      -7.44%*
+alpha/1to1/rgbx                                    [ 125.3 ns ... 121.1 ns ]      -3.33%*
+alpha/1to1/linear_rgbx                             [ 126.2 ns ... 122.1 ns ]      -3.24%*
+alpha/64to32/opaque                                [ 111.3 us ...  85.2 us ]     -23.52%*
+alpha/64to32/partial                               [ 112.1 us ...  87.8 us ]     -21.73%*
+alpha/64to32/ringing                               [ 111.4 us ...  86.9 us ]     -21.97%*
+alpha/64to32/rgbx                                  [ 117.5 us ...  93.4 us ]     -20.48%*
+alpha/64to32/linear_rgbx                           [ 110.2 us ...  86.1 us ]     -21.84%*
+alpha/65to33/opaque                                [ 115.7 us ...  89.8 us ]     -22.37%*
+alpha/65to33/partial                               [ 115.5 us ...  91.9 us ]     -20.44%*
+alpha/65to33/ringing                               [ 118.3 us ...  94.3 us ]     -20.27%*
+alpha/65to33/rgbx                                  [ 122.1 us ...  98.2 us ]     -19.58%*
+alpha/65to33/linear_rgbx                           [ 115.5 us ...  91.1 us ]     -21.18%*
+alpha/512to256/opaque                              [   7.2 ms ...   5.4 ms ]     -24.86%*
+alpha/512to256/partial                             [   7.3 ms ...   5.6 ms ]     -23.34%*
+alpha/512to256/ringing                             [   7.1 ms ...   5.5 ms ]     -22.72%*
+alpha/512to256/rgbx                                [   7.7 ms ...   6.1 ms ]     -21.58%*
+alpha/512to256/linear_rgbx                         [   7.2 ms ...   5.6 ms ]     -22.87%*
+alpha/255to511/opaque                              [   7.9 ms ...   4.4 ms ]     -44.39%*
+alpha/255to511/partial                             [   7.9 ms ...   4.9 ms ]     -38.65%*
+alpha/255to511/ringing                             [   7.9 ms ...   4.9 ms ]     -38.73%*
+alpha/255to511/rgbx                                [   7.8 ms ...   4.6 ms ]     -40.08%*
+alpha/255to511/linear_rgbx                         [   7.8 ms ...   4.7 ms ]     -39.48%*
+alpha/256to512/opaque                              [   7.9 ms ...   4.4 ms ]     -44.71%*
+alpha/256to512/partial                             [   7.9 ms ...   4.9 ms ]     -38.72%*
+alpha/256to512/ringing                             [   7.9 ms ...   4.9 ms ]     -38.82%*
+alpha/256to512/rgbx                                [   7.8 ms ...   4.7 ms ]     -39.83%*
+alpha/256to512/linear_rgbx                         [   8.1 ms ...   4.9 ms ]     -39.06%*
+alpha/1920to960/opaque                             [ 100.8 ms ...  75.6 ms ]     -24.93%*
+alpha/1920to960/partial                            [ 100.8 ms ...  77.4 ms ]     -23.16%*
+alpha/1920to960/ringing                            [ 100.5 ms ...  77.0 ms ]     -23.35%*
+alpha/1920to960/rgbx                               [ 109.4 ms ...  86.0 ms ]     -21.38%*
+alpha/1920to960/linear_rgbx                        [ 101.0 ms ...  78.8 ms ]     -22.01%*
+alpha/1to1/opaque                                  [ 132.8 ns ... 124.8 ns ]      -6.01%*
+alpha/1to1/partial                                 [ 137.6 ns ... 128.0 ns ]      -7.01%*
+alpha/1to1/ringing                                 [ 136.8 ns ... 126.4 ns ]      -7.56%*
+alpha/1to1/rgbx                                    [ 121.8 ns ... 115.8 ns ]      -4.88%*
+alpha/1to1/linear_rgbx                             [ 127.9 ns ... 124.3 ns ]      -2.84%*
+alpha/64to32/opaque                                [ 125.7 us ...  89.2 us ]     -29.01%*
+alpha/64to32/partial                               [ 132.6 us ...  94.8 us ]     -28.52%*
+alpha/64to32/ringing                               [ 128.7 us ...  93.9 us ]     -27.01%*
+alpha/64to32/rgbx                                  [ 124.3 us ...  85.5 us ]     -31.23%*
+alpha/64to32/linear_rgbx                           [ 143.8 us ... 116.8 us ]     -18.74%*
+alpha/65to33/opaque                                [ 132.2 us ...  96.0 us ]     -27.44%*
+alpha/65to33/partial                               [ 138.7 us ... 101.3 us ]     -26.97%*
+alpha/65to33/ringing                               [ 135.0 us ... 100.0 us ]     -25.94%*
+alpha/65to33/rgbx                                  [ 129.8 us ...  90.9 us ]     -30.00%*
+alpha/65to33/linear_rgbx                           [ 151.2 us ... 122.8 us ]     -18.78%*
+alpha/512to256/opaque                              [   8.1 ms ...   5.8 ms ]     -28.00%*
+alpha/512to256/partial                             [   8.6 ms ...   6.2 ms ]     -28.14%*
+alpha/512to256/ringing                             [   8.3 ms ...   6.1 ms ]     -26.29%*
+alpha/512to256/rgbx                                [   7.9 ms ...   5.6 ms ]     -29.87%*
+alpha/512to256/linear_rgbx                         [   9.4 ms ...   7.7 ms ]     -18.02%*
+alpha/255to511/opaque                              [   9.6 ms ...   4.5 ms ]     -52.80%*
+alpha/255to511/partial                             [  11.2 ms ...   6.0 ms ]     -46.18%*
+alpha/255to511/ringing                             [  10.3 ms ...   5.6 ms ]     -46.05%*
+alpha/255to511/rgbx                                [   9.6 ms ...   4.4 ms ]     -54.49%*
+alpha/255to511/linear_rgbx                         [  10.4 ms ...   5.6 ms ]     -46.02%*
+alpha/256to512/opaque                              [   9.6 ms ...   4.5 ms ]     -53.04%*
+alpha/256to512/partial                             [  11.2 ms ...   6.0 ms ]     -46.35%*
+alpha/256to512/ringing                             [  10.3 ms ...   5.6 ms ]     -46.16%*
+alpha/256to512/rgbx                                [   9.5 ms ...   4.4 ms ]     -53.80%*
+alpha/256to512/linear_rgbx                         [  10.4 ms ...   5.6 ms ]     -46.19%*
+alpha/1920to960/opaque                             [ 115.2 ms ...  82.6 ms ]     -28.31%*
+alpha/1920to960/partial                            [ 120.8 ms ...  87.8 ms ]     -27.26%*
+alpha/1920to960/ringing                            [ 118.3 ms ...  86.8 ms ]     -26.62%*
+alpha/1920to960/rgbx                               [ 113.5 ms ...  79.3 ms ]     -30.06%*
+alpha/1920to960/linear_rgbx                        [ 133.5 ms ... 109.1 ms ]     -18.27%*
+run-heavy: done rc=0 237s | peak-RSS 0.06GiB | min-avail 7097MiB | peak-load 2.57
