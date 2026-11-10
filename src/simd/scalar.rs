@@ -12,6 +12,26 @@ pub(crate) fn filter_h_row_f32_scalar(
     weights: &F32WeightTable,
     channels: usize,
 ) {
+    if channels == 4 {
+        // Four independent lanes, with the same tap order and separate
+        // multiply/add as the generic body. Fixed arrays keep accumulators
+        // in registers and expose portable SIMD without aliasing output.
+        let pixels = input.as_chunks::<4>().0;
+        let out_pixels = output[..weights.len() * 4].as_chunks_mut::<4>().0;
+        for (out_x, dst) in out_pixels.iter_mut().enumerate() {
+            let left = weights.left[out_x] as usize;
+            let mut acc = [0.0f32; 4];
+            for (t, &weight) in weights.weights(out_x).iter().enumerate() {
+                let pixel = pixels[left + t];
+                for c in 0..4 {
+                    acc[c] += pixel[c] * weight;
+                }
+            }
+            *dst = acc;
+        }
+        return;
+    }
+
     let out_width = weights.len();
 
     for out_x in 0..out_width {
@@ -580,8 +600,8 @@ pub(crate) fn filter_v_row_u8_i16_scalar(
 
 /// Streaming V-filter: i16 rows → i16 output via i16 weights, scalar fallback.
 ///
-/// For linear i12 streaming path (Path 1). Accumulates weighted i16 rows
-/// into i32, rounds with 14-bit precision, clamps to [0, 4095].
+/// Accumulates weighted signed i16 rows into i32 and rounds with 14-bit
+/// precision. Preserves signed intermediates without clamping.
 pub(crate) fn filter_v_row_i16_scalar(
     _token: ScalarToken,
     rows: &[&[i16]],
@@ -591,13 +611,48 @@ pub(crate) fn filter_v_row_i16_scalar(
     let width = output.len();
     debug_assert_eq!(rows.len(), weights.len());
 
-    for x in 0..width {
-        let mut acc: i32 = 0;
-        for (row, &weight) in rows.iter().zip(weights.iter()) {
-            acc += row[x] as i32 * weight as i32;
+    // Retain the original short-row loop without block/tail setup.
+    if width < 8 {
+        // A single unit coefficient is exactly the identity even for signed
+        // extrema; avoid dot-product setup on one-pixel resize rows.
+        if rows.len() == 1 && weights[0] == (1 << I16_PRECISION) {
+            output.copy_from_slice(&rows[0][..width]);
+            return;
         }
-        let rounded = (acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
-        output[x] = rounded as i16;
+        for x in 0..width {
+            let mut acc = 0i32;
+            for (row, &weight) in rows.iter().zip(weights) {
+                acc += i32::from(row[x]) * i32::from(weight);
+            }
+            output[x] = ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION) as i16;
+        }
+        return;
+    }
+
+    // Column-major dot products repeated the row/weight traversal per value.
+    // Fixed eight-lane blocks expose independent widening multiply-adds to
+    // LLVM (including baseline NEON), while retaining tap order per lane.
+    let (blocks, tail) = output.as_chunks_mut::<8>();
+    for (block_index, dst) in blocks.iter_mut().enumerate() {
+        let base = block_index * 8;
+        let mut acc = [0i32; 8];
+        for (row, &weight) in rows.iter().zip(weights) {
+            let src: &[i16; 8] = row[base..base + 8].try_into().unwrap();
+            for lane in 0..8 {
+                acc[lane] += i32::from(src[lane]) * i32::from(weight);
+            }
+        }
+        for lane in 0..8 {
+            dst[lane] = ((acc[lane] + (1 << (I16_PRECISION - 1))) >> I16_PRECISION) as i16;
+        }
+    }
+    let base = width - tail.len();
+    for (offset, dst) in tail.iter_mut().enumerate() {
+        let mut acc = 0i32;
+        for (row, &weight) in rows.iter().zip(weights) {
+            acc += i32::from(row[base + offset]) * i32::from(weight);
+        }
+        *dst = ((acc + (1 << (I16_PRECISION - 1))) >> I16_PRECISION) as i16;
     }
 }
 
@@ -1025,6 +1080,125 @@ mod tests {
                 i,
                 v
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod integer_vertical_tests {
+    use super::*;
+    #[cfg(not(feature = "std"))]
+    use alloc::{vec, vec::Vec};
+    #[test]
+    fn blocked_vertical_matches_i64_dot_product() {
+        for width in [0, 1, 3, 4, 7, 8, 33] {
+            let data: Vec<i16> = (0..width)
+                .map(|x| [i16::MIN, -1, 0, i16::MAX][x % 4])
+                .collect();
+            let mut out = vec![0; width];
+            filter_v_row_i16_scalar(ScalarToken, &[&data], &mut out, &[1 << I16_PRECISION]);
+            assert_eq!(out, data);
+            crate::simd::filter_v_row_i16(&[&data], &mut out, &[1 << I16_PRECISION]);
+            assert_eq!(out, data);
+        }
+        let mut state = 0x9e3779b9u32;
+        for width in [0, 1, 3, 4, 7, 8, 9, 15, 16, 17, 33, 64, 129] {
+            for taps in [0, 1, 2, 3, 8, 16, 17, 32, 33, 64, 127, 128, 129, 257] {
+                let mut next = || {
+                    state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                    (state >> 16) as i16
+                };
+                let weights: Vec<i16> = (0..taps).map(|_| next() >> 10).collect();
+                // Padded physical rows exercise slice bounds without processing padding.
+                let data: Vec<Vec<i16>> = (0..taps)
+                    .map(|_| (0..width + 5).map(|_| next()).collect())
+                    .collect();
+                let rows: Vec<&[i16]> = data.iter().map(|row| &row[..width]).collect();
+                let mut output = vec![0i16; width];
+                filter_v_row_i16_scalar(ScalarToken, &rows, &mut output, &weights);
+                let mut dispatched = vec![0i16; width];
+                crate::simd::filter_v_row_i16(&rows, &mut dispatched, &weights);
+                for x in 0..width {
+                    let sum: i64 = rows
+                        .iter()
+                        .zip(&weights)
+                        .map(|(row, &w)| i64::from(row[x]) * i64::from(w))
+                        .sum();
+                    let expected = ((sum + (1 << (I16_PRECISION - 1))) >> I16_PRECISION) as i16;
+                    assert_eq!(output[x], expected, "width={width} taps={taps} x={x}");
+                    assert_eq!(
+                        dispatched[x], expected,
+                        "native width={width} taps={taps} x={x}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod float_horizontal_tests {
+    use super::*;
+    use crate::filter::{Filter, InterpolationDetails};
+    #[cfg(not(feature = "std"))]
+    use alloc::{vec, vec::Vec};
+
+    #[test]
+    fn four_channel_float_matches_original_order() {
+        for &filter in Filter::all() {
+            for (iw, ow) in [(1, 1), (3, 7), (17, 9), (9, 17)] {
+                let weights = F32WeightTable::new(iw, ow, &InterpolationDetails::create(filter));
+                for ch in [0, 1, 2, 3, 4, 5] {
+                    for special in [false, true] {
+                        let values = if special {
+                            [
+                                f32::NEG_INFINITY,
+                                f32::INFINITY,
+                                f32::from_bits(0x7fc01234),
+                                -0.0,
+                                f32::from_bits(1),
+                                -f32::from_bits(1),
+                                f32::MAX,
+                                f32::MIN,
+                            ]
+                        } else {
+                            [
+                                -0.0,
+                                0.0,
+                                0.3,
+                                -0.7,
+                                1e20,
+                                -1e20,
+                                f32::MIN_POSITIVE,
+                                -f32::MIN_POSITIVE,
+                            ]
+                        };
+                        let input: Vec<f32> = (0..iw as usize * ch)
+                            .map(|i| values[i % values.len()])
+                            .collect();
+                        let mut expected = vec![17.0f32; ow as usize * ch + 7];
+                        // Original generic loop, retained as the arithmetic oracle.
+                        for x in 0..ow as usize {
+                            let left = weights.left[x] as usize;
+                            for c in 0..ch {
+                                expected[x * ch + c] = 0.0;
+                            }
+                            for (t, &w) in weights.weights(x).iter().enumerate() {
+                                for c in 0..ch {
+                                    expected[x * ch + c] += input[(left + t) * ch + c] * w;
+                                }
+                            }
+                        }
+                        let mut actual = vec![17.0f32; expected.len()];
+                        filter_h_row_f32_scalar(ScalarToken, &input, &mut actual, &weights, ch);
+                        assert_eq!(
+                            actual.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                            expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                            "{filter:?} {iw}->{ow} ch={ch} special={special}"
+                        );
+                    }
+                }
+            }
         }
     }
 }

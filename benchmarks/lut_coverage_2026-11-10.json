@@ -1,0 +1,23 @@
+{
+  "date": "2026-11-10",
+  "metric": "LLVM executable region coverage (not branch or MC/DC)",
+  "before_commit": "fb0f2103a9bc",
+  "after_commit": "a5d1d442738cc42e03140aafa986af9ab976f3ce",
+  "after_source_sha256": "9c73f685434bd136150485218ac410a4ebcc907b601654ac773a39fa55fb51b3",
+  "coverage_command": "cargo llvm-cov --lib --json --output-path REPORT -- packed_i12_lut_matches_every_signed_input_and_tail",
+  "oracle": "All 65,536 signed i16 inputs, widths 0..17, rotated boundary inputs and untouched output padding. Same fixture in before export with original production code.",
+  "functions": {
+    "before": {
+      "covered": 16,
+      "total": 16,
+      "including_closures": 16,
+      "missing": []
+    },
+    "after": {
+      "covered": 40,
+      "total": 40,
+      "including_closures": 42,
+      "missing": []
+    }
+  }
+}

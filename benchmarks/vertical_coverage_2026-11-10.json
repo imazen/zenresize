@@ -1,0 +1,28 @@
+{
+  "date": "2026-11-10",
+  "metric": "LLVM executable region coverage (not branch or MC/DC coverage)",
+  "before_commit": "fb0f2103a9bc",
+  "after_source_sha256": "1db6b5ef02361f6fa35ade0106847133c8e6b1d42c45ddaa206a738c97cba2ae",
+  "coverage_command": "cargo llvm-cov --lib --json --output-path REPORT -- blocked_vertical_matches_i64_dot_product",
+  "fixture": "The same i64 oracle fixture was added to both revisions; original production code was retained in the before export.",
+  "native_boundary_oracle": "Signed inputs; widths 0,1,3,4,7,8,9,15,16,17,33,64,129; taps 0,1,2,3,8,16,17,32,33,64,127,128,129,257; unit-weight signed extrema.",
+  "scope": "Portable filter body and dispatch wrapper. LLVM export does not report the archmage target-feature bodies; native scratch boundaries are tested by the i64 oracle, not claimed as measured region coverage.",
+  "functions": {
+    "before": [
+      {
+        "function": "filter_v_row_i16_scalar",
+        "covered": 26,
+        "total": 26,
+        "missing": []
+      }
+    ],
+    "after": [
+      {
+        "function": "filter_v_row_i16_scalar",
+        "covered": 89,
+        "total": 89,
+        "missing": []
+      }
+    ]
+  }
+}

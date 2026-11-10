@@ -57,7 +57,7 @@ All operations work in the streaming API. Crop and padding also work independent
 
 | Operation | What it does | Builder method |
 |-----------|-------------|----------------|
-| **Resize** | Resample to new dimensions with a choice of 31 filters | `.filter(Filter::Lanczos)` |
+| **Resize** | Resample to new dimensions with a choice of 33 filters | `.filter(Filter::Lanczos)` |
 | **Fit** | Aspect-preserving resize to a target box | `.fit(FitMode::Fit, max_w, max_h)` |
 | **Crop** | Extract a rectangular region from the input | `.crop(x, y, w, h)` |
 | **Pad** | Add solid-color border around the output | `.padding(top, right, bottom, left)` |
@@ -71,7 +71,7 @@ The pipeline order is always: **crop** (input side) -> **resize** -> **pad** (ou
 ## Features
 
 - **Crop, resize, and pad** -- independently or combined, streaming or fullframe
-- 31 resampling filters (Lanczos, Mitchell, Robidoux, Ginseng, etc.)
+- 33 resampling filters (Lanczos, Mitchell, Robidoux, Ginseng, etc.)
 - sRGB-aware linear-light processing for correct gamma handling
 - Row-at-a-time streaming API for pipeline integration
 - `Resizer` struct for amortizing weight computation across repeated resizes
@@ -533,7 +533,7 @@ All five transfer functions work with all channel types and layouts:
 
 ## Filters
 
-31 filters covering a range of sharpness/smoothness tradeoffs:
+33 filters covering a range of sharpness/smoothness tradeoffs:
 
 | Filter | Category | Window | Notes |
 |--------|----------|--------|-------|
@@ -541,6 +541,8 @@ All five transfer functions work with all channel types and layouts:
 | `Lanczos2` | Sinc | 2.0 | Less ringing than Lanczos-3. |
 | `Robidoux` | Cubic | 2.0 | **Default.** Balanced sharpness/smoothness. |
 | `RobidouxSharp` | Cubic | 2.0 | More detail, slight ringing. |
+| `MagicKernelSharp` | Quadratic | 2.5 | 2013 formula; author-recommended general-purpose Magic variant. |
+| `MagicKernelSharp2021` | Quadratic | 4.5 | Wider support; smaller identity-scale residual than 2013. |
 | `Mitchell` | Cubic | 2.0 | Mitchell-Netravali (B=1/3, C=1/3). Balanced blur/ringing. |
 | `CatmullRom` | Cubic | 2.0 | Catmull-Rom spline (B=0, C=0.5). |
 | `Ginseng` | Jinc-sinc | 3.0 | Jinc-windowed sinc. Excellent for upscaling. |
@@ -552,13 +554,15 @@ All five transfer functions work with all channel types and layouts:
 
 Plus `LanczosSharp`, `Lanczos2Sharp`, `RobidouxFast`, `GinsengSharp`, `CubicFast`, `Cubic`, `CubicSharp`, `CatmullRomFast`, `CatmullRomFastSharp`, `MitchellFast`, `NCubic`, `NCubicSharp`, `RawLanczos2`, `RawLanczos2Sharp`, `RawLanczos3`, `RawLanczos3Sharp`, `Jinc`, `Linear`, `LegacyIDCTFilter`.
 
-Sharp variants use a slightly reduced blur factor for tighter kernels. Fast variants use smaller windows.
+The new Magic Kernel Sharp formula is independently derived from the [published mathematics](https://johncostella.com/magic/); it does not change the default. See [validation notes](https://github.com/imazen/zenresize/blob/main/docs/magic-kernel.md).
+
+Imageflow Sharp variants use a slightly reduced blur factor for tighter kernels. Fast variants use smaller windows.
 
 ```rust
 use zenresize::Filter;
 
 let f = Filter::default();      // Robidoux
-let all = Filter::all();        // &[Filter] -- all 31 variants
+let all = Filter::all();        // &[Filter] -- all 33 variants
 ```
 
 ## imgref Integration

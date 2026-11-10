@@ -1,4 +1,4 @@
-//! Interpolation filters ported from imageflow.
+//! Imageflow-compatible interpolation presets and independently derived Magic kernels.
 //!
 //! This module provides all 31 resampling filters from imageflow, enabling
 //! high-quality image resizing with various tradeoffs between sharpness,
@@ -16,7 +16,7 @@ use core::f64::consts::PI;
 
 /// Named interpolation filter presets.
 ///
-/// These match imageflow's filter names exactly for compatibility.
+/// The first 31 presets preserve imageflow compatibility.
 #[non_exhaustive]
 #[repr(u8)]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Default)]
@@ -84,6 +84,10 @@ pub enum Filter {
     NCubicSharp = 30,
     /// Legacy IDCT filter
     LegacyIDCTFilter = 31,
+    /// Magic Kernel Sharp (2013), recommended by its author for most applications.
+    MagicKernelSharp = 32,
+    /// Magic Kernel with the seven-tap Sharp correction (2021).
+    MagicKernelSharp2021 = 33,
 }
 
 impl Filter {
@@ -122,6 +126,8 @@ impl Filter {
             NCubic,
             NCubicSharp,
             LegacyIDCTFilter,
+            MagicKernelSharp,
+            MagicKernelSharp2021,
         ]
     }
 
@@ -159,6 +165,8 @@ impl Filter {
             Filter::NCubic => "n_cubic",
             Filter::NCubicSharp => "n_cubic_sharp",
             Filter::LegacyIDCTFilter => "legacy_idct",
+            Filter::MagicKernelSharp => "magic_kernel_sharp",
+            Filter::MagicKernelSharp2021 => "magic_kernel_sharp_2021",
         }
     }
 }
@@ -246,6 +254,16 @@ impl InterpolationDetails {
     /// Create interpolation details for a named filter.
     pub fn create(filter: Filter) -> Self {
         match filter {
+            Filter::MagicKernelSharp => Self {
+                window: 2.5,
+                filter_fn: filter_magic_kernel_sharp,
+                ..Default::default()
+            },
+            Filter::MagicKernelSharp2021 => Self {
+                window: 4.5,
+                filter_fn: filter_magic_kernel_sharp_2021,
+                ..Default::default()
+            },
             Filter::Triangle | Filter::Linear => Self {
                 window: 1.0,
                 blur: 1.0,
@@ -483,6 +501,83 @@ impl InterpolationDetails {
 // =============================================================================
 // Filter Functions
 // =============================================================================
+
+/// Magic Kernel Sharp (2013), from <https://johncostella.com/magic/>.
+/// Independently derived; no reference implementation code was used.
+///
+/// The quadratic B-spline m(x) is 3/4 - x² for |x| < 1/2 and
+/// (3/2 - |x|)²/2 for 1/2 <= |x| < 3/2, zero elsewhere. Its integer
+/// translates sum to one, but its samples [1, 6, 1]/8 blur the input.
+/// Apply [-a, 1+2a, -a] at offsets -1, 0, 1 to counteract this blur.
+/// Setting the resulting samples at +/-1 to zero gives
+/// (1+2a)/8 - 3a/4 = 0, hence a = 1/4 and correction [-1, 6, -1]/4.
+/// Thus K13(x) = (6m(x) - m(x-1) - m(x+1))/4.
+///
+/// Expanding the shifted splines gives the three quadratics below, with
+/// support radius 3/2 + 1 = 5/2. The correction sums to one, preserving
+/// constants and partition of unity. Its negative lobes permit overshoot.
+/// Integer samples [-1, 0, 34, 0, -1]/32 leave mild residual sharpening;
+/// the 2021 kernel below reduces it at the cost of wider support.
+/// `blur` scales the argument; the weight builder handles downscale dilation
+/// and normalization. This is the direct kernel, not a separate sharpen pass.
+fn filter_magic_kernel_sharp(d: &InterpolationDetails, x: f64) -> f64 {
+    let t = f64_abs(x) / d.blur;
+    if t < 0.5 {
+        17.0 / 16.0 - 7.0 / 4.0 * t * t
+    } else if t < 1.5 {
+        (t - 1.0) * (t - 7.0 / 4.0)
+    } else if t < 2.5 {
+        -0.125 * (t - 2.5) * (t - 2.5)
+    } else {
+        0.0
+    }
+}
+
+/// Magic Kernel Sharp (2021), derived from the published mathematics:
+/// <https://johncostella.com/magic/>. No implementation source was used.
+///
+/// Start with the centered quadratic B-spline m: for t = |x|,
+/// m(x) = 3/4 - t² on [0, 1/2), (3/2 - t)²/2 on [1/2, 3/2),
+/// and zero outside. It is three unit-width boxes convolved together, so
+/// its Fourier transform is sinc(f)^3 (sinc(f) = sin(pi*f)/(pi*f)).
+/// Its integer translates sum to one: constants stay constant. But its
+/// integer samples [1, 6, 1]/8 blur even an identity-scale image.
+///
+/// The 2013 kernel corrects that blur with S = [-1, 6, -1]/4 at offsets
+/// -1, 0, 1: K13(x) = (6m(x) - m(x-1) - m(x+1))/4. Its integer
+/// samples are [-1, 0, 34, 0, -1]/32, leaving a small sharpening residual.
+/// It has radius 5/2 and three quadratic pieces (implemented above).
+///
+/// The 2021 refinement applies B = [1, 0, 34, 0, 1]/36 at offsets -2..2
+/// to K13. This cancels the residual at offsets +/-2. Convolving S and B
+/// gives [-1, 6, -35, 204, -35, 6, -1]/144 at offsets -3..3. Hence
+/// K21(x) is the weighted sum of seven shifted m(x), with radius 3+3/2.
+/// Its integer samples are [-1, 0, 0, 0, 1154, 0, 0, 0, -1]/1152:
+/// much closer to identity, but not exactly interpolating. Both corrections
+/// sum to one, preserving partition of unity; negative lobes can overshoot.
+///
+/// Expanding the shifted splines yields these five quadratic pieces with
+/// knots at half-integers. Symmetry permits evaluation at |x|; Horner form
+/// avoids seven spline evaluations per weight. The outer piece is factored
+/// to evaluate to zero at the support boundary without cancellation.
+/// `blur` scales x; the weight builder handles downscale dilation and
+/// normalization. This direct kernel needs no additional image-filter pass.
+fn filter_magic_kernel_sharp_2021(d: &InterpolationDetails, x: f64) -> f64 {
+    let t = f64_abs(x) / d.blur;
+    if t < 0.5 {
+        577.0 / 576.0 - 239.0 / 144.0 * t * t
+    } else if t < 1.5 {
+        (239.0 + t * (-379.0 + 140.0 * t)) / 144.0
+    } else if t < 2.5 {
+        (-130.0 + t * (113.0 - 24.0 * t)) / 144.0
+    } else if t < 3.5 {
+        (45.0 + t * (-27.0 + 4.0 * t)) / 144.0
+    } else if t < 4.5 {
+        -(t - 4.5) * (t - 4.5) / 288.0
+    } else {
+        0.0
+    }
+}
 
 /// Flexible bicubic filter with configurable B and C parameters.
 fn filter_flex_cubic(d: &InterpolationDetails, x: f64) -> f64 {

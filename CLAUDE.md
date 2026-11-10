@@ -6,20 +6,21 @@
 
 Two resize APIs with different pipeline architectures:
 
-**Fullframe `Resizer` (H-first):** `src/resize.rs`
-- Processes full image at once: H-filter all rows → intermediate buffer → V-filter all rows
-- Uses i16 integer path for sRGB 4ch, f32 for linear/other layouts
-- Batch kernels: `filter_h_u8_i16_4rows`, `filter_v_all_u8_i16`, `filter_v_all_i16_i16`
+**Fullframe `Resizer` wrapper:** `src/resize.rs`
+- Caches a `StreamingResize` and resets it for each resize call.
+- Feeds input rows and drains output rows through that shared engine.
+- Uses the same working format and axis order as the streaming API.
 
-**Streaming `StreamingResize` (V-first):** `src/streaming.rs`
+**Streaming `StreamingResize` (F32 V-first, integer H-first):** `src/streaming.rs`
 - Row-at-a-time: push input rows, pull output rows
-- V-first pipeline: `push_row` caches rows in ring buffer, output production runs V-filter → H-filter → composite → unpremul
-- Ring buffer is `v_weights.max_taps + 2` slots, each `in_width * ch + h_padding` wide
-- H-filter runs only `out_height` times (once per output row), not `in_height` times
+- F32 pipeline: `push_row` caches rows; output runs V-filter → H-filter → composite → unpremul.
+- Integer pipelines: `push_row` H-filters into an `out_width * ch` i16 ring row; output V-filters to signed i16, then encodes.
+- Ring buffer is `v_weights.max_taps + 2` slots; F32 rows are `in_width * ch + h_padding` wide and integer rows are `out_width * ch` wide.
+- F32 H-filter runs once per output row; integer H-filter runs once per input row.
 - Three internal paths (selected automatically in `new_inner()`):
-  - **F32**: Full f32 pipeline with linearization/premul. Used for compositing, 3ch, f32 I/O, u16 I/O.
-  - **I16Srgb**: u8 ring buffer → `filter_v_row_u8_i16` → `filter_h_u8_i16` → u8. For sRGB 4ch without linearization. ~2× faster.
-  - **I16Linear**: i16 ring buffer → `filter_v_row_i16` → `filter_h_i16_i16` → `linear_i12_to_srgb_u8`. For Rgbx 4ch with linearization, no premul.
+  - **F32**: f32 arithmetic with an f16 row cache, linearization and premultiplication. Used for compositing, 3ch, f32 I/O, u16 I/O.
+  - **I16Srgb**: u8 → `filter_h_u8_to_i16` → i16 ring → `filter_v_row_i16` → fused u8 output. For sRGB 4ch without linearization. ~2× faster.
+  - **I16Linear**: i12 → `filter_h_i16_i16` → i16 ring → `filter_v_row_i16` → `linear_i12_to_srgb_u8`. For Rgbx 4ch with linearization, no premul.
 
 ### SIMD Kernels
 
@@ -267,6 +268,9 @@ one output pixel; other channel counts still take the original path.
 ## Investigation Notes
 
 ### i16 accuracy gap [FIXED]
+
+Historical H-first/V-first investigation. Current `Resizer` delegates to
+`StreamingResize`; `tests/magic_paths.rs` checks exact API agreement.
 Intermediate clamping removed from all i16 kernels. Max diff 52→1.
 **Measured max diff (u8 output):**
 - sRGB-i16 path: 2-6 (downscale), 25 (upscale)
@@ -282,4 +286,33 @@ Intermediate clamping removed from all i16 kernels. Max diff 52→1.
 
 ## Known Bugs
 
-(none currently)
+- Fixed in PR 23: `next_output_row_premul_linear_f32` and
+  `next_output_row_over` bypassed the output mask. Both now apply it before
+  external compositing. `just mask-output-test` checks all premultiplied
+  channels and external-composite parity across runtime token tiers, using
+  a full-row pattern independent of mask-span behavior.
+
+- Published zenblend 0.1.3 expands partial mask spans into mask-buffer
+  positions that `RoundedRectMask::mask_spans` leaves unwritten. On x86-64,
+  `just mask-span-probe` reproduces transparent pixels where identical
+  full-row coverage is opaque (17×17, radius 5.5, first at (5, 0)).
+  PR 24 carries a temporary dependency patch for this issue, but also
+  introduces a separate low-alpha straight-color regression. See
+  [the PR 24 investigation](docs/pr24-review.md).
+
+- Fixed in the stacked integer-sharpening change: `I16WeightTable::new`
+  previously ignored `lobe_ratio_goal`. Both builders now share adjustment
+  math; integer regression and pixel-path tests cover sharpen 12 and 15.
+  Ratios >= `1 - 16384/32766` select f32, reserving a Q14 step for
+  largest-remainder correction as well as avoiding unrepresentable coefficients.
+
+- Fixed in the stacked Magic path-coverage change: integer output clamped
+  alpha before unpremultiplication when negative lobes pushed it above 255.
+  Direct and paired rows now divide by the signed filtered alpha. The
+  varying-alpha dense oracle in `tests/magic_paths.rs` reproduces the bug.
+
+- The initial signed-alpha correction added a separate repair traversal. The
+  fused encoder in `src/simd/output.rs` converts signed intermediate values
+  directly to straight-alpha bytes with AVX2/NEON/WASM dispatch and exact
+  scalar division. `benches/alpha_output.rs` compares preallocated end-to-end
+  resizes against a frozen executable, including opaque and RGBX controls.

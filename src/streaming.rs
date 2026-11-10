@@ -534,7 +534,7 @@ impl<B: Background> StreamingResize<B> {
 
     /// Set an output mask (rounded corners, gradients, etc).
     ///
-    /// The mask is applied after compositing and before unpremultiply,
+    /// The mask is applied before compositing and before unpremultiply,
     /// shaping the final output's transparency. In premultiplied space,
     /// all four RGBA channels are multiplied by the mask value.
     ///
@@ -661,14 +661,22 @@ impl<B: Background> StreamingResize<B> {
         let output_tf = config.effective_output_transfer();
         let is_u8_io = config.input.channel_type() == ChannelType::U8
             && config.output.channel_type() == ChannelType::U8;
-        let path = if !active_composite
+        // Positive adjusted weights sum to 1/(1-r). Near r=1/2 a coefficient
+        // can reach the Q14 limit. Reserve a step for largest-remainder
+        // correction; use f32 rather than saturating the rounded coefficient.
+        let integer_lobes_fit = filter
+            .lobe_ratio_goal
+            .is_none_or(|r| (r as f64) < crate::weights::MAX_I16_LOBE_RATIO);
+        let path = if integer_lobes_fit
+            && !active_composite
             && is_u8_io
             && input_tf == TransferFunction::Linear
             && output_tf == TransferFunction::Linear
             && channels == 4
         {
             StreamingPath::I16Srgb
-        } else if !active_composite
+        } else if integer_lobes_fit
+            && !active_composite
             && is_u8_io
             && input_tf == TransferFunction::Srgb
             && output_tf == TransferFunction::Srgb
@@ -1859,39 +1867,18 @@ impl<B: Background> StreamingResize<B> {
                 return Some(&self.output_buf_u8[..total_row_len]);
             }
 
-            // Phase 2: content rows with left/right padding
+            // Phase 2: content rows with left/right padding. Produce into a
+            // copy of the padding template and flip the copy: flipping the
+            // template itself would mirror its padding, and the next row's
+            // content would land beside the previous row's flipped pixels
+            // when the margins are uneven (#25).
             if self.output_rows_produced < self.config.out_height {
                 if !self.can_produce_next_output() {
                     return None;
                 }
-                let content_len = self.config.out_width as usize * self.channels;
-                let content_start = self.pad_left_elements;
-                let mut tmp = core::mem::take(&mut self.padded_output_buf_u8);
-                match self.path {
-                    StreamingPath::I16Srgb => {
-                        self.produce_next_i16_srgb(
-                            &mut tmp[content_start..content_start + content_len],
-                        );
-                    }
-                    StreamingPath::I16Linear => {
-                        self.produce_next_i16_linear(
-                            &mut tmp[content_start..content_start + content_len],
-                        );
-                    }
-                    StreamingPath::F32 => {
-                        self.produce_next_f32();
-                        Self::encode_output_u8(
-                            &self.temp_output_f32[..content_len],
-                            &mut tmp[content_start..content_start + content_len],
-                            self.config.effective_output_transfer(),
-                            self.channels,
-                            self.alpha_is_last,
-                        );
-                    }
-                }
-                flip_h_row(&mut tmp[..total_row_len], self.channels);
-                self.padded_output_buf_u8 = tmp;
-                return Some(&self.padded_output_buf_u8[..total_row_len]);
+                self.produce_content_row_to_output_buf(total_row_len);
+                flip_h_row(&mut self.output_buf_u8[..total_row_len], self.channels);
+                return Some(&self.output_buf_u8[..total_row_len]);
             }
 
             // Phase 3: bottom padding
@@ -2562,16 +2549,11 @@ impl<B: Background> StreamingResize<B> {
             },
         );
 
-        // Clamp i16 → u8 [0,255]
-        for (&v, o) in self.temp_v_output_i16[..out_row_len]
-            .iter()
-            .zip(dst[..out_row_len].iter_mut())
-        {
-            *o = v.clamp(0, 255) as u8;
-        }
-        if self.needs_premul {
-            simd::unpremultiply_u8_row(&mut dst[..out_row_len]);
-        }
+        simd::encode_i16_output(
+            &self.temp_v_output_i16[..out_row_len],
+            &mut dst[..out_row_len],
+            self.needs_premul,
+        );
         self.output_rows_produced += 1;
 
         // Paired row B: same V-filter rows (L1-hot), different weights
@@ -2593,15 +2575,11 @@ impl<B: Background> StreamingResize<B> {
                 },
             );
 
-            for (&v, o) in self.temp_v_output_i16[..out_row_len]
-                .iter()
-                .zip(self.paired_row_buf[..out_row_len].iter_mut())
-            {
-                *o = v.clamp(0, 255) as u8;
-            }
-            if self.needs_premul {
-                simd::unpremultiply_u8_row(&mut self.paired_row_buf[..out_row_len]);
-            }
+            simd::encode_i16_output(
+                &self.temp_v_output_i16[..out_row_len],
+                &mut self.paired_row_buf[..out_row_len],
+                self.needs_premul,
+            );
             self.paired_row_ready = true;
         }
     }
@@ -2773,8 +2751,13 @@ impl<B: Background> StreamingResize<B> {
             return true;
         }
 
-        // Phase 3: bottom padding
-        if self.pad_bottom_emitted < self.pad_bottom {
+        // Phase 3: bottom padding, once every content row is out. This runs
+        // eagerly after each pushed row, usually before the first content
+        // row can be produced; without the guard the bottom margin would be
+        // captured right after the top one (#25).
+        if self.output_rows_produced >= self.config.out_height
+            && self.pad_bottom_emitted < self.pad_bottom
+        {
             self.pad_bottom_emitted += 1;
             self.orient_buf[dst_offset..dst_offset + row_len]
                 .copy_from_slice(&self.pad_full_row_u8[..row_len]);
@@ -2990,6 +2973,101 @@ mod tests {
             rows.push(out.to_vec());
         }
         rows
+    }
+
+    #[test]
+    fn fused_integer_output_matches_exact_division() {
+        // The justfile runs this filtered test in its own process for each tier.
+        #[cfg(feature = "std")]
+        if std::env::var_os("ZENRESIZE_MAGIC_SCALAR").is_some() {
+            #[cfg(target_arch = "x86_64")]
+            archmage::X64V3Token::dangerously_disable_token_process_wide(true).unwrap();
+            #[cfg(target_arch = "aarch64")]
+            archmage::NeonToken::dangerously_disable_token_process_wide(true).unwrap();
+        }
+        // Every nonnegative i16 alpha/color pair; negative lanes and the
+        // 1/2/3-pixel tail are covered separately below.
+        let mut input = vec![0i16; 32768 * 4];
+        let mut output = vec![0u8; input.len()];
+        for alpha in 0..=i16::MAX {
+            for (color, pixel) in input.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                *pixel = [color as i16, color as i16, color as i16, alpha];
+            }
+            simd::encode_i16_output(&input, &mut output, true);
+            for (color, pixel) in output.as_chunks::<4>().0.iter().enumerate() {
+                let a = i32::from(alpha);
+                let expected = if a == 0 {
+                    0
+                } else {
+                    ((color as i32 * 255 + a / 2) / a).min(255) as u8
+                };
+                assert_eq!(
+                    *pixel,
+                    [expected, expected, expected, alpha.min(255) as u8],
+                    "a={alpha} c={color}"
+                );
+            }
+        }
+        // Mix different signed colors and alphas within each SIMD block;
+        // the exhaustive domain above intentionally holds alpha fixed per row.
+        let mut state = 0x12345678u32;
+        for width in 1..=33 {
+            let mut input: Vec<i16> = (0..width * 4)
+                .map(|_| {
+                    state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                    (state >> 16) as i16
+                })
+                .collect();
+            // Opaque blocks inside a mixed row exercise the SIMD bypass.
+            for (index, pixel) in input.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                if index / 4 % 2 == 1 {
+                    pixel[3] = 255;
+                }
+            }
+            let mut output = vec![0; input.len()];
+            simd::encode_i16_output(&input, &mut output, true);
+            for (src, dst) in input
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(output.as_chunks::<4>().0)
+            {
+                let a = i32::from(src[3]).max(0);
+                for c in 0..3 {
+                    let expected = if a == 0 {
+                        0
+                    } else {
+                        ((i32::from(src[c]).max(0) * 255 + a / 2) / a).min(255) as u8
+                    };
+                    assert_eq!(dst[c], expected, "mixed a={a} c={c}");
+                }
+                assert_eq!(dst[3], a.min(255) as u8);
+            }
+        }
+        for n in [0, 1, 2, 3, 4, 5, 7, 8, 9] {
+            for alpha in [i16::MIN, -1, 0, 1, 254, 255, 256, i16::MAX] {
+                let input: Vec<i16> = (0..n)
+                    .flat_map(|_| [i16::MIN, -1, i16::MAX, alpha])
+                    .collect();
+                let mut output = vec![0; input.len()];
+                simd::encode_i16_output(&input, &mut output, true);
+                for p in output.as_chunks::<4>().0 {
+                    assert_eq!(
+                        *p,
+                        [
+                            0,
+                            0,
+                            if alpha > 0 { 255 } else { 0 },
+                            alpha.clamp(0, 255) as u8
+                        ]
+                    );
+                }
+                simd::encode_i16_output(&input, &mut output, false);
+                for p in output.as_chunks::<4>().0 {
+                    assert_eq!(*p, [0, 0, 255, alpha.clamp(0, 255) as u8]);
+                }
+            }
+        }
     }
 
     #[test]
