@@ -1,0 +1,38 @@
+{
+  "date": "2026-11-10",
+  "code_commit": "95c329d6",
+  "baseline_commit": "581fc9a90e6f",
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_lock_sha256": "b85fd2bfc67b8bb768e1f234574499929e5bb7c544acb7c971e41a2fc11105dd",
+  "source_sha256": {
+    "src/simd/output.rs": "fe8e666894d3ce9d1df87460e7b214f615e5a3c3bccad1f4ffa857e357196ce7",
+    "src/simd/scalar.rs": "d3d1fc125ad63d287b372ae6a012f79911fe8632c26c05f106440ed8c38838a1",
+    "src/simd/x86.rs": "3dc2915d2a4e7e1c83923b99b34178c231fe1aa341219d1754b588d9ae75816b",
+    "src/simd/neon.rs": "aa36d0967532402dae295e20871f9e7e09ade0c38bbb4c4024b87a8fae8c198f",
+    "src/streaming.rs": "34475882460e8508d621513155ee295634042547dd11344a3fbb73bf7f76f4f0",
+    "benches/alpha_output.rs": "e04ac38490f3de72de08f0b276a2bd2cadbe7166917416091f3f4c6f9c4c5c85"
+  },
+  "artifact_directory": "/mnt/v/output/zenresize/perf-review-2026-11-10/ (i270)",
+  "flags": "Release, default features, runtime dispatch; no target-cpu=native",
+  "benchmark": "benches/alpha_output.rs; Tango paired compare, pinned to CPU 0; setup and allocation outside timing",
+  "platforms": [
+    {
+      "cpu": "Intel Core Ultra 7 270K Plus",
+      "os": "Linux 7.0.0-42-generic",
+      "ram": "30 GiB",
+      "tiers": [
+        "AVX2+FMA",
+        "forced scalar"
+      ]
+    },
+    {
+      "cpu": "Ampere Altra Neoverse-N1",
+      "os": "Linux 6.8.0-139-generic",
+      "ram": "7.5 GiB",
+      "tiers": [
+        "NEON",
+        "forced scalar"
+      ]
+    }
+  ]
+}

@@ -122,3 +122,7 @@ magic-wasm-test:
 # Region audit for both portable convolution changes, using their arithmetic oracles.
 scalar-coverage output:
     cargo llvm-cov --lib --json --output-path {{output}} -- simd::scalar::
+
+# Integer dot-product and float accumulation-order oracles for every native tier.
+convolution-exact:
+    cargo test --lib simd::
