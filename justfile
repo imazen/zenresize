@@ -118,3 +118,7 @@ alpha-output-arm-tests-build:
 magic-wasm-test:
     CARGO_TARGET_WASM32_WASIP1_RUNNER=wasmtime RUSTFLAGS="-C target-feature=+simd128" cargo test --target wasm32-wasip1 --test magic_paths
     CARGO_TARGET_WASM32_WASIP1_RUNNER=wasmtime RUSTFLAGS="-C target-feature=+simd128" cargo test --target wasm32-wasip1 --lib fused_integer_output_matches_exact_division -- --test-threads=1
+
+# Region audit for both portable convolution changes, using their arithmetic oracles.
+scalar-coverage output:
+    cargo llvm-cov --lib --json --output-path {{output}} -- simd::scalar::

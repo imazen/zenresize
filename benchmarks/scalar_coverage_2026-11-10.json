@@ -1,0 +1,39 @@
+{
+  "date": "2026-11-10",
+  "metric": "LLVM executable region coverage (not branch or MC/DC coverage)",
+  "before_commit": "fb0f2103a9bc",
+  "after_commit": "4c1a2657e0ecad37147923ab212e25b140678bf3",
+  "after_source_sha256": "d3d1fc125ad63d287b372ae6a012f79911fe8632c26c05f106440ed8c38838a1",
+  "coverage_command": "cargo llvm-cov --lib --json --output-path REPORT -- simd::scalar::",
+  "fixture": "The same signed i64 vertical oracle and original-order float oracle were added to the before source export, without changing its production code.",
+  "functions": {
+    "before": [
+      {
+        "function": "filter_v_row_i16_scalar",
+        "covered": 26,
+        "total": 26,
+        "missing": []
+      },
+      {
+        "function": "filter_h_row_f32_scalar",
+        "covered": 29,
+        "total": 29,
+        "missing": []
+      }
+    ],
+    "after": [
+      {
+        "function": "filter_v_row_i16_scalar",
+        "covered": 89,
+        "total": 89,
+        "missing": []
+      },
+      {
+        "function": "filter_h_row_f32_scalar",
+        "covered": 59,
+        "total": 59,
+        "missing": []
+      }
+    ]
+  }
+}

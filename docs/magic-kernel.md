@@ -227,3 +227,19 @@ that tier dispatches this operation to AVX2. Windows ARM currently runs library
 tests only under the existing CI policy.
 Mask/compositing behavior has existing generic tests; this matrix does not
 add a separate Magic-specific mask/compositing oracle.
+
+
+## Performance follow-up
+
+The scalar four-channel float H-filter keeps four independent accumulators in
+fixed arrays. It retains the original tap order and separate multiply/add;
+its oracle compares all 33 filters bit-for-bit with the original generic loop,
+including signed zero, subnormals, infinities, NaNs and output padding.
+The generic loop remains for other channel counts. The ARM compiler emits
+packed NEON multiply/add without requiring a NEON dispatch token.
+
+The scalar convolution audit records 100% executable-region coverage before
+and after: integer V 26/26 → 89/89, float H 29/29 → 59/59. These counts cover
+the changed portable function bodies, not archmage target-feature bodies.
+See [the scalar coverage report](../benchmarks/scalar_coverage_2026-11-10.json)
+and [the paired performance record](../benchmarks/alpha_output_2026-11-10.md).
