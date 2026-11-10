@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### QUEUED BREAKING CHANGES
+
+None.
+
+### Added
+
+- Opt-in clean-room `MagicKernelSharp2013` filter; independent formula and image-oracle tests, with Mitchell response comparison.
+
 ### Dependency compatibility
 
 - Admit archmage/magetypes 0.9.31-beta.1 in the current-main tool graph while retaining compatible stable requirements (`17c39822`). Strict library lint and all 224 library tests pass.

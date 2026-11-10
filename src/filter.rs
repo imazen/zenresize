@@ -16,7 +16,7 @@ use core::f64::consts::PI;
 
 /// Named interpolation filter presets.
 ///
-/// These match imageflow's filter names exactly for compatibility.
+/// The first 31 presets preserve imageflow compatibility.
 #[non_exhaustive]
 #[repr(u8)]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Default)]
@@ -84,6 +84,8 @@ pub enum Filter {
     NCubicSharp = 30,
     /// Legacy IDCT filter
     LegacyIDCTFilter = 31,
+    /// Quadratic Magic Kernel with the three-tap Sharp correction (2013).
+    MagicKernelSharp2013 = 32,
 }
 
 impl Filter {
@@ -122,6 +124,7 @@ impl Filter {
             NCubic,
             NCubicSharp,
             LegacyIDCTFilter,
+            MagicKernelSharp2013,
         ]
     }
 
@@ -159,6 +162,7 @@ impl Filter {
             Filter::NCubic => "n_cubic",
             Filter::NCubicSharp => "n_cubic_sharp",
             Filter::LegacyIDCTFilter => "legacy_idct",
+            Filter::MagicKernelSharp2013 => "magic_kernel_sharp_2013",
         }
     }
 }
@@ -246,6 +250,11 @@ impl InterpolationDetails {
     /// Create interpolation details for a named filter.
     pub fn create(filter: Filter) -> Self {
         match filter {
+            Filter::MagicKernelSharp2013 => Self {
+                window: 2.5,
+                filter_fn: filter_magic_kernel_sharp_2013,
+                ..Default::default()
+            },
             Filter::Triangle | Filter::Linear => Self {
                 window: 1.0,
                 blur: 1.0,
@@ -483,6 +492,22 @@ impl InterpolationDetails {
 // =============================================================================
 // Filter Functions
 // =============================================================================
+
+/// Independently expanded from (6 m(x) - m(x-1) - m(x+1)) / 4,
+/// where m is the centered quadratic B-spline. Mathematical specification:
+/// <https://johncostella.com/magic/>. No reference implementation code used.
+fn filter_magic_kernel_sharp_2013(d: &InterpolationDetails, x: f64) -> f64 {
+    let t = f64_abs(x) / d.blur;
+    if t < 0.5 {
+        17.0 / 16.0 - 7.0 / 4.0 * t * t
+    } else if t < 1.5 {
+        (t - 1.0) * (t - 7.0 / 4.0)
+    } else if t < 2.5 {
+        -0.125 * (t - 2.5) * (t - 2.5)
+    } else {
+        0.0
+    }
+}
 
 /// Flexible bicubic filter with configurable B and C parameters.
 fn filter_flex_cubic(d: &InterpolationDetails, x: f64) -> f64 {

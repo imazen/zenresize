@@ -73,3 +73,7 @@ beta-cohort-check:
     cargo fmt --check
     cargo clippy --locked --lib -- -D warnings
     cargo test --locked --lib
+
+# Clean-room formula oracle and Mitchell comparison.
+magic-kernel-test:
+    cargo test --test magic_kernel -- --nocapture
