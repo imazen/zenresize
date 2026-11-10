@@ -70,3 +70,12 @@ The existing `with_mask` doc comment said the mask runs after compositing;
 the source runs it before compositing. That factual comment is corrected
 on main in this review. Both PR 23's new calls use the intended order.
 Neither PR was merged as part of this investigation.
+
+## Landing coverage
+
+The follow-up merge of PR 23 promotes the independent probe to
+`tests/mask_outputs.rs`. The example and integration test share the oracle
+in `tests/support/mask_outputs.rs`; the test asserts zero differing
+components and bytes for every configuration and runtime token permutation.
+Run `just mask-output-test`. The original rounded-mask unit test is retained.
+The only merge conflict is resolved by preserving both changelog entries.

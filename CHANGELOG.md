@@ -8,6 +8,8 @@ None.
 
 ### Fixed
 
+- Apply output masks in `next_output_row_premul_linear_f32` and `next_output_row_over` before caller-side compositing (#21).
+
 - Preserve overshooting filtered alpha during integer unpremultiplication in direct and paired output rows, using fused AVX2/NEON/WASM and exact scalar conversion.
 
 - Honor lobe-ratio controls in integer weight tables; use f32 for extreme sharpening ratios.

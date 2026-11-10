@@ -143,3 +143,7 @@ mask-span-probe:
 # PR 23 diagnostic: mask exactly once, then caller-side composite.
 mask-output-probe:
     cargo run --example mask_output_probe
+
+# Assert mask math and external-composite parity across runtime token tiers.
+mask-output-test:
+    cargo test --test mask_outputs -- --nocapture

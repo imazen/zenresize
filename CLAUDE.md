@@ -286,10 +286,11 @@ Intermediate clamping removed from all i16 kernels. Max diff 52→1.
 
 ## Known Bugs
 
-- `next_output_row_premul_linear_f32` and `next_output_row_over` bypass the
-  output mask. PR 23 adds the missing mask step before external compositing.
-  `just mask-output-probe` isolates this from mask-span behavior using a
-  full-row pattern; main disagrees, while PR 23 merged with main matches.
+- Fixed in PR 23: `next_output_row_premul_linear_f32` and
+  `next_output_row_over` bypassed the output mask. Both now apply it before
+  external compositing. `just mask-output-test` checks all premultiplied
+  channels and external-composite parity across runtime token tiers, using
+  a full-row pattern independent of mask-span behavior.
 
 - Published zenblend 0.1.3 expands partial mask spans into mask-buffer
   positions that `RoundedRectMask::mask_spans` leaves unwritten. On x86-64,
