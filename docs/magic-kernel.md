@@ -59,3 +59,30 @@ library and new integration test, `cargo test --no-default-features --lib`,
 `cargo test --doc`, and format checking passed. Existing ignored doctests
 were unchanged. Dedicated Magic cross-tier and photographic comparisons
 have not been run.
+
+## Mitchell with resize_sharpen(15)
+
+Measured 2026-11-10 using `just magic-kernel-test`: actual normalized f32
+weight tables, every interior output sampling phase and every integer step
+boundary under its support. Image-edge-truncated rows are excluded. Values
+below are maximum response to an unclipped unit step (1 is the bright plateau).
+This differs from the raw-kernel sampling above: sharpening operates on the
+sampled weights, not on `InterpolationDetails::filter`.
+
+| Input → output | Mitchell | Mitchell sharpen 15 | Magic Sharp 2013 |
+|---|---:|---:|---:|
+| 257 → 1021 | 1.036281006 | 1.176470712 | 1.142857015 |
+| 257 → 257 | 1.000000000 | 1.000000000 | 1.031250000 |
+| 257 → 127 | 1.020198603 | 1.108607737 | 1.101290702 |
+| 257 → 63 | 1.018188544 | 1.092833095 | 1.095590078 |
+
+Sharpened Mitchell overshoots more in the tested enlargement and 257→127
+reduction, and slightly less at 257→63. Identity-grid Mitchell has no negative
+sampled weights to amplify; sharpening does not make it an interpolating kernel.
+This comparison measures ringing, not photographic preference or alias rejection.
+
+An existing path discrepancy was also verified: `I16WeightTable::new` does not
+apply `lobe_ratio_goal`. At 257→1021, **0 of 1021** Mitchell weight rows changed
+when requesting sharpen 15. Consequently this table describes f32-path
+sharpening, not current i16-path behavior. The diagnostic reports the number
+without asserting that the bug must remain. Fixing it is outside this comparison.

@@ -159,3 +159,49 @@ fn mitchell_comparison_and_integer_constant_preservation() {
         }
     }
 }
+
+#[test]
+fn sharpened_mitchell_step_response() {
+    use zenresize::weights::{F32WeightTable, I16WeightTable};
+    let base = InterpolationDetails::create(Filter::Mitchell);
+    let sharp = base.clone().with_sharpen_percent(15.0);
+    let a = I16WeightTable::new(257, 1021, &base);
+    let b = I16WeightTable::new(257, 1021, &sharp);
+    let changed = (0..1021).filter(|&i| a.weights(i) != b.weights(i)).count();
+    println!("i16 Mitchell sharpen(15): {changed}/1021 weight rows changed");
+    for (input, output) in [(257, 1021), (257, 257), (257, 127), (257, 63)] {
+        for (name, details) in [
+            ("mitchell", InterpolationDetails::create(Filter::Mitchell)),
+            (
+                "mitchell_sharpen_15",
+                InterpolationDetails::create(Filter::Mitchell).with_sharpen_percent(15.0),
+            ),
+            (
+                "magic_kernel_sharp_2013",
+                InterpolationDetails::create(Filter::MagicKernelSharp2013),
+            ),
+        ] {
+            let weights = F32WeightTable::new(input, output, &details);
+            let mut minimum = 0.0f64;
+            let mut maximum = 1.0f64;
+            for x in 0..output as usize {
+                let row = weights.weights(x);
+                let left = weights.left[x] as usize;
+                // Exclude image boundaries; exercise every interior sampling phase
+                // and every integer location of a rising unit step under its support.
+                if left == 0 || left + row.len() >= input as usize {
+                    continue;
+                }
+                let sum: f64 = row.iter().map(|&v| v as f64).sum();
+                assert!((sum - 1.0).abs() < 1e-6);
+                let mut response = sum;
+                for &weight in row {
+                    response -= weight as f64;
+                    minimum = minimum.min(response);
+                    maximum = maximum.max(response);
+                }
+            }
+            println!("weights {input}->{output} {name} min={minimum:.9} max={maximum:.9}");
+        }
+    }
+}
