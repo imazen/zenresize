@@ -1,4 +1,4 @@
-//! High-quality image resampling with 33 filters, streaming API, and SIMD acceleration.
+//! High-quality image resampling with 32 filters, streaming API, and SIMD acceleration.
 //!
 //! `zenresize` provides a standalone resize library extracted from the zenimage/imageflow
 //! image processing pipeline. It supports:
