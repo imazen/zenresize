@@ -2350,7 +2350,39 @@ fn filter_v_i16_bounded<const MAX_TAPS: usize, const MAX_PAIRS: usize>(
 
     let (out_chunks, out_tail) = output.as_chunks_mut::<8>();
 
-    for (ci, out_chunk) in out_chunks.iter_mut().enumerate() {
+    // Reuse each paired weight and row-reference pair for 32 components.
+    // Each lane retains exactly the original paired-tap accumulation order.
+    let (blocks4, remainder) = out_chunks.as_chunks_mut::<4>();
+    for (block_index, dst) in blocks4.iter_mut().enumerate() {
+        let base = block_index * 4;
+        let mut acc = [_mm256_setzero_si256(); 4];
+        for (pw, row_pair) in paired_wts.iter().zip(row_chunks.as_chunks::<2>().0) {
+            for lane in 0..4 {
+                let s0 = _mm_loadu_si128(idx(row_pair[0], base + lane));
+                let s1 = _mm_loadu_si128(idx(row_pair[1], base + lane));
+                let lo = _mm_unpacklo_epi16(s0, s1);
+                let hi = _mm_unpackhi_epi16(s0, s1);
+                let v = _mm256_set_m128i(hi, lo);
+                acc[lane] = _mm256_add_epi32(acc[lane], _mm256_madd_epi16(v, *pw));
+            }
+        }
+        for lane in 0..4 {
+            if odd {
+                let v = _mm_loadu_si128(idx(row_chunks[tap_count - 1], base + lane));
+                let z = _mm_setzero_si128();
+                let v = _mm256_set_m128i(_mm_unpackhi_epi16(v, z), _mm_unpacklo_epi16(v, z));
+                acc[lane] = _mm256_add_epi32(acc[lane], _mm256_madd_epi16(v, odd_weight));
+            }
+            let q = _mm256_srai_epi32::<{ I16_PRECISION }>(_mm256_add_epi32(acc[lane], half));
+            let packed =
+                _mm_packs_epi32(_mm256_castsi256_si128(q), _mm256_extracti128_si256::<1>(q));
+            _mm_storeu_si128(&mut dst[lane], packed);
+        }
+    }
+    let block_base = blocks4.len() * 4;
+    for (ci, out_chunk) in remainder.iter_mut().enumerate() {
+        let ci = block_base + ci;
+
         let mut acc = _mm256_setzero_si256();
 
         for (pw, row_pair) in paired_wts.iter().zip(row_chunks.as_chunks::<2>().0) {
@@ -3425,6 +3457,84 @@ mod short_float_vertical_tests {
                         expected.to_bits(),
                         "width={width} taps={taps} x={x}"
                     );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod integer_horizontal_tests {
+    use super::*;
+    #[cfg(not(feature = "std"))]
+    use alloc::{vec, vec::Vec};
+    use archmage::SimdToken;
+    #[test]
+    fn four_output_integer_horizontal_matches_i64() {
+        use crate::filter::{Filter, InterpolationDetails};
+        let saturating = X64V3Token::summon().is_some();
+        let mut state = 0x98765432u32;
+        for &filter in Filter::all() {
+            for (iw, ow) in [
+                (1, 1),
+                (3, 7),
+                (17, 9),
+                (9, 17),
+                (256, 129),
+                (129, 256),
+                (256, 17),
+            ] {
+                let w = I16WeightTable::new(iw, ow, &InterpolationDetails::create(filter));
+                let input: Vec<i16> = (0..iw as usize * 4 + w.groups4 * 16)
+                    .map(|_| {
+                        state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                        (state >> 16) as i16
+                    })
+                    .collect();
+                let mut output = vec![0i16; ow as usize * 4];
+                crate::simd::filter_h_i16_i16(&input, &mut output, &w, 4);
+                let input_u8: Vec<u8> = input.iter().map(|&v| v as u8).collect();
+                let mut output_u8 = vec![0i16; output.len()];
+                crate::simd::filter_h_u8_to_i16(&input_u8, &mut output_u8, &w, 4);
+                for x in 0..ow as usize {
+                    for c in 0..4 {
+                        let sum: i64 = w
+                            .weights(x)
+                            .iter()
+                            .enumerate()
+                            .map(|(t, &weight)| {
+                                i64::from(input[(w.left[x] as usize + t) * 4 + c])
+                                    * i64::from(weight)
+                            })
+                            .sum();
+                        let rounded = (sum + (1 << (I16_PRECISION - 1))) >> I16_PRECISION;
+                        let expected = if saturating {
+                            rounded.clamp(i64::from(i16::MIN), i64::from(i16::MAX)) as i16
+                        } else {
+                            rounded as i16
+                        };
+                        let sum_u8: i64 = w
+                            .weights(x)
+                            .iter()
+                            .enumerate()
+                            .map(|(t, &weight)| {
+                                i64::from(input_u8[(w.left[x] as usize + t) * 4 + c])
+                                    * i64::from(weight)
+                            })
+                            .sum();
+                        let expected_u8 =
+                            ((sum_u8 + (1 << (I16_PRECISION - 1))) >> I16_PRECISION) as i16;
+                        assert_eq!(
+                            output_u8[x * 4 + c],
+                            expected_u8,
+                            "u8 {filter:?} {iw}->{ow} x={x} c={c}"
+                        );
+                        assert_eq!(
+                            output[x * 4 + c],
+                            expected,
+                            "{filter:?} {iw}->{ow} x={x} c={c}"
+                        );
+                    }
                 }
             }
         }
